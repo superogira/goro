@@ -92,6 +92,26 @@ func (w *Widget) IsFocusable() bool {
 	return w.IsVisible() && w.IsEnabled() && !w.cfg.ResolvedDisabled()
 }
 
+// Keyboard focus tracking across the alive focused text fields. Tree
+// rebuilds blur the outgoing widget one frame AFTER its replacement raised
+// the keyboard (the focus manager clears widgets that left the published
+// tree), so a plain per-transition show/hide ends with a spurious hide and
+// the OS keyboard collapses. Hiding is only correct when NO field keeps
+// focus; otherwise the surviving field re-asserts itself.
+var (
+	kbFocusedFields    = map[*Widget]kbFieldInfo{}
+	kbLastFocusedField *Widget
+)
+
+type kbFieldInfo struct {
+	text string
+	hint string
+}
+
+func (w *Widget) kbInfo() kbFieldInfo {
+	return kbFieldInfo{text: w.Text(), hint: w.enterKeyHint()}
+}
+
 // SetFocused overrides WidgetBase.SetFocused so gaining focus also raises
 // the OS virtual keyboard on touch devices (web build; no-op elsewhere).
 // Only real transitions notify: widget trees routinely SetFocused(false)
@@ -103,13 +123,43 @@ func (w *Widget) IsFocusable() bool {
 func (w *Widget) SetFocused(focused bool) {
 	was := w.IsFocused()
 	w.WidgetBase.SetFocused(focused)
-	if was != focused {
-		if focused {
-			notifyTextInputFocused(true, w.Text())
-		} else {
-			notifyTextInputFocused(false, "")
+	if was == focused {
+		return
+	}
+	if focused {
+		info := w.kbInfo()
+		kbFocusedFields[w] = info
+		kbLastFocusedField = w
+		applyTextInputKeyboard(true, info.text, info.hint)
+		return
+	}
+	delete(kbFocusedFields, w)
+	if kbLastFocusedField == w {
+		kbLastFocusedField = nil
+		for k := range kbFocusedFields {
+			kbLastFocusedField = k
+			break
 		}
 	}
+	if len(kbFocusedFields) == 0 {
+		applyTextInputKeyboard(false, "", "")
+		return
+	}
+	if kbLastFocusedField != nil {
+		info := kbFocusedFields[kbLastFocusedField]
+		applyTextInputKeyboard(true, info.text, info.hint)
+	}
+}
+
+// enterKeyHint picks the OS keyboard's action key label: "next" for plain
+// text fields (advance to the following field), "send" for the last field of
+// a form. Soft keyboards have no Tab key, so this label is the discoverable
+// way to switch fields on touch devices.
+func (w *Widget) enterKeyHint() string {
+	if w.cfg.inputType == TypePassword {
+		return "send"
+	}
+	return "next"
 }
 
 // Layout calculates the text field's preferred size within the given constraints.
@@ -294,6 +344,18 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+	// A focused field can leave the tree without anyone calling
+	// SetFocused(false) (window closed, screen switched) — drop it from the
+	// keyboard registry there, or the OS keyboard stays up with no field to
+	// receive the typing.
+	if w.IsFocused() {
+		w.SetFocused(false)
+	} else {
+		delete(kbFocusedFields, w)
+		if kbLastFocusedField == w {
+			kbLastFocusedField = nil
+		}
+	}
 }
 
 // Verify Widget implements required interfaces at compile time.

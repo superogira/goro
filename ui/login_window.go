@@ -21,10 +21,11 @@ type LoginWindow struct {
 	Password string
 
 	Window
-	layout    loginWindowLayout
-	callbacks LoginWindowCallbacks
-	user      *textfield.Widget
-	password  *textfield.Widget
+	layout            loginWindowLayout
+	callbacks         LoginWindowCallbacks
+	user              *textfield.Widget
+	password          *textfield.Widget
+	advanceToPassword bool
 }
 
 const (
@@ -45,6 +46,13 @@ func NewLoginWindow(ctx client.Context, username, password string, callbacks Log
 	}
 	w.Window = NewWindow(layout.W, layout.H)
 	w.OpenAt(layout.X, layout.Y, w.widgetTree())
+	// Focus is applied after the tree is mounted (not inside widgetTree) so
+	// the account field's keyboard-show notification is the last one — the
+	// focus manager blurs widgets leaving the tree during mounts, and a
+	// trailing blur collapses the OS keyboard.
+	if w.user != nil {
+		w.user.SetFocused(true)
+	}
 	return w
 }
 
@@ -79,6 +87,7 @@ func (w *LoginWindow) rebuild() {
 	if w.password != nil {
 		w.password.SetFocused(passwordFocused)
 	}
+	w.advanceToPassword = false
 }
 
 func (w *LoginWindow) widgetTree() widget.Widget {
@@ -87,7 +96,6 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 			w.callbacks.OnSubmit()
 		}
 	}
-	userFocused, passwordFocused := w.fieldFocus()
 	username, passwordValue := w.fieldValues()
 	user := rotheme.TextField(
 		username,
@@ -95,9 +103,11 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 		func(v string) {
 			w.Username = v
 		},
-		func(string) { submit() },
+		func(string) {
+			w.advanceToPassword = true
+			w.rebuild()
+		},
 	)
-	user.SetFocused(userFocused)
 	password := rotheme.TextField(
 		passwordValue,
 		textfield.TypePassword,
@@ -106,7 +116,6 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 		},
 		func(string) { submit() },
 	)
-	password.SetFocused(passwordFocused)
 	w.user = user
 	w.password = password
 	labelW := float32(loginWindowFieldLeft - 36)
@@ -158,6 +167,14 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 }
 
 func (w *LoginWindow) fieldFocus() (bool, bool) {
+	// Enter on the username (or the OS keyboard's "Next" key) advances to
+	// the password instead of submitting with an empty one — soft keyboards
+	// have no Tab key, so this is the field switch on touch devices.
+	// The flag is cleared by rebuild() so both fieldFocus calls inside one
+	// rebuild observe it.
+	if w.advanceToPassword {
+		return false, true
+	}
 	if w.user == nil && w.password == nil {
 		return true, false
 	}

@@ -68,7 +68,10 @@ func handleMousePress(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 	// devices the OS keyboard may be down (dismissed, or focus came from
 	// auto-focus before any gesture) — tapping the field must raise it.
 	// Seed the keyboard buffer with the field text so backspace works.
-	notifyTextInputFocused(true, w.Text())
+	info := w.kbInfo()
+	kbFocusedFields[w] = info
+	kbLastFocusedField = w
+	applyTextInputKeyboard(true, info.text, info.hint)
 
 	// ADR-028: visual only — cursor placement and focus ring.
 	w.SetNeedsRedraw(true)

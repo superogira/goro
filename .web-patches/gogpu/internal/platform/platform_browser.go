@@ -42,14 +42,14 @@ func (p *browserPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 		doc.Get("body").Call("appendChild", canvas)
 	}
 
-	// Apply configuration to the canvas.
+	// Apply configuration to the canvas. The backing-store attributes use the
+	// requested size as the initial value only — PrepareFrame re-derives them
+	// from clientWidth×devicePixelRatio every frame.
 	if config.Width > 0 {
 		canvas.Set("width", config.Width)
-		canvas.Get("style").Set("width", fmt.Sprintf("%dpx", config.Width))
 	}
 	if config.Height > 0 {
 		canvas.Set("height", config.Height)
-		canvas.Get("style").Set("height", fmt.Sprintf("%dpx", config.Height))
 	}
 	if config.Title != "" {
 		doc.Set("title", config.Title)
@@ -60,6 +60,14 @@ func (p *browserPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 	// (pointercancel) — on tablets the game becomes unresponsive to taps.
 	// user-select / tap-highlight stop long-press selection popups.
 	style := canvas.Get("style")
+	// CSS must fill the visual viewport instead of a fixed pixel size: on
+	// phones/tablets a fixed 1280×720 canvas makes the browser scale the
+	// whole page to fit, desynchronizing tap coordinates from game
+	// coordinates. 100dvh (where supported) also shrinks with the OS
+	// keyboard so the game relayouts above it.
+	style.Set("width", "100vw")
+	style.Set("height", "100vh")
+	style.Set("height", "100dvh")
 	style.Set("touch-action", "none")
 	style.Set("user-select", "none")
 	style.Set("-webkit-user-select", "none")
@@ -458,17 +466,19 @@ func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 	})
 
 	show := js.FuncOf(func(this js.Value, args []js.Value) any {
-		// Guard on real DOM focus, not the visible flag: a focus() before any
-		// user gesture fails silently, and an early-return on a stale flag
-		// would prevent the next tap from ever raising the keyboard.
-		if doc.Get("activeElement").Equal(input) {
-			return nil // already focused — a repeated request must not drop buffered text
-		}
-		// Seed the buffer with the field's current text so the input-event
-		// diff (backspace in particular) tracks the field, not an empty box.
+		// Always re-seed with the field's current text so the input-event
+		// diff (backspace in particular) tracks the field, and refresh the
+		// action-key label ("next" to advance fields / "send" to submit;
+		// soft keyboards have no Tab key). Re-seeding is safe because the
+		// seed equals the field content, which the buffer already mirrors.
 		seed := ""
 		if len(args) > 0 && args[0].Type() == js.TypeString {
 			seed = args[0].String()
+		}
+		if len(args) > 1 && args[1].Type() == js.TypeString && args[1].String() != "" {
+			input.Set("enterKeyHint", args[1].String())
+		} else {
+			input.Set("enterKeyHint", "send")
 		}
 		input.Set("value", seed)
 		w.hiddenLastValue = seed

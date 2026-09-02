@@ -6,14 +6,23 @@ import (
 	"image/color"
 	"math"
 	"sync"
+	_ "embed"
 
-	"github.com/go-fonts/dejavu/dejavusans"
-	"github.com/go-fonts/dejavu/dejavusansbold"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
+
+// Sarabun covers Latin and Thai; DejaVu (used previously) has no Thai
+// glyphs, so world-space text such as chat lines and character names
+// rendered as tofu for Thai players. Same OFL-licensed font as ui/rotheme.
+//
+//go:embed Sarabun-Regular.ttf
+var sarabunRegularTTF []byte
+
+//go:embed Sarabun-Bold.ttf
+var sarabunBoldTTF []byte
 
 var debugTextCache = make(map[string]*Image)
 var outlinedTextCache = make(map[string]*Image)
@@ -25,11 +34,11 @@ var debugTextFixedWidth = 7
 var outlinedTextFace font.Face
 
 func init() {
-	regular, err := parseOpenTypeFace(dejavusans.TTF, 11)
+	regular, err := parseOpenTypeFace(sarabunRegularTTF, 11)
 	if err != nil {
 		return
 	}
-	bold, _ := parseOpenTypeFace(dejavusansbold.TTF, 12)
+	bold, _ := parseOpenTypeFace(sarabunBoldTTF, 12)
 	textFontMu.Lock()
 	defer textFontMu.Unlock()
 	debugTextFace = noKernFace{Face: regular}
@@ -307,7 +316,7 @@ func roNameTextFace() font.Face {
 	if outlinedTextFace != nil {
 		return outlinedTextFace
 	}
-	if face, err := parseOpenTypeFace(dejavusansbold.TTF, 12); err == nil {
+	if face, err := parseOpenTypeFace(sarabunBoldTTF, 12); err == nil {
 		outlinedTextFace = noKernFace{Face: face}
 		return outlinedTextFace
 	}

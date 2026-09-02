@@ -61,8 +61,7 @@ func NewClient(clientDate int, trace bool) *Client {
 func (c *Client) Connect(ctx context.Context, address string, port int) error {
 	c.Close()
 
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", address, port))
+	conn, err := dialGameServer(ctx, address, port)
 	if err != nil {
 		c.setStatus("connect failed")
 		return err

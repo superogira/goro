@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
@@ -1141,9 +1142,14 @@ type fakeCursorUIApp struct {
 	hovered widget.Widget
 }
 
-func (fakeCursorUIApp) SetUIRoot(widget.Widget) {}
-func (fakeCursorUIApp) Frame()                  {}
-func (fakeCursorUIApp) Invalidate()             {}
+func (fakeCursorUIApp) SetUIRoot(widget.Widget)      {}
+func (fakeCursorUIApp) Frame()                       {}
+func (fakeCursorUIApp) Invalidate()                  {}
+func (fakeCursorUIApp) InvalidateRect(geometry.Rect) {}
+func (fakeCursorUIApp) RequestFullRepaint()          {}
+func (fakeCursorUIApp) WidgetContext() widget.Context {
+	return nil
+}
 func (a fakeCursorUIApp) Cursor() widget.CursorType {
 	return a.cursor
 }

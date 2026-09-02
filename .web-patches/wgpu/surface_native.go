@@ -1,0 +1,368 @@
+//go:build !rust && !(js && wasm)
+
+package wgpu
+
+import (
+	"fmt"
+	"image"
+
+	"github.com/gogpu/gputypes"
+	"github.com/gogpu/wgpu/core"
+	"github.com/gogpu/wgpu/hal"
+)
+
+// Surface represents a platform rendering surface (e.g., a window).
+//
+// Surface delegates lifecycle management to core.Surface, which enforces
+// the state machine: Unconfigured -> Configured -> Acquired -> Configured.
+type Surface struct {
+	core     *core.Surface
+	instance *Instance
+	device   *Device
+	released bool
+
+	// displayHandle and windowHandle are stored for deferred HAL surface
+	// re-creation when the device's backend differs from the initially
+	// selected one (e.g., software adapter via ForceFallbackAdapter when
+	// the initial surface was created on Vulkan/DX12).
+	displayHandle  uintptr
+	windowHandle   uintptr
+	currentBackend gputypes.Backend // backend type of the current HAL surface
+	surfaceCreated bool             // true after first ensureHALSurface
+}
+
+// CreateSurface creates a rendering surface from platform-specific handles.
+// displayHandle and windowHandle are platform-specific:
+//   - Windows: displayHandle=0, windowHandle=HWND
+//   - macOS: displayHandle=0, windowHandle=NSView*
+//   - Linux/X11: displayHandle=Display*, windowHandle=Window
+//   - Linux/Wayland: displayHandle=wl_display*, windowHandle=wl_surface*
+func (i *Instance) CreateSurface(displayHandle, windowHandle uintptr) (*Surface, error) {
+	if i.released {
+		return nil, ErrReleased
+	}
+
+	halInstance := i.core.HALInstance()
+	if halInstance == nil {
+		return nil, fmt.Errorf("wgpu: no HAL instance available for surface creation")
+	}
+
+	halSurface, err := halInstance.CreateSurface(displayHandle, windowHandle)
+	if err != nil {
+		return nil, fmt.Errorf("wgpu: failed to create surface: %w", err)
+	}
+
+	// Determine the backend of the initial HAL instance.
+	var initialBackend gputypes.Backend
+	for b, inst := range i.core.HALInstanceMap() {
+		if inst == halInstance {
+			initialBackend = b
+			break
+		}
+	}
+
+	coreSurface := core.NewSurface(halSurface, "")
+	return &Surface{
+		core:           coreSurface,
+		instance:       i,
+		displayHandle:  displayHandle,
+		windowHandle:   windowHandle,
+		currentBackend: initialBackend,
+		surfaceCreated: true,
+	}, nil
+}
+
+// Configure configures the surface for presentation.
+// Must be called before GetCurrentTexture().
+func (s *Surface) Configure(device *Device, config *SurfaceConfiguration) error {
+	if s.released {
+		return ErrReleased
+	}
+	if config == nil {
+		return fmt.Errorf("wgpu: surface configuration is nil")
+	}
+	if device == nil {
+		return fmt.Errorf("wgpu: device is nil")
+	}
+
+	halConfig := &hal.SurfaceConfiguration{
+		Width:       config.Width,
+		Height:      config.Height,
+		Format:      config.Format,
+		Usage:       config.Usage,
+		PresentMode: config.PresentMode,
+		AlphaMode:   config.AlphaMode,
+	}
+
+	// Create or re-create the HAL surface on the correct backend's HAL instance.
+	// Surface creation is deferred from CreateSurface() to here because we need
+	// to know the device's backend. Creating a Vulkan surface then destroying it
+	// (when device is software) corrupts GDI state on some drivers.
+	if err := s.ensureHALSurface(device.core.Backend()); err != nil {
+		return err
+	}
+
+	s.device = device
+	return s.core.Configure(device.core, halConfig)
+}
+
+// Unconfigure removes the surface configuration.
+func (s *Surface) Unconfigure() {
+	if s.released {
+		return
+	}
+	s.core.Unconfigure()
+}
+
+// GetCurrentTexture acquires the next texture for rendering.
+// Returns the surface texture and whether the surface is suboptimal.
+//
+// If a PrepareFrame hook is registered and reports changed dimensions,
+// the surface is automatically reconfigured before acquiring.
+func (s *Surface) GetCurrentTexture() (*SurfaceTexture, bool, error) {
+	if s.released {
+		return nil, false, ErrReleased
+	}
+	if s.device == nil {
+		return nil, false, fmt.Errorf("wgpu: surface not configured")
+	}
+
+	acquired, err := s.core.AcquireTexture(nil)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return &SurfaceTexture{
+		hal:     acquired.Texture,
+		surface: s,
+		device:  s.device,
+	}, acquired.Suboptimal, nil
+}
+
+// Present presents a surface texture to the screen.
+func (s *Surface) Present(texture *SurfaceTexture) error {
+	return s.PresentWithDamage(texture, nil)
+}
+
+// PresentWithDamage presents a surface texture to the screen, passing optional
+// damage rectangles to the compositor.
+//
+// damageRects specifies which regions of the surface changed this frame
+// (physical pixels, top-left origin). When nil or empty, the entire surface
+// is presented — identical to Present(). Backends that support damage rects
+// (software partial blit, and in future: DX12 Present1, Vulkan
+// VK_KHR_incremental_present, GLES eglSwapBuffersWithDamageKHR) use them
+// as compositor hints; others accept and ignore them.
+func (s *Surface) PresentWithDamage(texture *SurfaceTexture, damageRects []image.Rectangle) error {
+	if s.released {
+		return ErrReleased
+	}
+	if s.device == nil {
+		return fmt.Errorf("wgpu: surface not configured")
+	}
+	if s.device.queue == nil || s.device.queue.hal == nil {
+		return fmt.Errorf("wgpu: queue not available")
+	}
+
+	if texture == nil {
+		return fmt.Errorf("wgpu: surface texture is nil")
+	}
+
+	return s.core.PresentWithDamage(s.device.queue.hal, damageRects)
+}
+
+// SetPrepareFrame registers a platform hook called before each GetCurrentTexture.
+// If the hook returns changed=true with new dimensions, the surface is automatically
+// reconfigured. This is the integration point for HiDPI/DPI change handling:
+//   - macOS Metal: read CAMetalLayer.contentsScale
+//   - Windows: handle WM_DPICHANGED
+//   - Wayland: read wl_output.scale
+//
+// Pass nil to remove the hook.
+func (s *Surface) SetPrepareFrame(fn core.PrepareFrameFunc) {
+	s.core.SetPrepareFrame(fn)
+}
+
+// SetPresentsWithTransaction toggles Core Animation transaction-based present
+// on Metal surfaces. Enable during macOS live window resize so the drawable
+// swap commits atomically with the resize CA transaction (Flutter/wgpu #3756
+// pattern); disable for normal rendering. No-op on non-Metal backends.
+func (s *Surface) SetPresentsWithTransaction(enabled bool) {
+	if s.released || s.core == nil {
+		return
+	}
+	raw := s.core.RawSurface()
+	if raw == nil {
+		return
+	}
+	if tp, ok := raw.(interface{ SetPresentsWithTransaction(bool) }); ok {
+		tp.SetPresentsWithTransaction(enabled)
+	}
+}
+
+// PresentPixels writes RGBA pixel data directly to the surface and presents it
+// in a single operation, bypassing the WebGPU render pass pipeline entirely.
+//
+// On the software backend this performs RGBA→BGRA swizzle into the DIB section
+// framebuffer and immediately BitBlt's to the window — the fastest path for
+// CPU-rendered content (1 copy vs 3 in the standard pipeline). No AcquireTexture,
+// render pass, or Present call is needed.
+//
+// damageRects restricts the window blit to specific regions (nil = full surface).
+// The surface must be configured. If a texture is currently acquired, it is
+// discarded automatically (stale texture cleanup).
+//
+// Returns an error if the backend does not support PresentPixels (only the
+// software backend implements this extension).
+func (s *Surface) PresentPixels(data []byte, width, height uint32, damageRects []image.Rectangle) error {
+	if s.released {
+		return ErrReleased
+	}
+	if s.device == nil {
+		return fmt.Errorf("wgpu: surface not configured")
+	}
+	return s.core.PresentPixels(data, width, height, damageRects)
+}
+
+// WritePixels copies RGBA pixel data directly into the surface framebuffer,
+// bypassing render pass and texture upload. On software backend this is a
+// single-pass RGBA→BGRA swizzle+copy into the DIB section (1 copy vs 3).
+// On GPU backends, falls back to WriteTexture + present (no fast path).
+//
+// Call between GetCurrentTexture() and Present(). No render pass needed.
+// Returns ErrReleased if the surface is not configured.
+func (s *Surface) WritePixels(data []byte, width, height uint32) error {
+	if s.released || s.core == nil {
+		return ErrReleased
+	}
+	raw := s.core.RawSurface()
+	if raw == nil {
+		return ErrReleased
+	}
+	if pw, ok := raw.(hal.PixelWriter); ok {
+		return pw.WritePixels(data, width, height)
+	}
+	return fmt.Errorf("wgpu: WritePixels not supported on this backend")
+}
+
+// ActualExtent returns the actual swapchain dimensions after driver clamping.
+//
+// On Vulkan, the driver may clamp the requested extent to its supported range
+// (e.g., on X11 HiDPI where the compositor reports physical pixels that differ
+// from the application's logical pixels). The returned values reflect what the
+// swapchain was actually created with, which may differ from the configured
+// SurfaceConfiguration.Width/Height.
+//
+// On non-Vulkan backends (DX12, Metal, GLES, Software), the returned values
+// match the configured dimensions since those backends do not clamp the extent.
+// Returns (0, 0) if the surface is not configured.
+//
+// Use this to size MSAA resolve textures, offscreen targets, and any other
+// resources that must match the true swapchain size.
+func (s *Surface) ActualExtent() (width, height uint32) {
+	if s.released {
+		return 0, 0
+	}
+	raw := s.core.RawSurface()
+	if raw == nil {
+		return 0, 0
+	}
+	return raw.ActualExtent()
+}
+
+// DiscardTexture discards the acquired surface texture without presenting it.
+// Use this if rendering failed or was canceled. If no texture is currently
+// acquired, this is a no-op.
+func (s *Surface) DiscardTexture() {
+	if s.released {
+		return
+	}
+	s.core.DiscardTexture()
+}
+
+// ensureHALSurface creates or re-creates the HAL surface for the given backend.
+func (s *Surface) ensureHALSurface(backend gputypes.Backend) error {
+	if s.surfaceCreated && s.currentBackend == backend {
+		return nil
+	}
+	targetInstance := s.instance.core.HALInstanceForBackend(backend)
+	if targetInstance == nil {
+		return fmt.Errorf("wgpu: no HAL instance for backend %v", backend)
+	}
+	if s.core.RawSurface() != nil {
+		s.core.RawSurface().Destroy()
+	}
+	halSurface, err := targetInstance.CreateSurface(s.displayHandle, s.windowHandle)
+	if err != nil {
+		return fmt.Errorf("wgpu: failed to create surface for backend %v: %w", backend, err)
+	}
+	s.core.SetRawSurface(halSurface)
+	s.currentBackend = backend
+	s.surfaceCreated = true
+	return nil
+}
+
+// HAL returns the underlying HAL surface for backward compatibility.
+// Prefer using Surface methods instead of direct HAL access.
+func (s *Surface) HAL() hal.Surface {
+	return s.core.RawSurface()
+}
+
+// Release releases the surface.
+func (s *Surface) Release() {
+	if s.released {
+		return
+	}
+	s.released = true
+	s.core.RawSurface().Destroy()
+	s.core = nil
+}
+
+// SurfaceTexture is a texture acquired from a surface for rendering.
+type SurfaceTexture struct {
+	hal     hal.SurfaceTexture
+	surface *Surface
+	device  *Device
+}
+
+// AsTexture returns a lightweight Texture wrapper around this surface texture,
+// enabling use with Queue.WriteTexture() for direct CPU pixel upload without a
+// render pass. The surface must be configured with TextureUsageCopyDst.
+//
+// The returned Texture shares the underlying HAL resource — do not Release() it
+// independently. Its lifetime is tied to this SurfaceTexture.
+func (st *SurfaceTexture) AsTexture() *Texture {
+	return &Texture{
+		hal:    st.hal,
+		device: st.device,
+	}
+}
+
+// CreateView creates a texture view of this surface texture.
+func (st *SurfaceTexture) CreateView(desc *TextureViewDescriptor) (*TextureView, error) {
+	halDevice := st.device.halDevice()
+	if halDevice == nil {
+		return nil, ErrReleased
+	}
+
+	var halDesc *hal.TextureViewDescriptor
+	if desc != nil {
+		halDesc = &hal.TextureViewDescriptor{
+			Label:           desc.Label,
+			Format:          desc.Format,
+			Dimension:       desc.Dimension,
+			Aspect:          desc.Aspect,
+			BaseMipLevel:    desc.BaseMipLevel,
+			MipLevelCount:   desc.MipLevelCount,
+			BaseArrayLayer:  desc.BaseArrayLayer,
+			ArrayLayerCount: desc.ArrayLayerCount,
+		}
+	}
+
+	halView, err := halDevice.CreateTextureView(st.hal, halDesc)
+	if err != nil {
+		return nil, fmt.Errorf("wgpu: failed to create surface texture view: %w", err)
+	}
+
+	return &TextureView{hal: halView, device: st.device, texture: st.AsTexture()}, nil
+}

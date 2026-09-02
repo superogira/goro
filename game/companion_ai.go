@@ -167,12 +167,15 @@ func (m *WorldMode) updateCompanionAIKind(ctx client.Context, kind companionAIKi
 		loaded, err := newCompanionAI(ctx, m, kind, now)
 		if err != nil {
 			m.setCompanionAIForKind(kind, &companionAI{kind: kind, custom: useCustom, disabled: true, lastLoadErr: err})
-			glog.Debugf("%s AI unavailable: %v", companionAIKindName(kind), err)
+			// Warn, not debug: a failed AI load silently disables all
+			// companion behavior (no follow, no attacks), which looks like
+			// a gameplay bug rather than a missing data file.
+			glog.Warnf("%s AI unavailable: %v", companionAIKindName(kind), err)
 			return
 		}
 		ai = loaded
 		m.setCompanionAIForKind(kind, ai)
-		glog.Debugf("%s AI loaded source=%s", companionAIKindName(kind), ai.source)
+		glog.Infof("%s AI loaded source=%s", companionAIKindName(kind), ai.source)
 	}
 	if now.Before(ai.nextTick) {
 		return

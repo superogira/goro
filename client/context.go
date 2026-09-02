@@ -3,6 +3,7 @@ package client
 import (
 	"time"
 
+	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/audio"
 	"github.com/kivutar/goro/config"
@@ -35,6 +36,9 @@ type UIApp interface {
 	SetUIRoot(widget.Widget)
 	Frame()
 	Invalidate()
+	InvalidateRect(geometry.Rect)
+	RequestFullRepaint()
+	WidgetContext() widget.Context
 	Cursor() widget.CursorType
 	HoveredWidget() widget.Widget
 }

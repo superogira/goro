@@ -58,6 +58,25 @@ func (a basicMenuTestApp) Invalidate() {
 	}
 }
 
+func (a basicMenuTestApp) InvalidateRect(rect geometry.Rect) {
+	if a.app.Window() != nil && a.app.Window().Context() != nil && !rect.IsEmpty() {
+		a.app.Window().Context().InvalidateRect(rect)
+	}
+}
+
+func (a basicMenuTestApp) RequestFullRepaint() {
+	if a.app.Window() != nil {
+		a.app.Window().RequestFullRepaint()
+	}
+}
+
+func (a basicMenuTestApp) WidgetContext() widget.Context {
+	if a.app.Window() == nil {
+		return nil
+	}
+	return a.app.Window().Context()
+}
+
 func (a basicMenuTestApp) Cursor() widget.CursorType {
 	return a.app.Window().Context().Cursor()
 }

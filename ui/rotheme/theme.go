@@ -3,19 +3,29 @@ package rotheme
 
 import (
 	"image/color"
+	_ "embed"
 
-	"github.com/go-fonts/dejavu/dejavusans"
-	"github.com/go-fonts/dejavu/dejavusansbold"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/plugin"
 	"github.com/gogpu/ui/theme"
 	"github.com/gogpu/ui/widget"
 )
 
+// Sarabun covers both Latin and Thai, which DejaVu Sans does not; without it
+// every Thai rune renders as tofu (the client is used by Thai players).
+//
+// Sarabun by Cadson Demak, SIL Open Font License 1.1
+// (https://github.com/cadsondemak/Sarabun).
 const (
-	dejavuFamily     = "GoroDejaVuSans"
-	dejavuBoldFamily = "GoroDejaVuSansBold"
+	uiFontFamily     = "GoroSarabun"
+	uiBoldFontFamily = "GoroSarabunBold"
 )
+
+//go:embed fonts/Sarabun-Regular.ttf
+var sarabunRegularTTF []byte
+
+//go:embed fonts/Sarabun-Bold.ttf
+var sarabunBoldTTF []byte
 
 type Colors struct {
 	WindowBody     widget.Color
@@ -69,16 +79,22 @@ var Default = Theme{
 		InputFocus:     fromRGBA(color.RGBA{R: 82, G: 138, B: 200, A: 255}),
 	},
 	Typography: Typography{
-		FontFamily:     dejavuFamily,
-		BoldFontFamily: dejavuBoldFamily,
+		FontFamily:     uiFontFamily,
+		BoldFontFamily: uiBoldFontFamily,
 		TextSize:       11,
 	},
 }
 
 func init() {
 	ctx := plugin.NewDefaultPluginContext()
-	_ = ctx.Assets.LoadFont(dejavuFamily, dejavusans.TTF)
-	_ = ctx.Assets.LoadFont(dejavuBoldFamily, dejavusansbold.TTF)
+	_ = ctx.Assets.LoadFont(uiFontFamily, sarabunRegularTTF)
+	_ = ctx.Assets.LoadFont(uiBoldFontFamily, sarabunBoldTTF)
+	// The toolkit's built-in fallback family ("Inter") has no Thai glyphs,
+	// and several text paths resolve to it regardless of the theme family
+	// (e.g. chat console log lines). Registering Sarabun under the fallback
+	// name replaces the Inter regular face (same weight/style), so every
+	// defaulting path renders Thai too.
+	_ = ctx.Assets.LoadFont("Inter", sarabunRegularTTF)
 }
 
 func (t Theme) AsTheme() *theme.Theme {

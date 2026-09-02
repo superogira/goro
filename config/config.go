@@ -109,6 +109,7 @@ func LoadConfig(args []string) (Config, error) {
 	if err := applyCLI(&cfg, args); err != nil {
 		return Config{}, err
 	}
+	applyWebLoginQuery(&cfg)
 	cfg.DataDir = resolveDataDir(cfg.DataDir)
 	return cfg, nil
 }
@@ -231,7 +232,7 @@ func defaultConfig() Config {
 		},
 		Render: RenderConfig{
 			GraphicsAPI:        "vulkan",
-			AsyncUI:            true,
+			AsyncUI:            defaultAsyncUI(),
 			VSync:              true,
 			BenchWarmupSeconds: 0,
 		},
@@ -626,6 +627,9 @@ func setFloat(raw string, dst *float64) error {
 }
 
 func resolveDataDir(value string) string {
+	if value == "" {
+		value = defaultDataDirRoot
+	}
 	if value != "" {
 		if abs, err := filepath.Abs(value); err == nil {
 			return abs

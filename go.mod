@@ -5,7 +5,6 @@ go 1.26.4
 require (
 	github.com/charmbracelet/log v1.0.0
 	github.com/ebitengine/oto/v3 v3.5.0-alpha.8
-	github.com/go-fonts/dejavu v0.3.4
 	github.com/gogpu/gogpu v0.44.6
 	github.com/gogpu/gpucontext v0.21.1
 	github.com/gogpu/gputypes v0.5.1
@@ -14,7 +13,8 @@ require (
 	github.com/gogpu/wgpu v0.30.19
 	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/image v0.43.0
-	golang.org/x/text v0.38.0
+	golang.org/x/net v0.58.0
+	golang.org/x/text v0.41.0
 )
 
 require (
@@ -33,7 +33,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
-	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 )
 
 require (
@@ -60,3 +60,8 @@ replace github.com/godexture/core => github.com/godexture/godec/core v0.0.0-2026
 replace github.com/godexture/sdk => github.com/godexture/godec/pkg v0.0.0-20260621142744-bd77e78cfab1
 
 replace github.com/godexture/metadata-id3 => github.com/godexture/godec/plugins/metadata-id3 v0.0.0-20260621142744-bd77e78cfab1
+
+replace github.com/gogpu/wgpu => ./.web-patches/wgpu
+
+replace github.com/gogpu/gogpu => ./.web-patches/gogpu
+replace github.com/gogpu/ui => ./.web-patches/ui

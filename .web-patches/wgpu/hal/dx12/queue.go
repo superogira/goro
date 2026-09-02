@@ -1,0 +1,496 @@
+// Copyright 2025 The GoGPU Authors
+// SPDX-License-Identifier: MIT
+
+//go:build windows && !(js && wasm)
+
+package dx12
+
+import (
+	"fmt"
+	"image"
+	"time"
+	"unsafe"
+
+	"github.com/gogpu/gputypes"
+	"github.com/gogpu/wgpu/hal"
+	"github.com/gogpu/wgpu/hal/dx12/d3d12"
+	"github.com/gogpu/wgpu/hal/dx12/dxgi"
+)
+
+// Queue implements hal.Queue for DirectX 12.
+// It manages command submission and presentation to surfaces.
+type Queue struct {
+	device *Device
+	raw    *d3d12.ID3D12CommandQueue
+}
+
+// newQueue creates a new Queue wrapping the device's command queue.
+func newQueue(device *Device) *Queue {
+	return &Queue{
+		device: device,
+		raw:    device.directQueue,
+	}
+}
+
+// Submit submits command buffers to the GPU.
+// Returns a monotonically increasing submission index for tracking completion.
+func (q *Queue) Submit(commandBuffers []hal.CommandBuffer) (uint64, error) {
+	if len(commandBuffers) == 0 {
+		return 0, nil
+	}
+
+	// Convert command buffers to D3D12 command lists
+	cmdLists := make([]*d3d12.ID3D12GraphicsCommandList, len(commandBuffers))
+	for i, cb := range commandBuffers {
+		dx12CB, ok := cb.(*CommandBuffer)
+		if !ok {
+			return 0, fmt.Errorf("dx12: command buffer is not a DX12 command buffer")
+		}
+		cmdLists[i] = dx12CB.cmdList
+	}
+
+	// Execute command lists
+	submitStart := time.Now()
+	q.raw.ExecuteCommandLists(uint32(len(cmdLists)), &cmdLists[0])
+
+	// Check for immediate device removal after execution.
+	if reason := q.device.raw.GetDeviceRemovedReason(); reason != nil {
+		q.device.logDREDBreadcrumbs()
+		return 0, fmt.Errorf("dx12: device removed after ExecuteCommandLists: %w", reason)
+	}
+
+	// Drain debug messages after submission.
+	q.device.DrainDebugMessages()
+
+	// Signal the frame fence for per-frame allocator tracking and return its value
+	// as the submission index.
+	if err := q.device.signalFrameFence(); err != nil {
+		return 0, err
+	}
+
+	hal.Logger().Debug("dx12: command list submitted",
+		"cmdLists", len(cmdLists),
+		"elapsed", time.Since(submitStart),
+	)
+
+	return q.device.currentFrameFenceValue(), nil
+}
+
+// PollCompleted returns the highest submission index known to be completed by the GPU.
+// Non-blocking.
+func (q *Queue) PollCompleted() uint64 {
+	return q.device.completedFrameFenceValue()
+}
+
+// WriteBuffer writes data to a buffer immediately.
+// For upload heap buffers, data is copied directly via CPU mapping.
+// For default heap buffers, a staging buffer + GPU copy command is used.
+func (q *Queue) WriteBuffer(buffer hal.Buffer, offset uint64, data []byte) error {
+	if buffer == nil {
+		return fmt.Errorf("dx12: WriteBuffer: nil buffer")
+	}
+	if len(data) == 0 {
+		return nil
+	}
+
+	buf, ok := buffer.(*Buffer)
+	if !ok || buf.raw == nil {
+		return fmt.Errorf("dx12: WriteBuffer: invalid buffer type")
+	}
+
+	// Mappable buffers (CUSTOM/UPLOAD heaps) can be written directly via CPU mapping
+	if buf.isMappable() {
+		return q.writeBufferDirect(buf, offset, data)
+	}
+
+	// Default heap buffers require staging buffer + GPU copy
+	return q.writeBufferStaged(buf, offset, data)
+}
+
+// writeBufferDirect copies data to a mappable (upload heap) buffer.
+func (q *Queue) writeBufferDirect(buf *Buffer, offset uint64, data []byte) error {
+	if buf.mappedPointer != nil {
+		// Already mapped — copy directly
+		dst := unsafe.Slice((*byte)(unsafe.Add(buf.mappedPointer, int(offset))), len(data))
+		copy(dst, data)
+		return nil
+	}
+
+	// Temporarily map, copy, unmap
+	readRange := &d3d12.D3D12_RANGE{Begin: 0, End: 0} // No reads
+	ptr, err := buf.raw.Map(0, readRange)
+	if err != nil {
+		return fmt.Errorf("dx12: WriteBuffer: Map failed: %w", err)
+	}
+	dst := unsafe.Slice((*byte)(unsafe.Add(ptr, int(offset))), len(data))
+	copy(dst, data)
+
+	writtenRange := &d3d12.D3D12_RANGE{
+		Begin: uintptr(offset),
+		End:   uintptr(offset + uint64(len(data))),
+	}
+	buf.raw.Unmap(0, writtenRange)
+	return nil
+}
+
+// writeBufferStaged copies data to a GPU-only (default heap) buffer
+// via an upload heap staging buffer and CopyBufferRegion command.
+func (q *Queue) writeBufferStaged(buf *Buffer, offset uint64, data []byte) error {
+	// Create upload heap staging buffer (mapped at creation for immediate write)
+	staging, err := q.device.CreateBuffer(&hal.BufferDescriptor{
+		Label:            "write-buffer-staging",
+		Size:             uint64(len(data)),
+		Usage:            gputypes.BufferUsageCopySrc | gputypes.BufferUsageMapWrite,
+		MappedAtCreation: true,
+	})
+	if err != nil {
+		return fmt.Errorf("dx12: WriteBuffer: staging buffer creation failed: %w", err)
+	}
+	defer q.device.DestroyBuffer(staging)
+
+	stagingBuf := staging.(*Buffer)
+
+	// Copy data to mapped staging buffer
+	dst := unsafe.Slice((*byte)(stagingBuf.mappedPointer), len(data))
+	copy(dst, data)
+
+	// Unmap staging buffer
+	writtenRange := &d3d12.D3D12_RANGE{Begin: 0, End: uintptr(len(data))}
+	stagingBuf.raw.Unmap(0, writtenRange)
+	stagingBuf.mappedPointer = nil
+
+	// Create one-shot command encoder for the copy
+	cmdEncoder, err := q.device.CreateCommandEncoder(&hal.CommandEncoderDescriptor{
+		Label: "write-buffer-copy",
+	})
+	if err != nil {
+		return fmt.Errorf("dx12: WriteBuffer: CreateCommandEncoder failed: %w", err)
+	}
+
+	encoder := cmdEncoder.(*CommandEncoder)
+	if err := encoder.BeginEncoding("write-buffer-copy"); err != nil {
+		return fmt.Errorf("dx12: WriteBuffer: BeginEncoding failed: %w", err)
+	}
+
+	// D3D12 auto-promotes buffers from COMMON to COPY_DEST.
+	// After command list execution, buffers auto-decay back to COMMON.
+	encoder.cmdList.CopyBufferRegion(buf.raw, offset, stagingBuf.raw, 0, uint64(len(data)))
+
+	cmdBuffer, err := encoder.EndEncoding()
+	if err != nil {
+		return fmt.Errorf("dx12: WriteBuffer: EndEncoding failed: %w", err)
+	}
+
+	// Submit and wait for GPU completion.
+	_, err = q.Submit([]hal.CommandBuffer{cmdBuffer})
+	if err != nil {
+		return fmt.Errorf("dx12: WriteBuffer: Submit failed: %w", err)
+	}
+	// Block until GPU finishes the copy — staging buffer must remain valid.
+	if err := q.device.WaitIdle(); err != nil {
+		hal.Logger().Error("dx12: WaitIdle failed after staged write", "err", err)
+	}
+	q.device.FreeCommandBuffer(cmdBuffer)
+	return nil
+}
+
+// d3d12TexturePitchAlignment is the required row pitch alignment for texture data.
+const d3d12TexturePitchAlignment = 256
+
+// WriteTexture writes data to a texture immediately.
+// Creates an upload heap staging buffer, copies data with proper row pitch
+// alignment, and uses CopyTextureRegion to transfer to the GPU texture.
+func (q *Queue) WriteTexture(dst *hal.ImageCopyTexture, data []byte, layout *hal.ImageDataLayout, size *hal.Extent3D) error {
+	if dst == nil || dst.Texture == nil || len(data) == 0 || size == nil {
+		return fmt.Errorf("dx12: WriteTexture: invalid arguments")
+	}
+
+	dstTex, ok := dst.Texture.(*Texture)
+	if !ok || dstTex.raw == nil {
+		return fmt.Errorf("dx12: WriteTexture: invalid texture type")
+	}
+
+	// Calculate layout parameters
+	bytesPerRow := layout.BytesPerRow
+	if bytesPerRow == 0 {
+		bytesPerRow = size.Width * 4 // Assume RGBA8 (4 bytes per pixel)
+	}
+
+	rowsPerImage := layout.RowsPerImage
+	if rowsPerImage == 0 {
+		rowsPerImage = size.Height
+	}
+
+	depthOrLayers := size.DepthOrArrayLayers
+	if depthOrLayers == 0 {
+		depthOrLayers = 1
+	}
+
+	// D3D12 requires RowPitch to be aligned to 256 bytes
+	alignedRowPitch := (bytesPerRow + d3d12TexturePitchAlignment - 1) &^ (d3d12TexturePitchAlignment - 1)
+
+	// Calculate staging buffer size with aligned pitch
+	stagingSize := uint64(alignedRowPitch) * uint64(rowsPerImage) * uint64(depthOrLayers)
+
+	// Create upload heap staging buffer
+	staging, err := q.device.CreateBuffer(&hal.BufferDescriptor{
+		Label:            "write-texture-staging",
+		Size:             stagingSize,
+		Usage:            gputypes.BufferUsageCopySrc | gputypes.BufferUsageMapWrite,
+		MappedAtCreation: true,
+	})
+	if err != nil {
+		return fmt.Errorf("dx12: WriteTexture: CreateBuffer failed: %w", err)
+	}
+	defer q.device.DestroyBuffer(staging)
+
+	stagingBuf := staging.(*Buffer)
+
+	// Copy data to staging buffer with proper row pitch alignment
+	srcOffset := layout.Offset
+	if bytesPerRow == alignedRowPitch {
+		// No alignment padding needed — single copy
+		srcData := data[srcOffset:]
+		if uint64(len(srcData)) > stagingSize {
+			srcData = srcData[:stagingSize]
+		}
+		d := unsafe.Slice((*byte)(stagingBuf.mappedPointer), len(srcData))
+		copy(d, srcData)
+	} else {
+		// Row-by-row copy to handle alignment padding
+		for z := uint32(0); z < depthOrLayers; z++ {
+			for row := uint32(0); row < rowsPerImage; row++ {
+				srcStart := srcOffset + uint64(z)*uint64(bytesPerRow)*uint64(rowsPerImage) + uint64(row)*uint64(bytesPerRow)
+				dstStart := uint64(z)*uint64(alignedRowPitch)*uint64(rowsPerImage) + uint64(row)*uint64(alignedRowPitch)
+
+				if srcStart+uint64(bytesPerRow) > uint64(len(data)) {
+					break
+				}
+
+				src := data[srcStart : srcStart+uint64(bytesPerRow)]
+				d := unsafe.Slice((*byte)(unsafe.Add(stagingBuf.mappedPointer, int(dstStart))), bytesPerRow)
+				copy(d, src)
+			}
+		}
+	}
+
+	// Unmap staging buffer
+	writtenRange := &d3d12.D3D12_RANGE{Begin: 0, End: uintptr(stagingSize)}
+	stagingBuf.raw.Unmap(0, writtenRange)
+	stagingBuf.mappedPointer = nil
+
+	// Create one-shot command encoder
+	cmdEncoder, err := q.device.CreateCommandEncoder(&hal.CommandEncoderDescriptor{
+		Label: "write-texture-copy",
+	})
+	if err != nil {
+		return fmt.Errorf("dx12: WriteTexture: CreateCommandEncoder failed: %w", err)
+	}
+
+	encoder := cmdEncoder.(*CommandEncoder)
+	if err := encoder.BeginEncoding("write-texture-copy"); err != nil {
+		return fmt.Errorf("dx12: WriteTexture: BeginEncoding failed: %w", err)
+	}
+
+	// Transition texture to COPY_DEST using tracked current state.
+	// After first WriteTexture, the texture is in PIXEL_SHADER_RESOURCE state,
+	// not COMMON — using wrong "before" state causes undefined behavior on DX12.
+	beforeState := dstTex.currentState
+	if beforeState != d3d12.D3D12_RESOURCE_STATE_COPY_DEST {
+		barrierToCopy := d3d12.NewTransitionBarrier(
+			dstTex.raw,
+			beforeState,
+			d3d12.D3D12_RESOURCE_STATE_COPY_DEST,
+			d3d12.D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+		)
+		encoder.cmdList.ResourceBarrier(1, &barrierToCopy)
+	}
+
+	// Source location (staging buffer with placed footprint)
+	srcLoc := d3d12.D3D12_TEXTURE_COPY_LOCATION{
+		Resource: stagingBuf.raw,
+		Type:     d3d12.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+	}
+	srcLoc.SetPlacedFootprint(d3d12.D3D12_PLACED_SUBRESOURCE_FOOTPRINT{
+		Offset: 0,
+		Footprint: d3d12.D3D12_SUBRESOURCE_FOOTPRINT{
+			Format:   textureFormatToD3D12(dstTex.format),
+			Width:    size.Width,
+			Height:   size.Height,
+			Depth:    depthOrLayers,
+			RowPitch: alignedRowPitch,
+		},
+	})
+
+	// Destination location (texture subresource)
+	subresource := dst.MipLevel + dst.Origin.Z*dstTex.mipLevels
+	dstLoc := d3d12.D3D12_TEXTURE_COPY_LOCATION{
+		Resource: dstTex.raw,
+		Type:     d3d12.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+	}
+	dstLoc.SetSubresourceIndex(subresource)
+
+	encoder.cmdList.CopyTextureRegion(
+		&dstLoc,
+		dst.Origin.X, dst.Origin.Y, dst.Origin.Z,
+		&srcLoc,
+		nil, // Copy entire source
+	)
+
+	// Transition texture to shader resource state (ready for rendering)
+	afterState := d3d12.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | d3d12.D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+	barrierToShader := d3d12.NewTransitionBarrier(
+		dstTex.raw,
+		d3d12.D3D12_RESOURCE_STATE_COPY_DEST,
+		afterState,
+		d3d12.D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+	)
+	encoder.cmdList.ResourceBarrier(1, &barrierToShader)
+
+	// End encoding
+	cmdBuffer, err := encoder.EndEncoding()
+	if err != nil {
+		return fmt.Errorf("dx12: WriteTexture: EndEncoding failed: %w", err)
+	}
+
+	// Submit and wait for GPU completion.
+	_, err = q.Submit([]hal.CommandBuffer{cmdBuffer})
+	if err != nil {
+		return fmt.Errorf("dx12: WriteTexture: Submit failed: %w", err)
+	}
+	// Block until GPU finishes the copy — staging buffer must remain valid.
+	if err := q.device.WaitIdle(); err != nil {
+		hal.Logger().Error("dx12: WaitIdle failed after texture write", "err", err)
+	}
+	q.device.FreeCommandBuffer(cmdBuffer)
+
+	// Update tracked state AFTER successful execution.
+	dstTex.currentState = afterState
+	return nil
+}
+
+// Present presents a surface texture to the screen.
+// The texture must have been acquired via Surface.AcquireTexture.
+//
+// damageRects is an optional list of rectangles (physical pixels, top-left
+// origin) indicating which surface regions changed this frame. When non-empty
+// and the surface was configured with EnableDamagePresent (FLIP_SEQUENTIAL),
+// IDXGISwapChain1::Present1 is called with DXGI_PRESENT_PARAMETERS containing
+// the dirty rects. Otherwise, the standard Present() path is used.
+func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects []image.Rectangle) error {
+	dx12Surface, ok := surface.(*Surface)
+	if !ok {
+		return fmt.Errorf("dx12: surface is not a DX12 surface")
+	}
+
+	if dx12Surface.swapchain == nil {
+		return fmt.Errorf("dx12: surface not configured")
+	}
+
+	// Note: Resource barriers (render target -> present) should be
+	// handled in the command buffer encoding before this call.
+	// The present call here just flips the swapchain.
+
+	// Determine sync interval and flags based on present mode
+	var syncInterval uint32
+	var presentFlags uint32
+
+	switch dx12Surface.presentMode {
+	case hal.PresentModeImmediate:
+		// No vsync, immediate presentation
+		syncInterval = 0
+		if dx12Surface.allowTearing {
+			presentFlags |= uint32(dxgi.DXGI_PRESENT_ALLOW_TEARING)
+		}
+	case hal.PresentModeMailbox:
+		// VSync with triple buffering (latest frame wins)
+		// Mailbox is simulated with syncInterval=0 + triple buffer
+		syncInterval = 0
+		if dx12Surface.allowTearing {
+			presentFlags |= uint32(dxgi.DXGI_PRESENT_ALLOW_TEARING)
+		}
+	case hal.PresentModeFifo, hal.PresentModeFifoRelaxed:
+		// VSync enabled
+		syncInterval = 1
+	default:
+		// Default to vsync
+		syncInterval = 1
+	}
+
+	// Present the frame. Use Present1 with dirty rects when the surface
+	// is configured for damage-aware present (FLIP_SEQUENTIAL) and the
+	// caller provided damage rects. Otherwise use standard Present.
+	presentStart := time.Now()
+
+	if len(damageRects) > 0 && dx12Surface.damagePresent {
+		// Convert image.Rectangle to DXGI RECT (top-left origin, same
+		// coordinate system). Stack-allocate up to 8 to avoid heap alloc.
+		var stackRects [8]dxgi.RECT
+		rects := stackRects[:0]
+		for _, r := range damageRects {
+			rects = append(rects, dxgi.RECT{
+				Left:   int32(r.Min.X),
+				Top:    int32(r.Min.Y),
+				Right:  int32(r.Max.X),
+				Bottom: int32(r.Max.Y),
+			})
+		}
+		params := dxgi.DXGI_PRESENT_PARAMETERS{
+			DirtyRectsCount: uint32(len(rects)),
+			DirtyRects:      &rects[0],
+		}
+		if err := dx12Surface.swapchain.Present1(syncInterval, presentFlags, &params); err != nil {
+			return fmt.Errorf("dx12: Present1 failed: %w", err)
+		}
+	} else {
+		if err := dx12Surface.swapchain.Present(syncInterval, presentFlags); err != nil {
+			return fmt.Errorf("dx12: Present failed: %w", err)
+		}
+	}
+
+	hal.Logger().Debug("dx12: present",
+		"syncInterval", syncInterval,
+		"damageRects", len(damageRects),
+		"elapsed", time.Since(presentStart),
+	)
+
+	// Advance frame index.
+	q.device.advanceFrame()
+
+	// Drain debug messages after present.
+	q.device.DrainDebugMessages()
+
+	return nil
+}
+
+// GetTimestampPeriod returns the timestamp period in nanoseconds.
+// Used to convert timestamp query results to real time.
+func (q *Queue) GetTimestampPeriod() float32 {
+	freq, err := q.raw.GetTimestampFrequency()
+	if err != nil || freq == 0 {
+		// Default to 1.0 if we can't get the frequency
+		return 1.0
+	}
+
+	// Convert frequency (Hz) to period (nanoseconds)
+	// period = 1 / frequency (in seconds) = 1e9 / frequency (in nanoseconds)
+	return float32(1e9) / float32(freq)
+}
+
+// SupportsCommandBufferCopies returns true for DX12.
+// DX12 uses command lists for copy operations — PendingWrites batches them.
+func (q *Queue) SupportsCommandBufferCopies() bool {
+	return true
+}
+
+// SetSwapchainSuppressed is a no-op on DX12.
+// DX12 does not use swapchain semaphores — presentation synchronization is
+// handled by DXGI fence signaling, which is not affected by submit ordering.
+// See BUG-WGPU-VK-005 (Vulkan-specific issue).
+func (q *Queue) SetSwapchainSuppressed(_ bool) {}
+
+// -----------------------------------------------------------------------------
+// Compile-time interface assertions
+// -----------------------------------------------------------------------------
+
+var _ hal.Queue = (*Queue)(nil)

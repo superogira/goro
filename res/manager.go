@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
-	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -95,14 +93,8 @@ func NewManager(root string) (*Manager, error) {
 
 func (m *Manager) Find(name string) (string, bool) {
 	normalized := normalizePath(name)
-	candidates := []string{
-		filepath.Join(m.Root, normalized),
-		filepath.Join(m.Root, strings.ReplaceAll(normalized, "\\", string(filepath.Separator))),
-		filepath.Join(m.Root, strings.ReplaceAll(normalized, "/", string(filepath.Separator))),
-	}
-
-	for _, candidate := range candidates {
-		if stat, err := os.Stat(candidate); err == nil && !stat.IsDir() {
+	for _, candidate := range m.candidatePaths(normalized) {
+		if m.candidateExists(candidate) {
 			return candidate, true
 		}
 	}
@@ -112,7 +104,7 @@ func (m *Manager) Find(name string) (string, bool) {
 func (m *Manager) ReadFile(name string) ([]byte, error) {
 	path, ok := m.Find(name)
 	if ok {
-		return os.ReadFile(path)
+		return m.readCandidate(path)
 	}
 
 	for _, archive := range m.Archives {
@@ -140,7 +132,7 @@ func (m *Manager) ReadFile(name string) ([]byte, error) {
 func (m *Manager) ReadFileExact(name string) ([]byte, error) {
 	path, ok := m.Find(name)
 	if ok {
-		return os.ReadFile(path)
+		return m.readCandidate(path)
 	}
 
 	for _, archive := range m.Archives {
@@ -362,44 +354,7 @@ func (m *Manager) scanKnownFiles() {
 			m.FoundFiles = append(m.FoundFiles, path)
 		}
 	}
-
-	archivePaths := make([]string, 0)
-	seen := make(map[string]struct{})
-	if entries, err := os.ReadDir(m.Root); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			ext := strings.ToLower(filepath.Ext(name))
-			if ext != ".grf" && ext != ".gpf" {
-				continue
-			}
-			path := filepath.Join(m.Root, name)
-			archivePaths = append(archivePaths, path)
-			seen[strings.ToLower(path)] = struct{}{}
-		}
-	}
-	for _, name := range []string{"data.grf", "rdata.grf", "fdata.grf", "event.grf"} {
-		path := filepath.Join(m.Root, name)
-		if _, ok := seen[strings.ToLower(path)]; ok {
-			continue
-		}
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		archivePaths = append(archivePaths, path)
-	}
-	sort.SliceStable(archivePaths, func(i, j int) bool {
-		return archivePriority(archivePaths[i]) < archivePriority(archivePaths[j])
-	})
-	for _, path := range archivePaths {
-		archive, err := OpenGRF(path)
-		if err != nil {
-			continue
-		}
-		m.Archives = append(m.Archives, archive)
-	}
+	m.scanArchives()
 }
 
 func archivePriority(path string) string {

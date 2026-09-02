@@ -1086,6 +1086,7 @@ func (m *LoginMode) connectCharServer(ctx client.Context, server network.CharSer
 	cancel()
 	if err != nil {
 		m.status = "char connect failed: " + err.Error()
+		glog.Infof("char connect failed addr=%s port=%d: %v", server.Address, server.Port, err)
 		openConnectionFailedDialog(ctx, &m.disconnectDialog)
 		return false
 	}
@@ -1116,7 +1117,7 @@ func (m *LoginMode) connectMapServer(ctx client.Context, zone network.ZoneServer
 		m.status = "CZ_ENTER2 failed: " + err.Error()
 		return
 	}
-	m.status = "CZ_ENTER2 sent to map server"
+				m.status = "CZ_ENTER2 sent to map server"
 	glog.Debugf("sent CZ_ENTER2 account_id=%d char_id=%d addr=%s port=%d", ctx.Session.AccountID, zone.CharID, zone.Address, zone.Port)
 }
 

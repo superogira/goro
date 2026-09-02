@@ -508,6 +508,7 @@ func (b *BGM) ensureContext(preferredSampleRate int) *oto.Context {
 		SampleRate:   preferredSampleRate,
 		ChannelCount: 2,
 		Format:       oto.FormatSignedInt16LE,
+		BufferSize:   webAudioBufferSize,
 	})
 	if err != nil {
 		glog.Warnf("bgm create audio context failed sample_rate=%d: %v", preferredSampleRate, err)

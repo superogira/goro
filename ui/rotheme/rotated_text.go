@@ -7,8 +7,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/go-fonts/dejavu/dejavusans"
-	"github.com/go-fonts/dejavu/dejavusansbold"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
 	"golang.org/x/image/font"
@@ -136,9 +134,9 @@ func rasterizeRotatedText(key rotatedTextImageKey, scale float32) *image.RGBA {
 	if scale <= 0 {
 		scale = 1
 	}
-	fontData := dejavusans.TTF
+	fontData := sarabunRegularTTF
 	if key.bold {
-		fontData = dejavusansbold.TTF
+		fontData = sarabunBoldTTF
 	}
 	parsed, err := opentype.Parse(fontData)
 	if err != nil {

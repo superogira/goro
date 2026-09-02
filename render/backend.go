@@ -93,6 +93,13 @@ func (b uiAppBridge) InvalidateLayout() {
 	b.App.Window().Context().Invalidate()
 }
 
+func (b uiAppBridge) RequestFullRepaint() {
+	if b.App == nil || b.App.Window() == nil {
+		return
+	}
+	b.App.Window().RequestFullRepaint()
+}
+
 func (b uiAppBridge) WidgetContext() widget.Context {
 	if b.App == nil || b.App.Window() == nil {
 		return nil

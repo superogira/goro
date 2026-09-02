@@ -1,0 +1,132 @@
+﻿การ Deploy goro (เวอร์ชันเว็บ) — ro.catgg.net + Windows Server 192.168.1.162
+============================================================================
+
+โครงสร้างที่ตั้งเป้า
+--------------------
+  [เบราว์เซอร์ผู้เล่น]
+        │  HTTPS (หน้าเว็บ + ไฟล์เกม + WebSocket)
+        ▼
+  ro.catgg.net  (Nginx Proxy Manager → 192.168.1.211:80  เก็บไฟล์ /webro)
+        │  path /wsro/  (proxy แบบ WebSocket)
+        ▼
+  Windows Server 192.168.1.162
+        ├── webbridge.exe   (รับ WebSocket แล้วแปลงเป็น TCP)
+        └── rAthena         (login 6900 / char 6121 / map 5121)
+
+ไฟล์ที่ต้องอัพโหลด
+------------------
+1. เว็บเซิร์ฟเวอร์ (192.168.1.211 → ro.catgg.net):
+   อัพโหลด "ทั้งโฟลเดอร์" C:\laragon\www\webro\ ไปไว้ที่ path /webro ของเว็บ
+   สิ่งที่สำคัญ:
+     - index.html        (build v23)
+     - goro.wasm         (~30MB, cache-busted ด้วย ?v=23)
+     - wasm_exec.js
+     - AI\               (สคริปต์ AI ทหารรับจ้าง)
+     - data\             (ไฟล์ทรัพยากรเกม — โฟลเดอร์ใหญ่ อัพโหลดทีเดียวพอ)
+   (ถ้า server รัน nginx เอง ให้แน่ใจว่า MIME type ของ .wasm =
+    application/wasm ไม่งั้น instantiateStreaming จะพัง)
+
+2. Windows Server 192.168.1.162:
+   คัดลอก webbridge.exe (ในโฟลเดอร์นี้) ไปไว้ที่เครื่องนั้น เช่น C:\goro\webbridge.exe
+   แล้วสั่งรัน:
+     webbridge.exe -addr 0.0.0.0:8124
+   (ค่า default คือ 127.0.0.1:8124 ซึ่งรับเฉพาะเครื่องเดียวกัน —
+    ใช้ 0.0.0.0 เพื่อให้ NPM จากเครื่อง .211 ต่อเข้ามาได้)
+
+   แนะนำสร้าง service ให้รันอัตโนมัติ เช่น ด้วย NSSM:
+     nssm install goro-webbridge C:\goro\webbridge.exe "-addr 0.0.0.0:8124"
+
+ตั้งค่า Nginx Proxy Manager (ro.catgg.net)
+------------------------------------------
+ใน Proxy Host ของ ro.catgg.net:
+
+  1) ส่วน Details (มีอยู่แล้ว):
+       Scheme: http   Forward Hostname: 192.168.1.211   Forward Port: 80
+       เปิด Websockets Support ✔ (สำคัญ!)
+
+  2) แท็บ Advanced — Custom Locations เพิ่ม:
+       Location:      /wsro
+       Scheme:        http
+       Forward Host:  192.168.1.162
+       Forward Port:  8124
+       เปิด Websockets Support ✔
+
+     หรือถ้าใช้ config ตรง ๆ (custom nginx.conf):
+       location /wsro/ {
+           proxy_pass http://192.168.1.162:8124/;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
+           proxy_read_timeout 3600s;   # ไม่ให้ตัดการเชื่อมต่อระหว่างเล่น
+           proxy_send_timeout 3600s;
+       }
+
+การเชื่อมต่อจะไหลแบบนี้:
+  เบราว์เซอร์ → wss://ro.catgg.net/wsro/connect?addr=127.0.0.1:6900
+  → NPM → ws://192.168.1.162:8124 → webbridge dial 127.0.0.1:6900 (rAthena บนเครื่องเดียวกัน)
+
+ข้อกำหนดฝั่ง rAthena (บน 192.168.1.162)
+--------------------------------------
+- ให้ login/char/map server รันอยู่บนเครื่องเดียวกับ webbridge (ตามแผน)
+- rAthena ควร advertise ที่อยู่ char/map server เป็น 127.0.0.1
+  (ค่า default ของ char_athena.conf / map_athena.conf) —
+  เพราะ webbridge จะ dial ผ่าน loopback ของเครื่อง .162 เอง
+- พอร์ต 6900/6121/5121 ไม่ต้องเปิด firewall สู่ภายนอกเลย!
+  เปิดแค่พอร์ต 8124 (inbound TCP จาก 192.168.1.211 หรือทั้ง LAN)
+
+ความปลอดภัยของ webbridge
+------------------------
+- default: รับปลายทางเฉพาะ loopback (127.0.0.1) เท่านั้น
+  ใครก็ต่อมาขอได้แค่เกมเซิร์ฟเวอร์บนเครื่อง .162 เอง ไม่สามารถใช้เป็น
+  proxy ยิงเครื่องอื่นได้
+- ถ้าจะย้าย rAthena ไปคนละเครื่องกับ bridge ให้รันด้วย:
+    webbridge.exe -addr 0.0.0.0:8124 -allow-private
+  (อนุญาตเพิ่มเฉพาะ IP ในวง LAN 192.168.x.x / 10.x.x.x / 172.16-31.x.x
+   ยังบล็อก IP สาธารณะอยู่)
+
+ทางเลือก: ชี้ WebSocket ตรง (ไม่ผ่าน NPM)
+-----------------------------------------
+ถ้าเปิดหน้าเกมแบบ http:// (ไม่มี HTTPS) สามารถข้าม path /wsro ได้โดยเปิด:
+    http://ro.catgg.net/webro/index.html?ws=ws://192.168.1.162:8124
+หรือแก้ window.goroWSBase ใน index.html
+ข้อควรระวัง: ถ้าหน้าเว็บเป็น https:// เบราว์เซอร์จะบล็อก ws:// (mixed content)
+ต้องใช้ทางผ่าน NPM แบบ wss:// เท่านั้น
+
+ตรวจสอบว่าใช้งานได้
+------------------
+1. เปิด http://ro.catgg.net/webro/ → ควรเห็นหน้า login
+2. ที่เครื่อง .162 จะเห็น log ของ webbridge:
+     bridge <ip ของ NPM> <-> 127.0.0.1:6900
+3. ล็อกอินด้วยบัญชีใน rAthena ของเครื่อง .162 (ไม่ใช่ของเครื่อง dev)
+
+หมายเหตุ
+------
+- บิลด์นี้คือ goro.wasm v23 = ตัวล่าสุดที่แก้: หน้าเลือกตัวละคร,
+  ฟอนต์ไทย, แคชการวัดข้อความ, และ audio buffer 130ms (ลดเสียงแตก/กระตุก)
+- แนะนำให้ server เปิด gzip/brotli สำหรับ .wasm (ลดจาก ~30MB เหลือ ~8-9MB)
+  nginx: gzip on; gzip_types application/wasm;
+- ทดสอบบนเครื่อง dev เดิม (localhost:8080) ยังใช้ได้ตามปกติ
+
+หมายเหตุ: คอมพิวเตอร์รุ่นเก่า / การ์ดจอเก่า (อัพเดต v24)
+--------------------------------------------------------
+อาการ: FATA gogpu: failed to request adapter: wgpu: no suitable GPU adapter found
+สาเหตุ: เบราว์เซอร์หา GPU adapter สำหรับ WebGPU ไม่เจอ — เจอบนเครื่องที่ไดรเวอร์
+        การ์ดจอเก่า ถูก Chrome ขึ้นบัญชีบล็อก (blocklist) หรือเบราว์เซอร์เก่ากว่า 113
+
+สิ่งที่ build v24 ทำให้:
+  1. ถ้าขอ GPU ปกติไม่ได้ เกมจะ retry ขอ "software adapter" (SwiftShader —
+     วาดด้วย CPU) อัตโนมัติ → เครื่องที่ไดรเวอร์เก่าแต่เบราว์เซอร์ใหม่
+     จะเล่นได้ (ช้ากว่าปกติแต่เล่นได้)
+  2. ถ้าไม่มี WebGPU เลย (เบราว์เซอร์เก่ากว่า Chrome/Edge 113) หน้าเว็บจะขึ้น
+     ข้อความไทยแจ้งให้อัพเดตเบราว์เซอร์
+  3. ถ้าเริ่มเกมไม่ได้จากสาเหตุ GPU หน้าเว็บจะขึ้นคำแนะนำแก้ปัญหา
+     (อัพเดตเบราว์เซอร์ / ไดรเวอร์ / เปิด chrome://flags/#enable-unsafe-webgpu)
+
+วิธีแก้บนเครื่องผู้เล่น (แนะนำตามลำดับ):
+  1. อัพเดต Chrome หรือ Edge เป็นเวอร์ชันล่าสุด
+  2. อัพเดตไดรเวอร์การ์ดจอ / iGPU
+  3. เปิด chrome://flags/#enable-unsafe-webgpu → Enabled → รีสตาร์ท
+  4. ถ้ายังไม่ได้ = การ์ดจอ/ชิปกราฟิกไม่รองรับ ต้องเล่นบนเครื่องอื่น
+
+หมายเหตุ: เกมเวอร์ชันเว็บต้องใช้ WebGPU (ยังไม่มีโหมด WebGL) — เพราะฉะนั้น
+Chrome/Edge เวอร์ชัน 113+ เป็นข้อกำหนดขั้นต่ำ Firefox/Safari ยังใช้ไม่ได้

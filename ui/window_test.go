@@ -348,9 +348,11 @@ type windowDragTestApp struct {
 	active      bool
 }
 
-func (a *windowDragTestApp) SetUIRoot(widget.Widget) {}
-func (a *windowDragTestApp) Frame()                  {}
-func (a *windowDragTestApp) Invalidate()             {}
+func (a *windowDragTestApp) SetUIRoot(widget.Widget)      {}
+func (a *windowDragTestApp) Frame()                       {}
+func (a *windowDragTestApp) Invalidate()                  {}
+func (a *windowDragTestApp) RequestFullRepaint()          {}
+func (a *windowDragTestApp) WidgetContext() widget.Context { return nil }
 func (a *windowDragTestApp) InvalidateRect(rect geometry.Rect) {
 	a.rects = append(a.rects, rect)
 }

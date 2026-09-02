@@ -1,0 +1,166 @@
+# Compute Shader Backend Differences
+
+This document describes compute shader support across wgpu's HAL backends.
+
+## Support Matrix
+
+| Feature | Vulkan | DX12 | Metal | GLES | Software | Browser | Noop |
+|---------|:------:|:----:|:-----:|:----:|:--------:|:-------:|:----:|
+| Compute shaders | Yes | Yes | Yes | Partial | Yes (interpreted) | Yes | No |
+| Storage buffers | Yes | Yes | Yes | Yes | Yes (interpreted) | Yes | No |
+| Timestamp queries | Yes | Yes | Stub | Stub | No | No | No |
+| Indirect dispatch | Yes | Yes | Yes | Yes | No | Yes | No |
+| Buffer mapping (GPU->CPU) | Yes | Yes | Yes | Yes | Yes | Yes | No |
+| Max workgroup size X | 1024+ | 1024 | 1024 | 1024 | 1024 | Browser | N/A |
+| Max workgroup invocations | 1024+ | 1024 | 1024 | 1024 | 1024 | Browser | N/A |
+
+## Vulkan
+
+**Status:** Full compute support.
+
+Vulkan provides the most complete compute shader implementation:
+
+- **Shader compilation:** WGSL -> SPIR-V (via `gogpu/naga`).
+- **Timestamp queries:** Fully implemented using `vkCmdWriteTimestamp` at the beginning and end of compute passes. Results are copied to a buffer via `vkCmdCopyQueryPoolResults`.
+- **Memory barriers:** Automatic global memory barrier inserted at compute pass end (`End()`) to ensure shader writes are visible to subsequent commands.
+- **Workgroup size limits:** Depends on the physical device. Typical minimum guaranteed by Vulkan spec: 128 invocations per workgroup. Most desktop GPUs support 1024.
+- **Synchronization:** Use `Fence` + `Device.Wait()` to synchronize CPU with GPU completion.
+- **Timestamp period:** `Queue.GetTimestampPeriod()` returns the nanoseconds-per-tick value for the GPU's timestamp counter.
+
+### Vulkan-Specific Notes
+
+- Query pools are reset automatically before each timestamp write.
+- The `ResolveQuerySet` method inserts a pipeline barrier before copying results to ensure timestamps are finalized.
+- `VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT` flags ensure results are complete 64-bit values.
+
+## DirectX 12
+
+**Status:** Compute shaders work. Timestamp queries supported.
+
+- **Shader compilation:** WGSL -> HLSL -> DXBC via FXC (default), or WGSL -> DXIL direct via `gogpu/naga/dxil` (`GOGPU_DX12_DXIL=1`, SM 6.0+, no external dependencies).
+- **Timestamp queries:** Fully implemented using `ID3D12Device::CreateQueryHeap` with `D3D12_QUERY_TYPE_TIMESTAMP` and `ID3D12GraphicsCommandList::EndQuery` + `ResolveQueryData`. Begin/end-of-pass timestamps written automatically.
+- **Workgroup size limits:** Maximum 1024 invocations per workgroup (D3D12 spec).
+- **Indirect dispatch:** `DispatchIndirect` via `ExecuteIndirect` with pre-created `ID3D12CommandSignature` (dispatch args: 3 × uint32 = 12 bytes). Also supports `DrawIndirect` (16B) and `DrawIndexedIndirect` (20B).
+- **Root signature:** Compute pipelines use a separate root signature from graphics pipelines. Descriptor heaps are bound lazily on first `SetBindGroup` call.
+
+### DX12-Specific Notes
+
+- Descriptor heaps must be bound before setting descriptor tables. The `ComputePassEncoder` tracks this with `descriptorHeapsSet`.
+- No explicit compute pass begin/end is needed at the D3D12 API level.
+
+## Metal
+
+**Status:** Compute shaders work. Timestamp queries are stubbed.
+
+- **Shader compilation:** WGSL -> MSL (via `gogpu/naga`).
+- **Timestamp queries:** `CreateQuerySet` currently returns `ErrTimestampsNotSupported`. Metal supports counter sample buffers (`MTLCounterSampleBuffer`) for GPU timestamps on Apple Silicon. Implementation is planned.
+- **Workgroup size limits:** Maximum 1024 invocations per workgroup on Apple Silicon. Older Intel Macs may have lower limits.
+- **Compute encoder:** Metal uses `MTLComputeCommandEncoder` (created from `MTLCommandBuffer`). The encoder is `Retain`-ed to survive autorelease pool drains.
+
+### Metal-Specific Notes
+
+- `GetTimestampPeriod()` returns 1.0 (Metal timestamps are already in nanoseconds).
+- Bind group resources are bound directly via `setBuffer:offset:atIndex:` on the compute encoder.
+
+## OpenGL ES (GLES)
+
+**Status:** Partial compute support. Requires OpenGL ES 3.1+.
+
+- **Shader compilation:** WGSL -> GLSL (via `gogpu/naga`).
+- **Timestamp queries:** `CreateQuerySet` currently returns `ErrTimestampsNotSupported`. GLES supports timer queries via `GL_EXT_disjoint_timer_query` extension (not universally available). Implementation is planned.
+- **Compute support flag:** Check `DownlevelFlagsComputeShaders` in adapter capabilities.
+- **GLES 3.0:** No compute shader support (only GLES 3.1+).
+- **GLES 3.1+:** Compute shaders supported via `glDispatchCompute`.
+
+### GLES-Specific Notes
+
+- Compute commands are deferred: `BeginComputePass` records commands into a list that is replayed on `Submit`.
+- The `glMemoryBarrier` call is needed after dispatch to ensure writes are visible.
+- Some drivers (especially Mesa llvmpipe on CI) may have limited compute support.
+
+## Software Backend
+
+**Status:** Compute shaders supported via SPIR-V interpreter (v0.27.0+).
+
+The software backend executes compute shaders on CPU through a built-in SPIR-V interpreter. **Designed for shader debugging, CI/CD testing, and GPU-less environments — not for production workloads** (interpreted, ~100× slower than JIT software renderers).
+
+- **Shader compilation:** WGSL → SPIR-V (via `gogpu/naga`), then interpreted instruction-by-instruction.
+- **Storage buffers:** Full read/write support. Buffer writes from compute shader are immediately visible.
+- **Atomics:** OpAtomicIAdd, OpAtomicISub, OpAtomicExchange, OpAtomicCompareExchange, OpAtomicSMin/SMax/UMin/UMax.
+- **Workgroup shared memory:** Per-workgroup allocation, zeroed at dispatch start.
+- **Barriers:** OpControlBarrier accepted (sequential execution, no-op for synchronization).
+- **Shader debugger:** DebugContext with breakpoints, JSON trace, watch variables. Zero overhead when disabled.
+- **Workgroup size:** Read from OpExecutionMode LocalSize in SPIR-V.
+- `CreateQuerySet` returns an error (timestamps not supported).
+- `DispatchIndirect` logs a warning (not yet implemented).
+
+### Verified
+
+`wgpu/examples/software-test/` — 256-element scaled-copy compute shader, all values match.
+`gogpu/examples/particles/` — 4096-particle orbital simulation (compute + instanced render).
+
+## Browser WebGPU Backend
+
+**Status:** Full compute support via browser WebGPU API.
+
+The browser backend delegates compute operations directly to the browser's WebGPU implementation via `syscall/js`. No shader compilation in Go — WGSL is passed as a string to `createShaderModule()`.
+
+- **Shader compilation:** Browser handles WGSL compilation internally.
+- **Storage buffers:** Full support via browser `GPUBuffer`.
+- **Timestamp queries:** Not yet wired (browser support varies).
+- **Indirect dispatch:** `dispatchWorkgroupsIndirect` via `syscall/js`.
+- **Buffer mapping:** `mapAsync` + `getMappedRange` → `js.CopyBytesToGo`.
+- **Workgroup limits:** Determined by browser/GPU combination.
+
+### Browser-Specific Notes
+
+- All compute passes are recorded and submitted like native — `beginComputePass`, `setPipeline`, `setBindGroup`, `dispatchWorkgroups`, `end`, `queue.submit`.
+- Data transfer uses `js.CopyBytesToJS`/`js.CopyBytesToGo` for crossing the JS/WASM boundary.
+- Build: `GOOS=js GOARCH=wasm go build`.
+
+## Noop Backend
+
+**Status:** Compute shaders are **not supported**.
+
+The noop backend is a testing backend that accepts all API calls without executing anything. All compute pass operations are no-ops.
+
+- `CreateQuerySet` returns `ErrTimestampsNotSupported`.
+- Useful for unit testing command encoder state machines without requiring a GPU.
+
+## Workgroup Size Recommendations
+
+| Data Size | Recommended `@workgroup_size` | Notes |
+|-----------|-------------------------------|-------|
+| < 1K elements | 64 | Small batches, low overhead |
+| 1K - 100K | 64 or 128 | Good balance for most GPUs |
+| 100K - 1M | 256 | Better occupancy on discrete GPUs |
+| > 1M | 256 | Consider multiple dispatches |
+
+The optimal workgroup size depends on the GPU architecture, register usage, and shared memory requirements. When in doubt, use 64 -- it works well across all backends.
+
+## Memory Considerations
+
+### Buffer Alignment
+
+- Uniform buffers: 256-byte alignment required on most backends.
+- Storage buffers: No strict alignment, but 16-byte alignment is recommended.
+- Copy operations: Source/destination offsets may need alignment (check `Alignments.BufferCopyOffset`).
+
+### GPU Memory Limits
+
+Large compute workloads may exhaust GPU memory. Monitor for `ErrDeviceOutOfMemory` errors from buffer and pipeline creation.
+
+### Staging Buffers
+
+To read compute results back to the CPU:
+1. Create the output buffer with `BufferUsageStorage | BufferUsageCopySrc`.
+2. Create a staging (readback) buffer with `BufferUsageMapRead | BufferUsageCopyDst`.
+3. Use `CopyBufferToBuffer` to copy from output to staging inside a command encoder.
+4. Submit the command buffer.
+5. Use `Buffer.Map(ctx, MapModeRead, 0, size)` to map the staging buffer (blocks until GPU completes, or returns `ctx.Err()` on cancellation).
+6. Use `Buffer.MappedRange(offset, size)` to access the bytes.
+7. Call `Buffer.Unmap()` when done.
+
+This two-step process is required because GPU-optimal memory is typically not directly accessible by the CPU.
+
+For non-blocking readback (game loops, frame-budgeted compute), use `Buffer.MapAsync` + `Device.Poll(PollPoll)` instead. See [COMPUTE-SHADERS.md](COMPUTE-SHADERS.md#step-3-map-and-read-back-data) for full examples, and [dev/research/ADR-BUFFER-MAPPING-API.md](dev/research/ADR-BUFFER-MAPPING-API.md) for design rationale.

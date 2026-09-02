@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/input"
@@ -355,6 +356,14 @@ func (a *shortcutInvalidatingApp) Frame() {}
 func (a *shortcutInvalidatingApp) Invalidate() {
 	a.invalidates++
 }
+
+func (a *shortcutInvalidatingApp) InvalidateRect(geometry.Rect) {
+	a.invalidates++
+}
+
+func (a *shortcutInvalidatingApp) RequestFullRepaint() {}
+
+func (a *shortcutInvalidatingApp) WidgetContext() widget.Context { return nil }
 
 func (a *shortcutInvalidatingApp) Cursor() widget.CursorType {
 	return widget.CursorDefault

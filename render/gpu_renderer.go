@@ -358,6 +358,15 @@ func (r *gpuRenderer) createPipeline(shader *wgpu.ShaderModule, blend gputypes.B
 			FrontFace: gputypes.FrontFaceCCW,
 			CullMode:  gputypes.CullModeNone,
 		},
+		// The screen pass always attaches a depth view; WebGPU requires
+		// every pipeline drawing in that pass to declare a matching
+		// depth-stencil state. Always-compare without depth writes is the
+		// depth-test-disabled equivalent of omitting the state on Vulkan.
+		DepthStencil: &wgpu.DepthStencilState{
+			Format:            gputypes.TextureFormatDepth24Plus,
+			DepthWriteEnabled: false,
+			DepthCompare:      gputypes.CompareFunctionAlways,
+		},
 		Fragment: &wgpu.FragmentState{
 			Module:     shader,
 			EntryPoint: "fs_main",

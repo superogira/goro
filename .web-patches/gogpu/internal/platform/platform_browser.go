@@ -4,6 +4,7 @@ package platform
 
 import (
 	"fmt"
+	"strings"
 	"syscall/js"
 
 	"github.com/gogpu/gogpu/internal/platform/eventqueue"
@@ -53,6 +54,17 @@ func (p *browserPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 	if config.Title != "" {
 		doc.Set("title", config.Title)
 	}
+
+	// Touch-friendly canvas: without touch-action the browser claims touch
+	// moves for scrolling/pinch gestures and cancels our pointer stream
+	// (pointercancel) — on tablets the game becomes unresponsive to taps.
+	// user-select / tap-highlight stop long-press selection popups.
+	style := canvas.Get("style")
+	style.Set("touch-action", "none")
+	style.Set("user-select", "none")
+	style.Set("-webkit-user-select", "none")
+	style.Set("-webkit-tap-highlight-color", "transparent")
+	style.Set("overscroll-behavior", "none")
 
 	w := &browserWindow{
 		id:     NewWindowID(),
@@ -173,6 +185,10 @@ type browserWindow struct {
 	id          WindowID
 	canvas      js.Value
 	shouldClose bool
+	hiddenInput js.Value
+	// hiddenLastValue tracks the hidden input's content so `input` events
+	// can be translated into appended runes / backspaces.
+	hiddenLastValue string
 
 	// JS callbacks stored for cleanup.
 	jsCallbacks []js.Func
@@ -188,6 +204,11 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 
 	w.addEventListener(doc, "keydown", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
+		// The hidden on-screen-keyboard input has its own handlers; letting
+		// these through would double every keystroke on touch devices.
+		if !w.hiddenInput.IsUndefined() && ev.Get("target").Equal(w.hiddenInput) {
+			return nil
+		}
 		ev.Call("preventDefault")
 		key, mods := translateKeyEvent(ev)
 		p.enqueueEvent(Event{
@@ -213,6 +234,9 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 
 	w.addEventListener(doc, "keyup", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
+		if !w.hiddenInput.IsUndefined() && ev.Get("target").Equal(w.hiddenInput) {
+			return nil
+		}
 		ev.Call("preventDefault")
 		key, mods := translateKeyEvent(ev)
 		p.enqueueEvent(Event{
@@ -229,6 +253,12 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 	w.addEventListener(w.canvas, "pointerdown", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
 		ev.Call("preventDefault")
+		// Capture the pointer so move/up keep flowing to the canvas even when
+		// the finger leaves it — without this, touch drags (walk, window
+		// drag) drop events at the canvas edge.
+		if id := ev.Get("pointerId"); !id.IsUndefined() {
+			ev.Get("target").Call("setPointerCapture", id)
+		}
 		w.canvas.Call("focus")
 		p.enqueueEvent(Event{
 			WindowID: w.id,
@@ -239,6 +269,19 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 	})
 
 	w.addEventListener(w.canvas, "pointerup", func(_ js.Value, args []js.Value) any {
+		ev := args[0]
+		p.enqueueEvent(Event{
+			WindowID: w.id,
+			Type:     EventPointerUp,
+			Pointer:  translatePointerEvent(ev, gpucontext.PointerUp),
+		})
+		return nil
+	})
+
+	// The browser cancels an active pointer stream when it reclaims the
+	// gesture (scroll/pinch despite touch-action) or the device interrupts
+	// it — release the game's notion of the press so drags don't stick.
+	w.addEventListener(w.canvas, "pointercancel", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
 		p.enqueueEvent(Event{
 			WindowID: w.id,
@@ -315,6 +358,112 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 		args[0].Call("preventDefault")
 		return nil
 	})
+
+	w.setupHiddenInput(p)
+}
+
+// setupHiddenInput creates an offscreen <input> that, when focused, makes
+// the OS virtual keyboard appear on touch devices. The game's text widgets
+// call window.goroShowKeyboard()/goroHideKeyboard() when they gain or lose
+// focus; typed text arrives here as `input` events and is forwarded to the
+// game as EventChar / backspace key events.
+func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
+	doc := js.Global().Get("document")
+	input := doc.Call("createElement", "input")
+	input.Set("type", "text")
+	input.Set("autocapitalize", "off")
+	input.Set("autocorrect", "off")
+	input.Set("spellcheck", false)
+	input.Set("enterKeyHint", "send")
+	style := input.Get("style")
+	// Kept 1x1 at the bottom-left corner, effectively invisible but inside
+	// the viewport — iOS refuses to raise the keyboard for offscreen inputs.
+	style.Set("position", "fixed")
+	style.Set("left", "0px")
+	style.Set("bottom", "0px")
+	style.Set("width", "1px")
+	style.Set("height", "1px")
+	style.Set("opacity", "0.01")
+	style.Set("border", "none")
+	style.Set("padding", "0px")
+	style.Set("zIndex", "-1")
+	doc.Get("body").Call("appendChild", input)
+	w.hiddenInput = input
+
+	w.addEventListener(input, "input", func(_ js.Value, args []js.Value) any {
+		value := input.Get("value").String()
+		old, next := w.hiddenLastValue, value
+		w.hiddenLastValue = value
+		switch {
+		case len(next) > len(old) && strings.HasPrefix(next, old):
+			// Appended runes — forward each as EventChar.
+			for _, r := range next[len(old):] {
+				p.enqueueEvent(Event{WindowID: w.id, Type: EventChar, Char: r})
+			}
+		case len(next) < len(old) && strings.HasPrefix(old, next):
+			// Deleted trailing runes — one backspace press per rune.
+			for i := 0; i < len([]rune(old))-len([]rune(next)); i++ {
+				p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyDown, Key: gpucontext.KeyBackspace})
+				p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyUp, Key: gpucontext.KeyBackspace})
+			}
+		default:
+			// Autocorrect/IME replaced the tail: delete the old runes, then
+			// append the new ones.
+			for i := 0; i < len([]rune(old)); i++ {
+				p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyDown, Key: gpucontext.KeyBackspace})
+				p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyUp, Key: gpucontext.KeyBackspace})
+			}
+			for _, r := range next {
+				p.enqueueEvent(Event{WindowID: w.id, Type: EventChar, Char: r})
+			}
+		}
+		return nil
+	})
+
+	w.addEventListener(input, "keydown", func(_ js.Value, args []js.Value) any {
+		ev := args[0]
+		// Non-printable control keys (Enter, Backspace, arrows) never fire
+		// `input`; forward them like the document handler does.
+		keyStr := ev.Get("key").String()
+		if len([]rune(keyStr)) != 1 {
+			key, mods := translateKeyEvent(ev)
+			p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyDown, Key: key, Mods: mods})
+		}
+		ev.Call("preventDefault")
+		return nil
+	})
+
+	w.addEventListener(input, "keyup", func(_ js.Value, args []js.Value) any {
+		ev := args[0]
+		keyStr := ev.Get("key").String()
+		if len([]rune(keyStr)) != 1 {
+			key, mods := translateKeyEvent(ev)
+			p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyUp, Key: key, Mods: mods})
+		}
+		return nil
+	})
+
+	w.addEventListener(input, "blur", func(_ js.Value, _ []js.Value) any {
+		js.Global().Set("goroKeyboardVisible", false)
+		return nil
+	})
+
+	show := js.FuncOf(func(this js.Value, args []js.Value) any {
+		input.Set("value", "")
+		w.hiddenLastValue = ""
+		input.Call("focus")
+		js.Global().Set("goroKeyboardVisible", true)
+		return nil
+	})
+	hide := js.FuncOf(func(this js.Value, args []js.Value) any {
+		input.Call("blur")
+		js.Global().Set("goroKeyboardVisible", false)
+		return nil
+	})
+	w.jsCallbacks = append(w.jsCallbacks, show, hide)
+	js.Global().Set("goroShowKeyboard", show)
+	js.Global().Set("goroHideKeyboard", hide)
+	js.Global().Set("goroKeyboardVisible", false)
 }
 
 // addEventListener registers a JS event listener and tracks the callback for cleanup.

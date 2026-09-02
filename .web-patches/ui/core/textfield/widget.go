@@ -92,6 +92,13 @@ func (w *Widget) IsFocusable() bool {
 	return w.IsVisible() && w.IsEnabled() && !w.cfg.ResolvedDisabled()
 }
 
+// SetFocused overrides WidgetBase.SetFocused so gaining focus also raises
+// the OS virtual keyboard on touch devices (web build; no-op elsewhere).
+func (w *Widget) SetFocused(focused bool) {
+	w.WidgetBase.SetFocused(focused)
+	notifyTextInputFocused(focused)
+}
+
 // Layout calculates the text field's preferred size within the given constraints.
 func (w *Widget) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
 	width := constraints.MaxWidth

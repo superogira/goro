@@ -31,4 +31,7 @@ func applyWebLoginQuery(cfg *Config) {
 	if query.Get("mute") == "1" {
 		cfg.Audio.Disabled = true
 	}
+	if query.Get("stats") == "1" {
+		cfg.Render.Stats = true
+	}
 }

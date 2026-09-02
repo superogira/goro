@@ -274,6 +274,9 @@ type runner struct {
 	lastUpdateDuration  time.Duration
 	lastGameUpdateDur   time.Duration
 	lastUIFrameDur      time.Duration
+	lastGameDrawDur     time.Duration
+	lastScreenUIDur     time.Duration
+	lastGPUDrawDur      time.Duration
 	lastUIWork          bool
 	lastUIRedraw        bool
 	lastUIDrawDur       time.Duration
@@ -718,7 +721,10 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	r.screen.BeginFrame()
 	r.screen.SetScreenScale(scaleX, scaleY)
 	r.resetUIDrawMeasurement()
+	gameDrawStart := time.Now()
 	r.game.Draw(r.screen)
+	r.lastGameDrawDur = time.Since(gameDrawStart)
+	screenUIStart := time.Now()
 	if err := r.drawUIOverlay(r.screen, deviceScale); err != nil {
 		return err
 	}
@@ -734,6 +740,7 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	if drawer, ok := r.game.(overlayDrawer); ok {
 		drawer.DrawOverlay(r.screen)
 	}
+	r.lastScreenUIDur = time.Since(screenUIStart)
 	if err := r.drawFPSMeter(r.screen, deviceScale); err != nil {
 		return err
 	}
@@ -742,7 +749,9 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	}
 	// Goro redraws the 3D scene every frame; UI canvas damage only scopes UI texture updates.
 	ctx.SetDamageRects(nil)
+	gpuDrawStart := time.Now()
 	submitted, err := r.gpu.Draw(ctx, r.screen)
+	r.lastGPUDrawDur = time.Since(gpuDrawStart)
 	if err != nil {
 		return err
 	}
@@ -755,13 +764,16 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	totalDur := r.lastUpdateDuration + drawDur
 	if totalDur > 16*time.Millisecond {
 		glog.Errorf(
-			"slow frame frame=%d total_ms=%.2f threshold_ms=16.00 update_ms=%.2f game_update_ms=%.2f ui_frame_ms=%.2f draw_ms=%.2f ui_work=%t ui_redraw=%t ui_draw_ms=%.2f ui_canvas_ms=%.2f ui_flush_ms=%.2f ui_image_ms=%.2f ui_dirty_regions=%d ui_full_repaint=%t ui_union=%.0f,%.0f %.0fx%.0f",
+			"slow frame frame=%d total_ms=%.2f threshold_ms=16.00 update_ms=%.2f game_update_ms=%.2f ui_frame_ms=%.2f draw_ms=%.2f split_game_draw_ms=%.2f split_screen_ui_ms=%.2f split_gpu_ms=%.2f ui_work=%t ui_redraw=%t ui_draw_ms=%.2f ui_canvas_ms=%.2f ui_flush_ms=%.2f ui_image_ms=%.2f ui_dirty_regions=%d ui_full_repaint=%t ui_union=%.0f,%.0f %.0fx%.0f",
 			r.frames,
 			durationMS(totalDur),
 			durationMS(r.lastUpdateDuration),
 			durationMS(r.lastGameUpdateDur),
 			durationMS(r.lastUIFrameDur),
 			durationMS(drawDur),
+			durationMS(r.lastGameDrawDur),
+			durationMS(r.lastScreenUIDur),
+			durationMS(r.lastGPUDrawDur),
 			r.lastUIWork,
 			r.lastUIRedraw,
 			durationMS(r.lastUIDrawDur),
@@ -775,6 +787,25 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 			r.lastUIDirtyUnion.Width(),
 			r.lastUIDirtyUnion.Height(),
 		)
+	}
+	// Sampled per-second frame split behind ?stats=1: absolute numbers
+	// independent of the slow-frame threshold, so throttled environments
+	// still show where the frame budget goes.
+	if r.renderCfg.Stats && r.frames%30 == 0 {
+		worldBuild, encode, submit := 0.0, 0.0, 0.0
+		if r.gpu != nil {
+			worldBuild = durationMS(r.gpu.lastWorldBuildDur)
+			encode = durationMS(r.gpu.lastEncodeDur)
+			submit = durationMS(r.gpu.lastSubmitDur)
+		}
+		glog.Infof("frame split frame=%d total_ms=%.2f update_ms=%.2f split_game_draw_ms=%.2f split_screen_ui_ms=%.2f split_gpu_ms=%.2f gpu_world_build_ms=%.2f gpu_encode_ms=%.2f gpu_submit_ms=%.2f ui_draw_ms=%.2f",
+			r.frames, durationMS(totalDur), durationMS(r.lastUpdateDuration),
+			durationMS(r.lastGameDrawDur), durationMS(r.lastScreenUIDur), durationMS(r.lastGPUDrawDur),
+			worldBuild, encode, submit, durationMS(r.lastUIDrawDur))
+		if r.gpu != nil {
+			glog.Infof("frame counts frame=%d world_mesh_cmds=%d world_billboards=%d world_batches=%d screen_cmds=%d screen_batches=%d textures=%d bindgroups=%d",
+				r.frames, len(r.screen.worldMeshes), len(r.screen.worldBillboards), r.gpu.lastWorldBatchCount, len(r.screen.commands), r.gpu.lastScreenBatchCount, r.gpu.textureCount(), r.gpu.bindGroupCount())
+		}
 	}
 	r.recordUIProfile(drawDur, totalDur)
 	r.frames++

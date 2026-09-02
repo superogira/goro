@@ -259,7 +259,13 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 		if id := ev.Get("pointerId"); !id.IsUndefined() {
 			ev.Get("target").Call("setPointerCapture", id)
 		}
-		w.canvas.Call("focus")
+		// Focusing the canvas must not steal focus from the hidden keyboard
+		// input: blurring it collapses the OS keyboard mid-interaction, and
+		// mobile browsers refuse to re-raise it for a focus() outside the
+		// user gesture, leaving taps on text fields dead.
+		if w.hiddenInput.IsUndefined() || !doc.Get("activeElement").Equal(w.hiddenInput) {
+			w.canvas.Call("focus")
+		}
 		p.enqueueEvent(Event{
 			WindowID: w.id,
 			Type:     EventPointerDown,
@@ -423,13 +429,16 @@ func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 	w.addEventListener(input, "keydown", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
 		// Non-printable control keys (Enter, Backspace, arrows) never fire
-		// `input`; forward them like the document handler does.
+		// `input`; forward them like the document handler does. Printable
+		// single-rune keys must NOT be preventDefaulted — that suppresses
+		// the text insertion, so the `input` event never fires and the
+		// character never reaches the game on real keyboards.
 		keyStr := ev.Get("key").String()
 		if len([]rune(keyStr)) != 1 {
 			key, mods := translateKeyEvent(ev)
 			p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyDown, Key: key, Mods: mods})
+			ev.Call("preventDefault")
 		}
-		ev.Call("preventDefault")
 		return nil
 	})
 
@@ -449,8 +458,20 @@ func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 	})
 
 	show := js.FuncOf(func(this js.Value, args []js.Value) any {
-		input.Set("value", "")
-		w.hiddenLastValue = ""
+		// Guard on real DOM focus, not the visible flag: a focus() before any
+		// user gesture fails silently, and an early-return on a stale flag
+		// would prevent the next tap from ever raising the keyboard.
+		if doc.Get("activeElement").Equal(input) {
+			return nil // already focused — a repeated request must not drop buffered text
+		}
+		// Seed the buffer with the field's current text so the input-event
+		// diff (backspace in particular) tracks the field, not an empty box.
+		seed := ""
+		if len(args) > 0 && args[0].Type() == js.TypeString {
+			seed = args[0].String()
+		}
+		input.Set("value", seed)
+		w.hiddenLastValue = seed
 		input.Call("focus")
 		js.Global().Set("goroKeyboardVisible", true)
 		return nil

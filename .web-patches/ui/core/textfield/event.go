@@ -64,6 +64,11 @@ func handleMousePress(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 	}
 
 	ctx.RequestFocus(w)
+	// RequestFocus is a no-op when the field already has focus, but on touch
+	// devices the OS keyboard may be down (dismissed, or focus came from
+	// auto-focus before any gesture) — tapping the field must raise it.
+	// Seed the keyboard buffer with the field text so backspace works.
+	notifyTextInputFocused(true, w.Text())
 
 	// ADR-028: visual only — cursor placement and focus ring.
 	w.SetNeedsRedraw(true)

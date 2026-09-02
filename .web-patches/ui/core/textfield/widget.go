@@ -94,9 +94,22 @@ func (w *Widget) IsFocusable() bool {
 
 // SetFocused overrides WidgetBase.SetFocused so gaining focus also raises
 // the OS virtual keyboard on touch devices (web build; no-op elsewhere).
+// Only real transitions notify: widget trees routinely SetFocused(false)
+// freshly-constructed fields during rebuilds, and those spurious hides were
+// collapsing the keyboard right after the focused field raised it.
+// The current text travels with the notification so the hidden keyboard
+// buffer mirrors the field — otherwise backspace after re-focusing a
+// non-empty field does nothing (the buffer was reset empty).
 func (w *Widget) SetFocused(focused bool) {
+	was := w.IsFocused()
 	w.WidgetBase.SetFocused(focused)
-	notifyTextInputFocused(focused)
+	if was != focused {
+		if focused {
+			notifyTextInputFocused(true, w.Text())
+		} else {
+			notifyTextInputFocused(false, "")
+		}
+	}
 }
 
 // Layout calculates the text field's preferred size within the given constraints.

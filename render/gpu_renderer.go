@@ -975,7 +975,7 @@ func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPa
 			animating = append(animating, mesh)
 		}
 	}
-	if len(stable) > 0 {
+	if len(stable) > 0 || len(animating) > 0 {
 		tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
 		if err != nil {
 			return err
@@ -992,40 +992,45 @@ func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPa
 		if err != nil {
 			return err
 		}
+		// Bound for the whole batch. The first frame in a map has no stable
+		// meshes yet (all are first-seen), and drawing without a pipeline
+		// puts native wgpu's encoder into a hard error state.
 		state.setPipeline(pass, r.worldPipelineFor(batch.key.options.Blend, batch.key.options.DepthWrite))
 		state.setBindGroup(pass, bg)
-		ranges, err := r.ensureWorldMeshBatchRanges(batch.key, stable)
-		if err != nil {
-			return err
-		}
-		state.setVertexBuffer(pass, r.worldBatchGPU[batch.key].vertexBuf)
-		state.setIndexBuffer(pass, r.worldBatchGPU[batch.key].indexBuf)
-		// Coalesce adjacent ranges so the common full-set frame collapses
-		// into a single draw; culled subsets still draw per contiguous run.
-		first, count := uint32(0), uint32(0)
-		for _, mesh := range stable {
-			rg := ranges[mesh]
-			if count > 0 && first+count == rg.firstIndex {
-				count += rg.indexCount
-				continue
+		if len(stable) > 0 {
+			ranges, err := r.ensureWorldMeshBatchRanges(batch.key, stable)
+			if err != nil {
+				return err
+			}
+			state.setVertexBuffer(pass, r.worldBatchGPU[batch.key].vertexBuf)
+			state.setIndexBuffer(pass, r.worldBatchGPU[batch.key].indexBuf)
+			// Coalesce adjacent ranges so the common full-set frame collapses
+			// into a single draw; culled subsets still draw per contiguous run.
+			first, count := uint32(0), uint32(0)
+			for _, mesh := range stable {
+				rg := ranges[mesh]
+				if count > 0 && first+count == rg.firstIndex {
+					count += rg.indexCount
+					continue
+				}
+				if count > 0 {
+					pass.DrawIndexed(count, 1, first, 0, 0)
+				}
+				first, count = rg.firstIndex, rg.indexCount
 			}
 			if count > 0 {
 				pass.DrawIndexed(count, 1, first, 0, 0)
 			}
-			first, count = rg.firstIndex, rg.indexCount
 		}
-		if count > 0 {
-			pass.DrawIndexed(count, 1, first, 0, 0)
+		for _, mesh := range animating {
+			gpuMesh, err := r.ensureWorldMesh(mesh)
+			if err != nil {
+				return err
+			}
+			state.setVertexBuffer(pass, gpuMesh.vertexBuf)
+			state.setIndexBuffer(pass, gpuMesh.indexBuf)
+			pass.DrawIndexed(gpuMesh.indexCount, 1, 0, 0, 0)
 		}
-	}
-	for _, mesh := range animating {
-		gpuMesh, err := r.ensureWorldMesh(mesh)
-		if err != nil {
-			return err
-		}
-		state.setVertexBuffer(pass, gpuMesh.vertexBuf)
-		state.setIndexBuffer(pass, gpuMesh.indexBuf)
-		pass.DrawIndexed(gpuMesh.indexCount, 1, 0, 0, 0)
 	}
 	return nil
 }

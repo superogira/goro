@@ -755,6 +755,21 @@ func (m *LoginMode) drawFade(ctx client.Context, screen *render.Frame, now time.
 	}
 	width, height := ctx.ScreenSize()
 	render.DrawRect(screen, 0, 0, float64(width), float64(height), color.RGBA{A: alpha})
+	// The enterWorld hold freezes on this frame while the map server handoff
+	// and WorldMode.Enter's synchronous map loading run — without text the
+	// player stares at a black screen until the world mode's own cover
+	// starts. Phase-switch holds (enterWorld=false) stay clean.
+	if m.fade.phase == loginFadeHold && m.fade.enterWorld {
+		if img := render.OutlinedTextImage("Now Loading...", color.RGBA{R: 255, G: 255, B: 255, A: 255}, color.RGBA{A: 190}); img != nil {
+			bounds := screen.Bounds()
+			var opts render.DrawImageOptions
+			opts.GeoM.Translate(
+				float64(bounds.Dx()-img.Bounds().Dx())/2,
+				float64(bounds.Dy()-img.Bounds().Dy())/2,
+			)
+			screen.DrawImage(img, &opts)
+		}
+	}
 }
 
 func (m *LoginMode) nextWorldMode(ctx client.Context) *WorldMode {

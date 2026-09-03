@@ -622,6 +622,11 @@ func normalizeAudioPath(path string) string {
 	path = strings.TrimSpace(path)
 	path = strings.Trim(path, "\"")
 	path = strings.ReplaceAll(path, "/", "\\")
+	// mp3nametable entries can carry doubled separators; collapse them so
+	// candidate URLs never probe forms like bgm\08.mp3.
+	for strings.Contains(path, "\\\\") {
+		path = strings.ReplaceAll(path, "\\\\", "\\")
+	}
 	path = strings.TrimPrefix(path, ".\\")
 	path = strings.TrimPrefix(path, "data\\")
 	if path == "" {

@@ -5,6 +5,7 @@ package res
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"syscall/js"
@@ -81,36 +82,166 @@ func webURLPath(path string) string {
 	return strings.Join(segments, "/")
 }
 
+// webPathDialect remembers which URL dialect this host accepted, learned
+// from the first successful load. Static hosts consistently speak one
+// dialect (forward slashes, UTF-8 names, one casing), so remembering it
+// collapses steady-state probing to a single request per file instead of
+// burning 404 round trips on separator, charset, and case variants that
+// never work on this server.
+type webPathDialect struct {
+	slash bool // forward-slash form beat the backslash original
+	utf8  bool // the EUC-KR-decoded (UTF-8) variant beat the raw bytes
+	lower bool // lowercased spelling won
+	upper bool // uppercased spelling won
+}
+
+var webDialect struct {
+	sync.Mutex
+	learned  bool
+	settings webPathDialect
+}
+
+// noteCandidateOutcome learns the dialect from a candidate that downloaded
+// successfully.
+func noteCandidateOutcome(c webCandidate) {
+	webDialect.Lock()
+	defer webDialect.Unlock()
+	if webDialect.learned {
+		return // keep the first win; mixed dialects are rare and the
+		// full candidate list is still probed on misses
+	}
+	webDialect.learned = true
+	webDialect.settings = webPathDialect{
+		slash: c.slash,
+		utf8:  c.utf8,
+		lower: c.lower,
+		upper: c.upper,
+	}
+}
+
+// candidateTags remembers the dialect traits of recently built probe URLs
+// so download success can feed the learned dialect. Bounded; probe URLs are
+// short-lived (per-resource) and cleared wholesale once over budget.
+var candidateTags = struct {
+	sync.Mutex
+	m map[string]webCandidate
+}{m: make(map[string]webCandidate)}
+
+func rememberCandidate(c webCandidate) {
+	candidateTags.Lock()
+	defer candidateTags.Unlock()
+	if len(candidateTags.m) > 4096 {
+		candidateTags.m = make(map[string]webCandidate)
+	}
+	candidateTags.m[c.url] = c
+}
+
+func learnFromSuccess(url string) {
+	candidateTags.Lock()
+	c, ok := candidateTags.m[url]
+	candidateTags.Unlock()
+	if ok {
+		noteCandidateOutcome(c)
+	}
+}
+
+// webCandidate is one probe URL tagged with the dialect traits it carries.
+type webCandidate struct {
+	url   string
+	slash bool
+	utf8  bool
+	lower bool
+	upper bool
+}
+
 // candidatePaths returns the URLs to probe for a normalized resource name,
-// rooted at the page origin.
+// rooted at the page origin, ordered most-likely-first:
+//   - the learned dialect's traits first (after the first successful load),
+//   - then UTF-8 forward-slash spellings (what static web hosts serve),
+//   - then the raw separator/charset spellings,
+//   - case variants last (kRO data references are case-inconsistent; Linux
+//     servers 404 the wrong casing, which surfaces as white map tiles).
 func (m *Manager) candidatePaths(normalized string) []string {
 	base := strings.TrimSuffix(m.Root, "/")
-	seen := make(map[string]struct{}, 3)
-	var out []string
-	add := func(candidate string) {
-		if candidate == "" {
+	seen := make(map[string]struct{}, 4)
+	var candidates []webCandidate
+	add := func(path string, slash, utf8, lower, upper bool) {
+		if path == "" {
 			return
 		}
-		if _, ok := seen[candidate]; ok {
+		if _, ok := seen[path]; ok {
 			return
 		}
-		seen[candidate] = struct{}{}
-		out = append(out, base+"/"+webURLPath(candidate))
-	}
-	logical := []string{normalized, strings.ReplaceAll(normalized, "\\", "/")}
-	for _, candidate := range withCharsetVariants(logical) {
-		add(candidate)
-	}
-	// Case fallback: kRO data references are case-inconsistent (GND texture
-	// tables can name a file in UPPERCASE while the extracted file on disk
-	// is lowercase). Windows serving tolerated this transparently; Linux
-	// static servers 404 the exact case — surface as white textures. Probe
-	// the lower- and uppercased spellings too; each candidate is cached so
-	// genuine misses still cost at most a couple of requests.
-	for _, candidate := range withCharsetVariants(logical) {
-		for _, variant := range []string{strings.ToLower(candidate), strings.ToUpper(candidate)} {
-			add(variant)
+		seen[path] = struct{}{}
+		c := webCandidate{
+			url:   base + "/" + webURLPath(path),
+			slash: slash,
+			utf8:  utf8,
+			lower: lower,
+			upper: upper,
 		}
+		rememberCandidate(c)
+		candidates = append(candidates, c)
+	}
+
+	raw := normalized
+	rawSlash := strings.ReplaceAll(normalized, "\\", "/")
+	// euckrVariant yields the UTF-8 spelling when the raw name carries
+	// CP949 bytes from GRF-era map files; for already-valid UTF-8 names it
+	// is empty and the original doubles as the UTF-8 form.
+	utf8Form := euckrVariant(raw)
+	if utf8Form == "" {
+		utf8Form = raw
+	}
+	utf8Slash := strings.ReplaceAll(utf8Form, "\\", "/")
+
+	add(utf8Slash, true, true, false, false)
+	add(utf8Form, false, true, false, false)
+	add(rawSlash, true, false, false, false)
+	add(raw, false, false, false, false)
+	for _, variant := range []struct {
+		path  string
+		lower bool
+	}{
+		{strings.ToLower(utf8Slash), true},
+		{strings.ToUpper(utf8Slash), false},
+		{strings.ToLower(utf8Form), true},
+		{strings.ToUpper(utf8Form), false},
+		{strings.ToLower(rawSlash), true},
+		{strings.ToUpper(rawSlash), false},
+	} {
+		upper := !variant.lower
+		add(variant.path, strings.Contains(variant.path, "/"), variant.path != raw && variant.path != rawSlash || utf8Form != raw, variant.lower, upper)
+	}
+
+	// Order by agreement with the learned dialect (stable for ties).
+	webDialect.Lock()
+	d := webDialect.settings
+	learned := webDialect.learned
+	webDialect.Unlock()
+	if learned {
+		score := func(c webCandidate) int {
+			n := 0
+			if c.slash == d.slash {
+				n++
+			}
+			if c.utf8 == d.utf8 {
+				n++
+			}
+			if d.lower && c.lower {
+				n++
+			} else if d.upper && c.upper {
+				n++
+			}
+			return n
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return score(candidates[i]) > score(candidates[j])
+		})
+	}
+	out := make([]string, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.url
 	}
 	return out
 }
@@ -129,6 +260,7 @@ func (m *Manager) candidateExists(candidate string) bool {
 		webCache.putMiss(candidate)
 		return false
 	}
+	learnFromSuccess(candidate)
 	webCache.put(candidate, data)
 	return true
 }

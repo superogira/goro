@@ -101,6 +101,17 @@ func (m *Manager) candidatePaths(normalized string) []string {
 	for _, candidate := range withCharsetVariants(logical) {
 		add(candidate)
 	}
+	// Case fallback: kRO data references are case-inconsistent (GND texture
+	// tables can name a file in UPPERCASE while the extracted file on disk
+	// is lowercase). Windows serving tolerated this transparently; Linux
+	// static servers 404 the exact case — surface as white textures. Probe
+	// the lower- and uppercased spellings too; each candidate is cached so
+	// genuine misses still cost at most a couple of requests.
+	for _, candidate := range withCharsetVariants(logical) {
+		for _, variant := range []string{strings.ToLower(candidate), strings.ToUpper(candidate)} {
+			add(variant)
+		}
+	}
 	return out
 }
 

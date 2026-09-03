@@ -22,7 +22,7 @@ func applyStorageItemList(ctx client.Context, items []network.InventoryItem) {
 	if ctx.Session == nil {
 		return
 	}
-	ctx.Session.Storage.Open = true
+	ctx.Session.Storage.Open = !ctx.Session.Storage.PasswordPending
 	for _, item := range items {
 		addOrReplaceSessionStorageItem(ctx.Session, sessionItemFromNetwork(item))
 	}
@@ -42,7 +42,7 @@ func applyStorageAmount(ctx client.Context, amount network.StorageAmount) {
 	if ctx.Session == nil {
 		return
 	}
-	ctx.Session.Storage.Open = true
+	ctx.Session.Storage.Open = !ctx.Session.Storage.PasswordPending
 	ctx.Session.Storage.Amount = int(amount.Amount)
 	ctx.Session.Storage.MaxAmount = int(amount.MaxAmount)
 }
@@ -63,7 +63,7 @@ func applyStorageItemAdded(ctx client.Context, item network.InventoryItem) {
 	if ctx.Session == nil {
 		return
 	}
-	ctx.Session.Storage.Open = true
+	ctx.Session.Storage.Open = !ctx.Session.Storage.PasswordPending
 	addOrReplaceSessionStorageItem(ctx.Session, sessionItemFromNetwork(item))
 }
 
@@ -88,6 +88,7 @@ func applyStorageClosed(ctx client.Context) {
 		return
 	}
 	ctx.Session.Storage.Open = false
+	ctx.Session.Storage.PasswordPending = false
 	ctx.Session.Storage.Items = nil
 	ctx.Session.Storage.Amount = 0
 	ctx.Session.Storage.MaxAmount = 0

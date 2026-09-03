@@ -316,10 +316,11 @@ type Inventory struct {
 }
 
 type Storage struct {
-	Open      bool
-	Amount    int
-	MaxAmount int
-	Items     []InventoryItem
+	Open            bool
+	PasswordPending bool
+	Amount          int
+	MaxAmount       int
+	Items           []InventoryItem
 }
 
 type Cart struct {

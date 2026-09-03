@@ -88,6 +88,7 @@ type WorldMode struct {
 	pendingPickup     pickupIntent
 	pendingSkill      pendingSkillTarget
 	pendingSkillText  pendingSkillTextTarget
+	senseRequest      senseRequest
 	guildAction       gameui.GuildMemberAction
 	guildOpenPending  bool
 	pendingPetCapture petCaptureState
@@ -169,12 +170,14 @@ type worldUI struct {
 	equipmentWindow      gameui.EquipmentWindow
 	viewEquipWindow      gameui.ViewEquipmentWindow
 	storageWindow        gameui.StorageWindow
+	storagePassword      gameui.StoragePasswordWindow
 	cartWindow           gameui.CartWindow
 	changeCartWindow     gameui.ChangeCartWindow
 	itemPickup           gameui.ItemPickupNotification
 	shopWindow           gameui.ShopWindow
 	vendingWindow        gameui.VendingWindow
 	itemInfoWindow       gameui.ItemInfoWindow
+	monsterInfoWindow    gameui.MonsterInfoWindow
 	bookWindow           gameui.BookWindow
 	identifyWindow       gameui.IdentifyWindow
 	cardWindow           gameui.CardCompositionWindow
@@ -240,6 +243,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.starPlaceConfirm.IsOpen() ||
 		u.settingsWindow.IsOpen() ||
 		u.autoSpellWindow.IsOpen() ||
+		u.monsterInfoWindow.IsOpen() ||
 		u.identifyWindow.IsOpen() ||
 		u.cardWindow.IsOpen() ||
 		u.makingArrow.IsOpen() ||
@@ -274,6 +278,7 @@ func (u *worldUI) interactionModalOpen() bool {
 	}
 	return u.teleportModal.IsOpen() ||
 		u.autoSpellWindow.IsOpen() ||
+		u.storagePassword.IsOpen() ||
 		u.friendRequest.IsOpen() ||
 		u.friendConfirm.IsOpen() ||
 		u.partyRequest.IsOpen() ||
@@ -665,6 +670,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	m.ui.console.UpdatePresentation(ctx)
+	if m.updateStoragePasswordWindow(ctx) {
+		return nil, nil
+	}
 	// The drop amount prompt is modal and may overlap the always-present chat
 	// field. Give it first refusal on Escape and pointer input so a focused chat
 	// field cannot consume the cancellation before the prompt sees it.
@@ -908,6 +916,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 				m.ui.itemInfoWindow.Publish(ctx)
 			}
 		}
+		return nil, nil
+	}
+	if m.ui.monsterInfoWindow.Update(ctx) {
 		return nil, nil
 	}
 	if m.ui.identifyWindow.Update(ctx) {

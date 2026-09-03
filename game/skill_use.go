@@ -297,6 +297,7 @@ func (c skillController) SendToID(ctx client.Context, skill session.Skill, targe
 	if err := ctx.Network.SendUseSkillToID(skill.ID, level, target); err != nil {
 		return err
 	}
+	c.mode.rememberSenseTarget(skill.ID, target, time.Now())
 	if gameui.IsLevelOneTeleportSkill(skill) {
 		// Level-one Teleport is the direct, random destination variant. Queue
 		// the selection with the cast instead of waiting for the server's warp

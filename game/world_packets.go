@@ -484,11 +484,25 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		m.ui.inventoryBag.ClampScroll(ctx.Session)
 		return nil, false
 	}
+	if prompt, ok, err := network.ParseStoragePasswordPrompt(pkt); err != nil {
+		glog.Errorf("parse storage password prompt 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.handleStoragePasswordPrompt(ctx, prompt)
+		return nil, false
+	}
+	if result, ok, err := network.ParseStoragePasswordResult(pkt); err != nil {
+		glog.Errorf("parse storage password result 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.handleStoragePasswordResult(ctx, result)
+		return nil, false
+	}
 	if storageItems, ok, err := network.ParseStorageItemList(pkt); err != nil {
 		glog.Errorf("parse storage item list 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		applyStorageItemList(ctx, storageItems)
-		m.ui.storageWindow.OpenWindow(ctx)
+		if ctx.Session != nil && ctx.Session.Storage.Open {
+			m.ui.storageWindow.OpenWindow(ctx)
+		}
 		return nil, false
 	}
 	if cartItems, ok, err := network.ParseCartItemList(pkt); err != nil {
@@ -504,7 +518,9 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		glog.Errorf("parse storage amount 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		applyStorageAmount(ctx, storageAmount)
-		m.ui.storageWindow.OpenWindow(ctx)
+		if ctx.Session != nil && ctx.Session.Storage.Open {
+			m.ui.storageWindow.OpenWindow(ctx)
+		}
 		return nil, false
 	}
 	if cartAmount, ok, err := network.ParseCartAmount(pkt); err != nil {
@@ -886,7 +902,9 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		glog.Errorf("parse storage item added 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		applyStorageItemAdded(ctx, storageItem)
-		m.ui.storageWindow.OpenWindow(ctx)
+		if ctx.Session != nil && ctx.Session.Storage.Open {
+			m.ui.storageWindow.OpenWindow(ctx)
+		}
 		m.ui.storageWindow.ClampScroll(ctx.Session)
 		m.ui.inventoryBag.ClampScroll(ctx.Session)
 		return nil, false
@@ -977,6 +995,7 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	if network.ParseStorageClosed(pkt) {
 		applyStorageClosed(ctx)
 		m.ui.storageWindow.SetOpen(false)
+		m.ui.storagePassword.CloseFromServer(ctx)
 		return nil, false
 	}
 	if network.ParseCartClosed(pkt) {
@@ -1170,6 +1189,12 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		glog.Errorf("parse auto-run skill 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		m.skills().ApplyAutoRun(ctx, auto)
+		return nil, false
+	}
+	if info, ok, err := network.ParseMonsterInfo(pkt); err != nil {
+		glog.Errorf("parse monster info 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.applyMonsterInfo(ctx, info, now)
 		return nil, false
 	}
 	if list, ok, err := network.ParseAutoSpellList(pkt); err != nil {

@@ -11,12 +11,18 @@ import (
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
+	worldstate "github.com/kivutar/goro/world"
 )
 
 type previewRenderTarget interface {
 	DrawImage(*render.Image, *render.DrawImageOptions)
 	DrawTrianglesOwned([]render.Vertex, []uint16, *render.Image, *render.DrawTrianglesOptions)
 }
+
+const (
+	monsterInfoPreviewWidth  = 110
+	monsterInfoPreviewHeight = 160
+)
 
 func (m *WorldMode) DrawInventoryItemIcon(screen *render.Frame, manager *res.Manager, item session.InventoryItem, x, y int) {
 	m.drawInventoryItemIcon(screen, manager, item, x, y)
@@ -117,6 +123,13 @@ func (m *WorldMode) drawHumanoidPreview(screen previewRenderTarget, view *humano
 	if !ok || billboard == nil || billboard.image == nil {
 		return
 	}
+	drawBillboardPreview(screen, billboard, x, y, width, height)
+}
+
+func drawBillboardPreview(screen previewRenderTarget, billboard *spriteBillboard, x, y, width, height int) {
+	if screen == nil || billboard == nil || billboard.image == nil || width <= 0 || height <= 0 {
+		return
+	}
 	bounds := visibleImageBounds(billboard.image)
 	if bounds.Empty() {
 		return
@@ -140,6 +153,40 @@ func (m *WorldMode) drawHumanoidPreview(screen previewRenderTarget, view *humano
 		{DstX: float32(dstX + dstW), DstY: float32(dstY + dstH), SrcX: float32(bounds.Max.X), SrcY: float32(bounds.Max.Y), ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 	}
 	screen.DrawTrianglesOwned(vertices, quadIndices012213, billboard.image, &render.DrawTrianglesOptions{Filter: spriteDrawFilter(), Address: render.AddressClampToZero})
+}
+
+func (m *WorldMode) monsterInfoPreviewImage(ctx client.Context, class uint16, width, height int) image.Image {
+	if width <= 0 || height <= 0 || ctx.Resources == nil {
+		return nil
+	}
+	key := fmt.Sprintf("__monster_info_preview_%d_%dx%d", class, width, height)
+	if m.imageCache == nil {
+		m.imageCache = make(map[string]image.Image)
+	}
+	if cached := m.imageCache[key]; cached != nil {
+		return cached
+	}
+	actor := worldstate.Actor{
+		Job:           int16(class),
+		HasObjectType: true,
+		ObjectType:    actorObjectTypeMob,
+	}
+	view := m.nonPCSpriteView(ctx, actor)
+	state := spriteState{
+		actionFamily:   spriteActionIdle,
+		direction:      4,
+		fixedMotion:    0,
+		hasFixedMotion: true,
+	}
+	billboard, ok := singleSpriteBillboardForState(view, state, time.Now())
+	if !ok {
+		return nil
+	}
+	target := render.NewImage(width, height)
+	drawBillboardPreview(target, billboard, 0, 0, width, height)
+	preview := target.RGBA()
+	m.imageCache[key] = preview
+	return preview
 }
 
 func (m *WorldMode) EquipmentPreviewImage(ctx client.Context, width, height int) image.Image {

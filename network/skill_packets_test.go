@@ -86,6 +86,44 @@ func TestParseAutoRunSkill(t *testing.T) {
 	}
 }
 
+func TestParseMonsterInfo(t *testing.T) {
+	data := make([]byte, 29)
+	binary.LittleEndian.PutUint16(data[0:2], PacketZCMonsterInfo)
+	binary.LittleEndian.PutUint16(data[2:4], 1002)
+	binary.LittleEndian.PutUint16(data[4:6], 17)
+	binary.LittleEndian.PutUint16(data[6:8], 1)
+	binary.LittleEndian.PutUint32(data[8:12], 2345)
+	binary.LittleEndian.PutUint16(data[12:14], 0xFFFC)
+	binary.LittleEndian.PutUint16(data[14:16], 3)
+	binary.LittleEndian.PutUint16(data[16:18], uint16(int16(12)))
+	binary.LittleEndian.PutUint16(data[18:20], 2)
+	copy(data[20:29], []byte{100, 25, 150, 75, 90, 125, 50, 0, 200})
+
+	info, ok, err := ParseMonsterInfo(Packet{ID: PacketZCMonsterInfo, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("monster info not parsed")
+	}
+	if info.Class != 1002 || info.Level != 17 || info.Size != 1 || info.HP != 2345 || info.Defense != -4 || info.Race != 3 || info.MagicDefense != 12 || info.Property != 2 {
+		t.Fatalf("monster info = %+v", info)
+	}
+	wantElements := (MonsterElementRates{Water: 100, Earth: 25, Fire: 150, Wind: 75, Poison: 90, Holy: 125, Shadow: 50, Ghost: 0, Undead: 200})
+	if info.Elements != wantElements {
+		t.Fatalf("element rates = %+v, want %+v", info.Elements, wantElements)
+	}
+}
+
+func TestParseMonsterInfoRejectsMalformedPacket(t *testing.T) {
+	if _, ok, err := ParseMonsterInfo(Packet{ID: PacketZCMonsterInfo, Data: make([]byte, 28)}); !ok || err == nil {
+		t.Fatalf("short monster info: ok=%t err=%v, want recognized error", ok, err)
+	}
+	if _, ok, err := ParseMonsterInfo(Packet{ID: 0x0080, Data: make([]byte, 29)}); ok || err != nil {
+		t.Fatalf("unrelated packet: ok=%t err=%v", ok, err)
+	}
+}
+
 func TestParseAutoSpellList(t *testing.T) {
 	data := make([]byte, 30)
 	binary.LittleEndian.PutUint16(data[0:2], PacketZCAutoSpellList)

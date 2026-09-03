@@ -14,6 +14,7 @@ const skillInfoEntryLen = 37
 const skillGroundMessageLen = 80
 
 const (
+	PacketZCMonsterInfo     uint16 = 0x018C
 	PacketZCAutoSpellList   uint16 = 0x01CD
 	PacketCZSelectAutoSpell uint16 = 0x01CE
 
@@ -44,6 +45,30 @@ type AutoRunSkill struct {
 
 type AutoSpellList struct {
 	SkillIDs []uint16
+}
+
+type MonsterElementRates struct {
+	Water  uint8
+	Earth  uint8
+	Fire   uint8
+	Wind   uint8
+	Poison uint8
+	Holy   uint8
+	Shadow uint8
+	Ghost  uint8
+	Undead uint8
+}
+
+type MonsterInfo struct {
+	Class        uint16
+	Level        uint16
+	Size         uint16
+	HP           uint32
+	Defense      int16
+	Race         uint16
+	MagicDefense int16
+	Property     uint16
+	Elements     MonsterElementRates
 }
 
 type SkillNoDamageNotify struct {
@@ -159,6 +184,36 @@ func ParseAutoRunSkill(packet Packet) (AutoRunSkill, bool, error) {
 		return AutoRunSkill{}, false, fmt.Errorf("ZC_AUTORUN_SKILL too short: %d", len(packet.Data))
 	}
 	return AutoRunSkill{Skill: parseSkillInfoEntry(packet.Data[2:39], 0)}, true, nil
+}
+
+func ParseMonsterInfo(packet Packet) (MonsterInfo, bool, error) {
+	if packet.ID != PacketZCMonsterInfo {
+		return MonsterInfo{}, false, nil
+	}
+	if len(packet.Data) < 29 {
+		return MonsterInfo{}, true, fmt.Errorf("ZC_MONSTER_INFO too short: %d", len(packet.Data))
+	}
+	return MonsterInfo{
+		Class:        binary.LittleEndian.Uint16(packet.Data[2:4]),
+		Level:        binary.LittleEndian.Uint16(packet.Data[4:6]),
+		Size:         binary.LittleEndian.Uint16(packet.Data[6:8]),
+		HP:           binary.LittleEndian.Uint32(packet.Data[8:12]),
+		Defense:      int16(binary.LittleEndian.Uint16(packet.Data[12:14])),
+		Race:         binary.LittleEndian.Uint16(packet.Data[14:16]),
+		MagicDefense: int16(binary.LittleEndian.Uint16(packet.Data[16:18])),
+		Property:     binary.LittleEndian.Uint16(packet.Data[18:20]),
+		Elements: MonsterElementRates{
+			Water:  packet.Data[20],
+			Earth:  packet.Data[21],
+			Fire:   packet.Data[22],
+			Wind:   packet.Data[23],
+			Poison: packet.Data[24],
+			Holy:   packet.Data[25],
+			Shadow: packet.Data[26],
+			Ghost:  packet.Data[27],
+			Undead: packet.Data[28],
+		},
+	}, true, nil
 }
 
 func ParseAutoSpellList(packet Packet) (AutoSpellList, bool, error) {

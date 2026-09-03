@@ -22,8 +22,8 @@ Status meaning:
 - Effective unique map opcodes: `603`
 - Overwritten historical/remap declarations: `283`
 - Client-to-map packets accepted by rAthena: `177`
-- Effective map opcodes referenced by Goro: `216`
-- Client-to-map accepted packets referenced by Goro: `98` / `177`
+- Effective map opcodes referenced by Goro: `219`
+- Client-to-map accepted packets referenced by Goro: `99` / `177`
 - Unresolved packet aliases in this generated pass: `0`
 
 ## Homunculus Compatibility Notes
@@ -69,7 +69,6 @@ companion UI, AI, skill, and visual coverage.
 | `0x017E` | C->S | `0x017e` | `-1` | `clif_parse_GuildMessage` | P2 |
 | `0x0180` | C->S | `0x0180` | `6` | `clif_parse_GuildOpposition` | P2 |
 | `0x0183` | C->S | `0x0183` | `10` | `clif_parse_GuildDelAlliance` | P2 |
-| `0x023B` | C->S | `0x023b` | `36` | `clif_parse_StoragePassword` | P0/P1 |
 | `0x02CF` | C->S | `0x02cf` | `6` | `clif_parse_MemorialDungeonCommand` | P2 |
 | `0x02DB` | C->S | `0x02db` | `-1` | `clif_parse_BattleChat` | P2 |
 | `0x0802` | C->S | `0x0802` | `18` | `clif_parse_PartyBookingRegisterReq` | P2 |
@@ -458,9 +457,9 @@ email check.
 | `0x0235` | S->C | implemented | `0x0235` | `-1` | `-` | companion_packets.go, packet.go |
 | `0x0237` | C->S | missing | `HEADER_CZ_KILLER_RANK` | `sizeof( PACKET_CZ_KILLER_RANK )` | `clif_parse_ranklist_killer` | - |
 | `0x0239` | S->C | implemented | `0x0239` | `11` | `-` | companion_packets.go, packet.go |
-| `0x023A` | S->C | untracked | `0x023a` | `4` | `-` | - |
-| `0x023B` | C->S | missing | `0x023b` | `36` | `clif_parse_StoragePassword` | - |
-| `0x023C` | S->C | untracked | `0x023c` | `6` | `-` | - |
+| `0x023A` | S->C | implemented | `0x023a` | `4` | `-` | storage_password_packets.go, packet.go |
+| `0x023B` | C->S | implemented | `0x023b` | `36` | `clif_parse_StoragePassword` | storage_password_packets.go |
+| `0x023C` | S->C | implemented | `0x023c` | `6` | `-` | storage_password_packets.go, packet.go |
 | `0x023D` | S->C | untracked | `0x023d` | `-1` | `-` | - |
 | `0x023E` | S->C | untracked | `0x023e` | `8` | `-` | - |
 | `0x023F` | C->S | missing | `0x023f` | `2` | `clif_parse_Mail_refreshinbox` | - |

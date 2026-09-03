@@ -54,7 +54,7 @@
   - [x] Item repair list/request/result: 0x01FC, 0x01FD, 0x01FE
   - [x] Weapon refine list/request/result: 0x0221, 0x0222, 0x0223
   - [ ] Cooking list/request: 0x025A, 0x025B
-  - [ ] Storage password: 0x023B
+  - [x] Storage password prompt, reply, and result: 0x023A, 0x023B, 0x023C
   - [ ] Cash shop NPC buy: 0x0288
 
   Rankings / PvP
@@ -108,6 +108,7 @@
 
   Class-Specific / Skill Dialog Choices
 
+  - [x] Wizard and mercenary Sense monster information: 0x018C
   - [x] Sage autospell choice list and selection: 0x01CD, 0x01CE
   - [ ] Novice dori-dori: 0x01E7
   - [ ] Novice explosion spirits: 0x01ED

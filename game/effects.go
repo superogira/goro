@@ -1254,6 +1254,7 @@ func (m *WorldMode) applySkillFailAck(ctx client.Context, ack network.SkillFailA
 	if ack.Result != 0 {
 		return
 	}
+	m.clearSenseRequest(ack.SkillID)
 	message := skillFailMessage(ack)
 	glog.Debugf("skill fail ack skill=%d num=%d item=%d result=%d cause=%d msg=%q", ack.SkillID, ack.Number, ack.ItemID, ack.Result, ack.Cause, message)
 	m.ui.console.AddErrorMessage("%s", message)

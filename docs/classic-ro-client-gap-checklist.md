@@ -74,12 +74,13 @@ This means the legacy mail system, not a newer RODEX-only implementation. See
 
 ### Storage password
 
-- [ ] Parse the storage-password prompt and result states.
-- [ ] Implement setting a new storage password.
-- [ ] Implement entering an existing storage password.
-- [ ] Handle confirmation mismatch, failure counts, and lockout/penalty state.
-- [ ] Ensure storage does not open before successful authentication when the server requires a password.
-- [ ] Implement the missing `0x023B` request flow and test it against rAthena.
+- [x] Parse the storage-password prompt and result states.
+- [x] Implement setting a new storage password.
+- [x] Implement entering an existing storage password.
+- [x] Handle confirmation mismatch, failure counts, and lockout/penalty state.
+- [x] Ensure storage does not open before successful authentication when the server requires a password.
+- [x] Implement the missing `0x023B` request flow and verify its 2008 wire layout against rAthena's packet database.
+- [ ] Run the flow end to end against a server implementation. Current rAthena accepts the packet layout but leaves `clif_parse_StoragePassword` as an upstream TODO.
 
 ### Rankings and fame feedback
 
@@ -149,11 +150,11 @@ Goro.
 
 ### Monster information / Sense
 
-- [ ] Parse the original Monster Info/Sense response (`0x018C`).
-- [ ] Implement a Monster Info window.
-- [ ] Display monster name/class, level, HP, DEF, MDEF, race, size, property, and elemental resistances.
-- [ ] Reuse the monster life information Goro already caches for Sense.
-- [ ] Do not turn this into permanent 2012-style monster HP bars.
+- [x] Parse the original Monster Info/Sense response (`0x018C`).
+- [x] Implement a Monster Info window.
+- [x] Display monster name/class, level, HP, DEF, MDEF, race, size, property, and elemental resistances.
+- [x] Reuse the monster life information Goro already caches for Sense.
+- [x] Do not turn this into permanent 2012-style monster HP bars.
 
 ### NPC cut-in illustrations
 

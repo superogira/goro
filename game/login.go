@@ -7,6 +7,7 @@ import (
 	"github.com/kivutar/goro/input"
 	"image"
 	"image/color"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -892,7 +893,29 @@ func (m *LoginMode) playLoginBGM(ctx client.Context) {
 		return
 	}
 	m.bgmStarted = true
-	_ = ctx.Audio.Play("01.mp3")
+	_ = ctx.Audio.Play(loginBGMTrack(ctx))
+}
+
+// loginBGMTrack picks the title screen's track: a random entry from the
+// configured pool (audio.login_bgm_pool, comma-separated file names), or
+// the classic bgm.mp3 when no pool is set.
+func loginBGMTrack(ctx client.Context) string {
+	pool := ctx.Config.Audio.LoginBGMPool
+	var tracks []string
+	for _, raw := range strings.Split(pool, ",") {
+		track := strings.TrimSpace(raw)
+		if track == "" {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(track), ".mp3") {
+			track += ".mp3"
+		}
+		tracks = append(tracks, track)
+	}
+	if len(tracks) == 0 {
+		return "01.mp3"
+	}
+	return tracks[rand.Intn(len(tracks))]
 }
 
 func (m *LoginMode) playConfirmSFX(ctx client.Context) {

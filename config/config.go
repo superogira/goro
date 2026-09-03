@@ -50,6 +50,10 @@ type AudioConfig struct {
 	BGM       bool
 	BGMVolume float64
 	SFXVolume float64
+	// LoginBGMPool is a comma-separated list of BGM files the title screen
+	// picks from at random each launch ("01.mp3,08.mp3"). Empty keeps the
+	// classic single track.
+	LoginBGMPool string
 }
 
 type RenderConfig struct {
@@ -396,6 +400,8 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setFloat(value, &cfg.Audio.BGMVolume)
 	case "audio.sfxvolume":
 		return setFloat(value, &cfg.Audio.SFXVolume)
+	case "audio.login_bgm_pool":
+		cfg.Audio.LoginBGMPool = strings.TrimSpace(value)
 	case "render.graphicsapi":
 		cfg.Render.GraphicsAPI = value
 	case "render.vsync":

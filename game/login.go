@@ -32,6 +32,7 @@ type LoginMode struct {
 	username            string
 	password            string
 	background          *render.Image
+	loadingBG            *render.Image
 	bgTiles             []*render.Image
 	bgSource            string
 	bgLoaded            bool
@@ -668,6 +669,7 @@ func (m *LoginMode) startWorldFade(now time.Time) {
 	if m.fade.phase != loginFadeNone && m.fade.enterWorld {
 		return
 	}
+	m.loadingBG = nil // re-roll the loading image for this handoff
 	m.fade = loginFadeState{
 		phase:      loginFadeOut,
 		started:    now,
@@ -754,23 +756,26 @@ func (m *LoginMode) drawFade(ctx client.Context, screen *render.Frame, now time.
 	if alpha == 0 {
 		return
 	}
+	// The enterWorld hold freezes on this frame while the map server handoff
+	// and WorldMode.Enter's synchronous map loading run. It gets the full
+	// loading screen (random background image + Now Loading text); plain
+	// phase-switch fades (enterWorld=false) stay a simple cover.
+	if m.fade.phase == loginFadeHold && m.fade.enterWorld {
+		drawLoadingScreen(screen, m.loadingBackground(ctx))
+		return
+	}
 	width, height := ctx.ScreenSize()
 	render.DrawRect(screen, 0, 0, float64(width), float64(height), color.RGBA{A: alpha})
-	// The enterWorld hold freezes on this frame while the map server handoff
-	// and WorldMode.Enter's synchronous map loading run — without text the
-	// player stares at a black screen until the world mode's own cover
-	// starts. Phase-switch holds (enterWorld=false) stay clean.
-	if m.fade.phase == loginFadeHold && m.fade.enterWorld {
-		if img := render.OutlinedTextImage("Now Loading...", color.RGBA{R: 255, G: 255, B: 255, A: 255}, color.RGBA{A: 190}); img != nil {
-			bounds := screen.Bounds()
-			var opts render.DrawImageOptions
-			opts.GeoM.Translate(
-				float64(bounds.Dx()-img.Bounds().Dx())/2,
-				float64(bounds.Dy()-img.Bounds().Dy())/2,
-			)
-			screen.DrawImage(img, &opts)
-		}
+}
+
+// loadingBackground lazily picks a random loading image for this hold. The
+// cache is cleared by startWorldFade so every handoff re-rolls.
+func (m *LoginMode) loadingBackground(ctx client.Context) *render.Image {
+	if m.loadingBG != nil {
+		return m.loadingBG
 	}
+	m.loadingBG = loadRandomBackground(ctx.Resources, ctx.Config.Background.LoadingPool)
+	return m.loadingBG
 }
 
 func (m *LoginMode) nextWorldMode(ctx client.Context) *WorldMode {
@@ -857,6 +862,11 @@ func (m *LoginMode) loadBackground(ctx client.Context) {
 		return
 	}
 	m.bgLoaded = true
+	if img := loadRandomBackground(ctx.Resources, ctx.Config.Background.TitlePool); img != nil {
+		m.background = img
+		m.bgSource = "background title pool"
+		return
+	}
 	for _, set := range loginBackgroundSets(ctx.Config.Packet.ClientDate) {
 		if len(set) == 1 {
 			img, source, ok := loadLoginBackgroundImage(ctx.Resources, set[0])

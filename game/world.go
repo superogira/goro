@@ -133,6 +133,7 @@ type WorldMode struct {
 	pendingChatRoom   network.ChatRoomCreate
 	pendingTradeName  string
 	mapFade           mapFadeState
+	loadingBG *render.Image
 	hoveredWalk       hoveredWalkCellCache
 	bot               *luaBot
 	companionAI       companionAISystem
@@ -1501,7 +1502,7 @@ func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
-	m.drawMapFade(screen, now)
+	m.drawMapFade(ctx, screen, now)
 	if !ctx.Config.Render.NoUI {
 		m.drawUIDragGhosts(screen, ctx)
 		m.drawPetSlotMachine(screen, ctx, now)

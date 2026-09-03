@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	Background BackgroundConfig
 	DataDir  string
 	Window   WindowConfig
 	Packet   PacketConfig
@@ -54,6 +55,16 @@ type AudioConfig struct {
 	// picks from at random each launch ("01.mp3,08.mp3"). Empty keeps the
 	// classic single track.
 	LoginBGMPool string
+}
+
+type BackgroundConfig struct {
+	// TitlePool is a comma-separated list of image files the title screen
+	// picks from at random each launch (jpg/png/bmp/tga), relative to the
+	// background folder at the data root.
+	TitlePool string
+	// LoadingPool feeds the Now Loading cover shown during character-select
+	// handoff and map changes; one random pick per loading event.
+	LoadingPool string
 }
 
 type RenderConfig struct {
@@ -403,6 +414,10 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setFloat(value, &cfg.Audio.SFXVolume)
 	case "audio.loginbgmpool": // ini keys are normalized: underscores stripped
 		cfg.Audio.LoginBGMPool = strings.TrimSpace(value)
+	case "background.titlepool":
+		cfg.Background.TitlePool = strings.TrimSpace(value)
+	case "background.loadingpool":
+		cfg.Background.LoadingPool = strings.TrimSpace(value)
 	case "render.graphicsapi":
 		cfg.Render.GraphicsAPI = value
 	case "render.vsync":

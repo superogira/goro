@@ -278,6 +278,7 @@ type runner struct {
 	lastScreenUIDur     time.Duration
 	lastGPUDrawDur      time.Duration
 	firstFrameSubmitted bool
+	lastSlowFrameLog    time.Time
 	lastUIWork          bool
 	lastUIRedraw        bool
 	lastUIDrawDur       time.Duration
@@ -767,9 +768,15 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	}
 	drawDur := time.Since(drawStart)
 	totalDur := r.lastUpdateDuration + drawDur
+	// Slow frames are normal on weak machines (borderline 60fps logs every
+	// single frame); spamming ERRO per frame costs real time on those very
+	// machines and floods the console. Debug level by default, visible as
+	// info (rate-limited to 1/s) when diagnostics are on (?stats=1).
 	if totalDur > 16*time.Millisecond {
-		glog.Errorf(
-			"slow frame frame=%d total_ms=%.2f threshold_ms=16.00 update_ms=%.2f game_update_ms=%.2f ui_frame_ms=%.2f draw_ms=%.2f split_game_draw_ms=%.2f split_screen_ui_ms=%.2f split_gpu_ms=%.2f ui_work=%t ui_redraw=%t ui_draw_ms=%.2f ui_canvas_ms=%.2f ui_flush_ms=%.2f ui_image_ms=%.2f ui_dirty_regions=%d ui_full_repaint=%t ui_union=%.0f,%.0f %.0fx%.0f",
+		if r.renderCfg.Stats && time.Since(r.lastSlowFrameLog) >= time.Second {
+			r.lastSlowFrameLog = time.Now()
+			glog.Infof(
+				"slow frame frame=%d total_ms=%.2f threshold_ms=16.00 update_ms=%.2f game_update_ms=%.2f ui_frame_ms=%.2f draw_ms=%.2f split_game_draw_ms=%.2f split_screen_ui_ms=%.2f split_gpu_ms=%.2f ui_work=%t ui_redraw=%t ui_draw_ms=%.2f ui_canvas_ms=%.2f ui_flush_ms=%.2f ui_image_ms=%.2f ui_dirty_regions=%d ui_full_repaint=%t ui_union=%.0f,%.0f %.0fx%.0f",
 			r.frames,
 			durationMS(totalDur),
 			durationMS(r.lastUpdateDuration),
@@ -787,11 +794,25 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 			durationMS(r.lastUIImageDur),
 			r.lastUIDirtyRegions,
 			r.lastUIFullRepaint,
-			r.lastUIDirtyUnion.Min.X,
-			r.lastUIDirtyUnion.Min.Y,
-			r.lastUIDirtyUnion.Width(),
-			r.lastUIDirtyUnion.Height(),
-		)
+				r.lastUIDirtyUnion.Min.X,
+				r.lastUIDirtyUnion.Min.Y,
+				r.lastUIDirtyUnion.Width(),
+				r.lastUIDirtyUnion.Height(),
+			)
+		} else {
+			glog.Debugf(
+				"slow frame frame=%d total_ms=%.2f threshold_ms=16.00 update_ms=%.2f game_update_ms=%.2f ui_frame_ms=%.2f draw_ms=%.2f split_game_draw_ms=%.2f split_screen_ui_ms=%.2f split_gpu_ms=%.2f",
+				r.frames,
+				durationMS(totalDur),
+				durationMS(r.lastUpdateDuration),
+				durationMS(r.lastGameUpdateDur),
+				durationMS(r.lastUIFrameDur),
+				durationMS(drawDur),
+				durationMS(r.lastGameDrawDur),
+				durationMS(r.lastScreenUIDur),
+				durationMS(r.lastGPUDrawDur),
+			)
+		}
 	}
 	// Sampled per-second frame split behind ?stats=1: absolute numbers
 	// independent of the slow-frame threshold, so throttled environments

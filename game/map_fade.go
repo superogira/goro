@@ -99,4 +99,16 @@ func (m *WorldMode) drawMapFade(screen *render.Frame, now time.Time) {
 	}
 	bounds := screen.Bounds()
 	render.DrawRect(screen, 0, 0, float64(bounds.Dx()), float64(bounds.Dy()), color.RGBA{A: alpha})
+	// Hold and prewarm are the phases where the screen sits fully covered
+	// while map data loads — tell the player it is loading, not dead.
+	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
+		if img := render.OutlinedTextImage("Now Loading...", color.RGBA{R: 255, G: 255, B: 255, A: 255}, color.RGBA{A: 190}); img != nil {
+			var opts render.DrawImageOptions
+			opts.GeoM.Translate(
+				float64(bounds.Dx()-img.Bounds().Dx())/2,
+				float64(bounds.Dy()-img.Bounds().Dy())/2,
+			)
+			screen.DrawImage(img, &opts)
+		}
+	}
 }

@@ -277,6 +277,7 @@ type runner struct {
 	lastGameDrawDur     time.Duration
 	lastScreenUIDur     time.Duration
 	lastGPUDrawDur      time.Duration
+	firstFrameSubmitted bool
 	lastUIWork          bool
 	lastUIRedraw        bool
 	lastUIDrawDur       time.Duration
@@ -756,6 +757,10 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 		return err
 	}
 	if submitted {
+		if !r.firstFrameSubmitted {
+			r.firstFrameSubmitted = true
+			notifyBootReady()
+		}
 		if receiver, ok := r.game.(frameSubmittedReceiver); ok {
 			receiver.FrameSubmitted()
 		}

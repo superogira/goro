@@ -18,15 +18,19 @@ import (
 )
 
 type sceneItemDrawEntry struct {
-	item      worldstate.FloorItem
-	billboard *spriteBillboard
-	screenX   float64
-	screenY   float64
-	worldX    float64
-	worldY    float64
-	worldZ    float64
-	scale     float64
-	depth     float64
+	item        worldstate.FloorItem
+	billboard   *spriteBillboard
+	screenX     float64
+	screenY     float64
+	worldX      float64
+	worldY      float64
+	worldZ      float64
+	groundZ     float64
+	scale       float64
+	shadow      float64
+	shadowScale float64
+	shadowDepth float64
+	depth       float64
 }
 
 type itemSpriteKey struct {
@@ -35,11 +39,16 @@ type itemSpriteKey struct {
 }
 
 const (
-	itemBillboardWidth       = 96
-	itemBillboardHeight      = 96
-	itemBillboardAnchorX     = 48
-	itemBillboardAnchorY     = 72
-	groundItemScreenScale    = 0.8
+	itemBillboardWidth    = 96
+	itemBillboardHeight   = 96
+	itemBillboardAnchorX  = 48
+	itemBillboardAnchorY  = 72
+	groundItemScreenScale = 0.8
+	// ItemObject in roBrowser uses a quarter-size copy of the shared entity
+	// shadow. Besides matching its footprint, scaling around the ACT origin
+	// keeps the ellipse from extending too far north of the item sprite.
+	groundItemShadowScale    = 0.25
+	groundItemShadowOffsetY  = 12.0
 	itemDropStartOffset      = 2.2
 	itemDropStartSpeed       = -0.28
 	itemDropGravityPerFrame  = 0.18
@@ -307,6 +316,7 @@ func pickupApproachCell(ctx client.Context, item worldstate.FloorItem) (int, int
 
 func (m *WorldMode) drawGroundItems(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time) {
 	for _, entry := range m.collectSceneItemEntries(screen, ctx, projection, now) {
+		m.drawGroundItemShadowEntry3D(screen, projection, entry)
 		m.drawGroundItemEntry3D(screen, projection, entry)
 	}
 }
@@ -319,25 +329,77 @@ func (m *WorldMode) collectSceneItemEntries(screen *render.Frame, ctx client.Con
 	entries := make([]sceneItemDrawEntry, 0, len(ctx.World.Items))
 	for _, item := range ctx.World.Items {
 		x, y := floorItemWorldPosition(item)
+		worldX, worldY := cellCenter(x), cellCenter(y)
+		groundZ := terrainHeightAt(ctx.World, x, y)
 		z := floorItemRenderHeight(ctx.World, item, now)
-		point := projection.Project(cellCenter(x), cellCenter(y), z)
+		point := projection.Project(worldX, worldY, z)
 		if point.x < -48 || point.y < -80 || point.x > float32(width+48) || point.y > float32(height+48) {
 			continue
 		}
-		scale := actorBillboardScreenScale(projection, cellCenter(x), cellCenter(y), z) * groundItemScreenScale
+		scale := actorBillboardScreenScale(projection, worldX, worldY, z) * groundItemScreenScale
+		shadowScale := actorBillboardScreenScale(projection, worldX, worldY, groundZ) * groundItemShadowScale
 		entries = append(entries, sceneItemDrawEntry{
-			item:      item,
-			billboard: m.itemSpriteBillboard(ctx.Resources, item, now),
-			screenX:   float64(point.x),
-			screenY:   float64(point.y),
-			worldX:    cellCenter(x),
-			worldY:    cellCenter(y),
-			worldZ:    z,
-			scale:     scale,
-			depth:     projection.Depth(cellCenter(x), cellCenter(y), z),
+			item:        item,
+			billboard:   m.itemSpriteBillboard(ctx.Resources, item, now),
+			screenX:     float64(point.x),
+			screenY:     float64(point.y),
+			worldX:      worldX,
+			worldY:      worldY,
+			worldZ:      z,
+			groundZ:     groundZ,
+			scale:       scale,
+			shadow:      actorShadowFactor(ctx.World, x, y),
+			shadowScale: shadowScale,
+			shadowDepth: projection.Depth(worldX, worldY, groundZ+actorShadowTerrainLift),
+			// Sort by the billboard's upper extent, as actors are. Sorting only
+			// at the ground anchor caused the slightly lifted shadow to be
+			// submitted after the item and blend over its lower pixels.
+			depth: groundItemBillboardSortDepth(projection, worldX, worldY, z),
 		})
 	}
 	return entries
+}
+
+func groundItemBillboardSortDepth(projection sceneProjection, x, y, z float64) float64 {
+	footDepth := projection.Depth(x, y, z)
+	topZ := z + float64(itemBillboardHeight)*actorBillboardWorldUnitsPerSourcePixel
+	topDepth := projection.Depth(x, y, topZ)
+	if topDepth <= 0 || !isFinite(topDepth) {
+		return footDepth
+	}
+	return math.Min(footDepth, topDepth)
+}
+
+func (m *WorldMode) drawGroundItemShadowEntry3D(screen *render.Frame, projection sceneProjection, entry sceneItemDrawEntry) bool {
+	if m.shadowView == nil || m.shadowViewMiss || entry.shadowScale <= 0 {
+		return false
+	}
+	billboard, ok := fixedSpriteBillboard(m.shadowView)
+	if !ok {
+		return false
+	}
+	return drawSpriteShadowBillboard3D(
+		screen,
+		projection,
+		groundItemShadowBillboard(billboard),
+		entry.worldX,
+		entry.worldY,
+		entry.groundZ+actorShadowTerrainLift,
+		entry.shadowScale,
+		1,
+		entry.shadow,
+	)
+}
+
+func groundItemShadowBillboard(billboard *spriteBillboard) *spriteBillboard {
+	if billboard == nil {
+		return nil
+	}
+	out := *billboard
+	// Shift only the rendered copy in screen-oriented sprite space. A world
+	// coordinate offset would rotate around the item with the camera.
+	out.anchorY -= groundItemShadowOffsetY
+	return &out
 }
 
 func (m *WorldMode) drawGroundItemEntry3D(screen *render.Frame, projection sceneProjection, entry sceneItemDrawEntry) {

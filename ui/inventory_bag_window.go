@@ -72,6 +72,7 @@ type InventoryBagWindow struct {
 	dragItem      session.InventoryItem
 	dragActive    bool
 	dragFrom      time.Time
+	amountPrompt  amountPrompt
 	pendingCard   uint16
 	tooltip       tooltipState
 	icons         map[inventoryBagIconKey]image.Image
@@ -87,6 +88,7 @@ func (w *InventoryBagWindow) Toggle(ctx Context) {
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	if w.IsOpen() {
 		w.hideTooltip()
+		w.amountPrompt.Close(ctx)
 		w.Window.Close()
 		w.Publish(ctx)
 		return
@@ -126,6 +128,9 @@ func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage
 }
 
 func (w *InventoryBagWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow) bool {
+	if w.UpdateDropPrompt(ctx) {
+		return true
+	}
 	if !w.dragActive || ctx.Input == nil {
 		return false
 	}
@@ -149,16 +154,46 @@ func (w *InventoryBagWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar, sto
 			return true
 		}
 		if !w.pointInside(ctx.Input.MouseX, ctx.Input.MouseY) {
-			if err := dropInventoryItem(ctx, item); err != nil {
-				glog.Warnf("inventory drop failed: %v", err)
-				return true
-			}
-			glog.Debugf("inventory drop requested index=%d item=%d amount=%d", item.Index, item.ItemID, inventoryDropAmount(item))
+			w.requestDrop(ctx, item)
 			return true
 		}
 		return true
 	}
 	return true
+}
+
+func (w *InventoryBagWindow) UpdateDropPrompt(ctx Context) bool {
+	return w != nil && w.amountPrompt.Update(ctx)
+}
+
+func (w *InventoryBagWindow) requestDrop(ctx Context, item session.InventoryItem) {
+	maxAmount := inventoryDropMaxAmount(item)
+	if inventoryItemTypeStackable(item.Type) && maxAmount > 1 {
+		w.amountPrompt.Open(ctx, "Enter amount to drop", maxAmount, maxAmount, func(amount uint16) {
+			w.sendDrop(ctx, item, amount)
+		})
+		return
+	}
+	w.sendDrop(ctx, item, 1)
+}
+
+func (w *InventoryBagWindow) sendDrop(ctx Context, item session.InventoryItem, requested uint16) {
+	current, ok := currentInventoryDropItem(ctx.Session, item)
+	if !ok {
+		glog.Warnf("inventory drop cancelled: item no longer available index=%d item=%d", item.Index, item.ItemID)
+		return
+	}
+	item = current
+	amount := inventoryDropAmount(item, requested)
+	if err := dropInventoryItem(ctx, item, amount); err != nil {
+		glog.Warnf("inventory drop failed: %v", err)
+		return
+	}
+	glog.Debugf("inventory drop requested index=%d item=%d amount=%d", item.Index, item.ItemID, amount)
+}
+
+func (w *InventoryBagWindow) KeyboardShortcutsBlocked() bool {
+	return w != nil && w.amountPrompt.IsOpen()
 }
 
 func (w *InventoryBagWindow) Draw(screen *render.Frame, ctx Context, assets AssetProvider) {
@@ -224,6 +259,7 @@ func (w *InventoryBagWindow) widgetTree(ctx Context, itemInfo *ItemInfoWindow) w
 		Title("Inventory"),
 		CloseButton(true),
 		OnClose(func() {
+			w.amountPrompt.Close(ctx)
 			w.Window.Close()
 			w.Publish(ctx)
 		}),

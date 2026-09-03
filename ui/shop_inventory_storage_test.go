@@ -673,12 +673,82 @@ func TestStorageDragReleaseOverInventoryWithdraws(t *testing.T) {
 	}
 }
 
-func TestInventoryDropAmountIsOneUnit(t *testing.T) {
-	if got := inventoryDropAmount(session.InventoryItem{Amount: 9}); got != 1 {
-		t.Fatalf("stack drop amount = %d, want 1", got)
+func TestInventoryDropAmountClampsToAvailableAmount(t *testing.T) {
+	stack := session.InventoryItem{Type: db.ItemTypeEtc, Amount: 9}
+	if got := inventoryDropAmount(stack, 5); got != 5 {
+		t.Fatalf("stack drop amount = %d, want 5", got)
 	}
-	if got := inventoryDropAmount(session.InventoryItem{}); got != 1 {
-		t.Fatalf("zero drop amount = %d, want 1", got)
+	if got := inventoryDropAmount(stack, 20); got != 9 {
+		t.Fatalf("oversized stack drop amount = %d, want 9", got)
+	}
+	if got := inventoryDropAmount(stack, 0); got != 1 {
+		t.Fatalf("zero stack drop amount = %d, want 1", got)
+	}
+}
+
+func TestInventoryDropAmountUsesOneForNonStackableItems(t *testing.T) {
+	item := session.InventoryItem{Type: db.ItemTypeWeapon, Amount: 9}
+	if got := inventoryDropAmount(item, 9); got != 1 {
+		t.Fatalf("non-stackable drop amount = %d, want 1", got)
+	}
+}
+
+func TestInventoryDropMaxAmountFitsPacketRange(t *testing.T) {
+	item := session.InventoryItem{Type: db.ItemTypeEtc, Amount: int(^uint16(0)) + 20}
+	if got := inventoryDropMaxAmount(item); got != ^uint16(0) {
+		t.Fatalf("drop max = %d, want %d", got, ^uint16(0))
+	}
+}
+
+func TestAmountPromptParsingClampsToAvailableAndPacketRange(t *testing.T) {
+	if got, ok := parseAmount("99999", 9); !ok || got != 9 {
+		t.Fatalf("available clamp = %d, %t, want 9, true", got, ok)
+	}
+	if got, ok := parseAmount("99999", ^uint16(0)); !ok || got != ^uint16(0) {
+		t.Fatalf("packet clamp = %d, %t, want %d, true", got, ok, ^uint16(0))
+	}
+	if _, ok := parseAmount("", 9); ok {
+		t.Fatal("blank amount should not submit")
+	}
+}
+
+func TestInventoryStackDropOpensPromptDefaultedToAvailableAmount(t *testing.T) {
+	window := InventoryBagWindow{}
+	window.requestDrop(Context{}, session.InventoryItem{Index: 7, ItemID: 938, Type: db.ItemTypeEtc, Amount: 9})
+	if !window.amountPrompt.IsOpen() {
+		t.Fatal("stack drop did not open an amount prompt")
+	}
+	if window.amountPrompt.value != "9" || window.amountPrompt.max != 9 {
+		t.Fatalf("amount prompt value=%q max=%d, want 9 and 9", window.amountPrompt.value, window.amountPrompt.max)
+	}
+}
+
+func TestInventoryDropAmountPromptEscapeCancelsWithoutDropping(t *testing.T) {
+	inputState := input.NewState()
+	window := InventoryBagWindow{}
+	dropped := false
+	ctx := Context{Input: inputState, ScreenW: 800, ScreenH: 600}
+	window.amountPrompt.Open(ctx, "Enter amount to drop", 9, 9, func(uint16) {
+		dropped = true
+	})
+
+	inputState.SetKey(input.KeyEscape, true)
+	if !window.UpdateDropPrompt(ctx) {
+		t.Fatal("open drop prompt did not consume Escape")
+	}
+	if window.amountPrompt.IsOpen() {
+		t.Fatal("drop prompt remained open after Escape")
+	}
+	if dropped {
+		t.Fatal("Escape submitted the item drop")
+	}
+}
+
+func TestInventoryNonStackableDropSkipsPrompt(t *testing.T) {
+	window := InventoryBagWindow{}
+	window.requestDrop(Context{}, session.InventoryItem{Index: 7, ItemID: 1201, Type: db.ItemTypeWeapon, Amount: 9})
+	if window.amountPrompt.IsOpen() {
+		t.Fatal("non-stackable drop opened an amount prompt")
 	}
 }
 

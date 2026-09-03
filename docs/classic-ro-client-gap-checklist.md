@@ -132,14 +132,12 @@ Goro.
 
 ### Inventory and item presentation
 
-- [ ] Show a quantity prompt when dropping a stackable item with an amount greater than one.
-- [ ] Default the prompt safely and clamp the result to the available amount and packet range.
-- [ ] Keep the direct one-item drop path for non-stackable items.
-- [ ] Implement the GRF-backed book reader for readable items.
-- [ ] Support page navigation, book titles, wrapping, and malformed/missing book data.
-- [ ] Add the original floor-item shadow beneath dropped item sprites.
-
-Current limitation: `inventoryDropAmount` always returns `1`.
+- [x] Show a quantity prompt when dropping a stackable item with an amount greater than one.
+- [x] Default the prompt safely and clamp the result to the available amount and packet range.
+- [x] Keep the direct one-item drop path for non-stackable items.
+- [x] Implement the GRF-backed book reader for readable items.
+- [x] Support page navigation, book titles, wrapping, and malformed/missing book data.
+- [x] Add the original floor-item shadow beneath dropped item sprites.
 
 ### Level-up availability notifications
 

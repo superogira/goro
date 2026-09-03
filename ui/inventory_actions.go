@@ -32,11 +32,11 @@ func UseInventoryItem(ctx Context, item session.InventoryItem) error {
 	return ctx.Network.SendUseInventoryItem(item.Index, target)
 }
 
-func dropInventoryItem(ctx Context, item session.InventoryItem) error {
+func dropInventoryItem(ctx Context, item session.InventoryItem, amount uint16) error {
 	if ctx.Network == nil {
 		return fmt.Errorf("not connected")
 	}
-	return ctx.Network.SendDropInventoryItem(item.Index, inventoryDropAmount(item))
+	return ctx.Network.SendDropInventoryItem(item.Index, inventoryDropAmount(item, amount))
 }
 
 func equipInventoryItem(ctx Context, item session.InventoryItem) {
@@ -80,6 +80,37 @@ func inventoryItemEquipLocationForSession(s *session.Session, item session.Inven
 	return db.EquipAccessory1
 }
 
-func inventoryDropAmount(_ session.InventoryItem) uint16 {
-	return 1
+func inventoryItemTypeStackable(itemType uint8) bool {
+	switch itemType {
+	case db.ItemTypeWeapon, db.ItemTypeArmor, db.ItemTypePetEgg, db.ItemTypePetArmor, db.ItemTypeShadowGear:
+		return false
+	default:
+		return true
+	}
+}
+
+func inventoryDropMaxAmount(item session.InventoryItem) uint16 {
+	if !inventoryItemTypeStackable(item.Type) || item.Amount <= 1 {
+		return 1
+	}
+	if item.Amount > int(^uint16(0)) {
+		return ^uint16(0)
+	}
+	return uint16(item.Amount)
+}
+
+func inventoryDropAmount(item session.InventoryItem, requested uint16) uint16 {
+	return clampAmount(requested, inventoryDropMaxAmount(item))
+}
+
+func currentInventoryDropItem(s *session.Session, dragged session.InventoryItem) (session.InventoryItem, bool) {
+	if s == nil {
+		return dragged, true
+	}
+	for _, item := range s.Inventory.Items {
+		if item.Index == dragged.Index && item.ItemID == dragged.ItemID {
+			return item, true
+		}
+	}
+	return session.InventoryItem{}, false
 }

@@ -10,7 +10,6 @@ import (
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
-	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -63,7 +62,7 @@ type ShopWindow struct {
 	buyIcons        map[shopItemIconKey]image.Image
 	buyIconMiss     map[shopItemIconKey]struct{}
 	closePacketSent bool
-	amountPrompt    shopAmountPrompt
+	amountPrompt    amountPrompt
 }
 
 type shopSellCartItem struct {
@@ -842,7 +841,7 @@ func shopSellItemPrice(item network.ShopSellItem) uint32 {
 }
 
 func (w *ShopWindow) openAmountPrompt(ctx Context, initial, max uint16, onSubmit func(uint16)) {
-	w.amountPrompt.Open(ctx, initial, max, onSubmit)
+	w.amountPrompt.Open(ctx, "Input number", initial, max, onSubmit)
 }
 
 func (w *ShopWindow) maxBuyAmount(ctx Context, item network.ShopBuyItem) uint16 {
@@ -877,28 +876,6 @@ func (w *ShopWindow) canAffordBuyAmount(ctx Context, item network.ShopBuyItem, a
 		return true
 	}
 	return w.total()+price*int64(amount) <= ctx.Session.Inventory.Zeny
-}
-
-func shopItemTypeStackable(itemType uint8) bool {
-	switch itemType {
-	case db.ItemTypeWeapon, db.ItemTypeArmor, db.ItemTypePetEgg, db.ItemTypePetArmor, db.ItemTypeShadowGear:
-		return false
-	default:
-		return true
-	}
-}
-
-func clampShopAmount(amount, maxAmount uint16) uint16 {
-	if maxAmount == 0 {
-		maxAmount = 1
-	}
-	if amount == 0 {
-		return 1
-	}
-	if amount > maxAmount {
-		return maxAmount
-	}
-	return amount
 }
 
 func addShopAmount(current, amount, maxAmount uint16) uint16 {
@@ -938,7 +915,7 @@ func (w *ShopWindow) stagedSellAmount(index uint16) int {
 }
 
 func (w *ShopWindow) requestAddBuyItem(ctx Context, item network.ShopBuyItem) {
-	if shopItemTypeStackable(item.Type) {
+	if inventoryItemTypeStackable(item.Type) {
 		w.openAmountPrompt(ctx, 1, w.maxBuyAmount(ctx, item), func(amount uint16) {
 			w.addBuyItemAmount(ctx, item, amount)
 			w.refreshBuyWindow(ctx)
@@ -950,7 +927,7 @@ func (w *ShopWindow) requestAddBuyItem(ctx Context, item network.ShopBuyItem) {
 
 func (w *ShopWindow) requestAddSellItem(ctx Context, item session.InventoryItem, sell network.ShopSellItem) {
 	maxAmount := uint16(maxInt(1, item.Amount))
-	if shopItemTypeStackable(item.Type) && maxAmount > 1 {
+	if inventoryItemTypeStackable(item.Type) && maxAmount > 1 {
 		w.openAmountPrompt(ctx, maxAmount, maxAmount, func(amount uint16) {
 			w.addCartItemAmount(item, sell, amount)
 			w.buySelectedRow = -1
@@ -967,7 +944,7 @@ func (w *ShopWindow) requestRemoveBuyCartItem(ctx Context, row int) {
 		return
 	}
 	item := w.buyCart[row]
-	if shopItemTypeStackable(item.item.Type) && item.amount > 1 {
+	if inventoryItemTypeStackable(item.item.Type) && item.amount > 1 {
 		w.openAmountPrompt(ctx, item.amount, item.amount, func(amount uint16) {
 			w.decrementBuyCartRowAmount(row, amount)
 			w.refreshBuyWindow(ctx)
@@ -982,7 +959,7 @@ func (w *ShopWindow) requestRemoveSellCartItem(ctx Context, row int) {
 		return
 	}
 	item := w.cart[row]
-	if shopItemTypeStackable(item.item.Type) && item.amount > 1 {
+	if inventoryItemTypeStackable(item.item.Type) && item.amount > 1 {
 		w.openAmountPrompt(ctx, item.amount, item.amount, func(amount uint16) {
 			w.decrementSellCartRowAmount(row, amount)
 			w.refreshBuyWindow(ctx)
@@ -998,7 +975,7 @@ func (w *ShopWindow) addCartItem(item session.InventoryItem, sell network.ShopSe
 
 func (w *ShopWindow) addCartItemAmount(item session.InventoryItem, sell network.ShopSellItem, amount uint16) {
 	maxAmount := uint16(maxInt(1, item.Amount))
-	amount = clampShopAmount(amount, maxAmount)
+	amount = clampAmount(amount, maxAmount)
 	for i := range w.cart {
 		if w.cart[i].item.Index == item.Index {
 			w.cart[i].amount = addShopAmount(w.cart[i].amount, amount, w.cart[i].max)
@@ -1018,7 +995,7 @@ func (w *ShopWindow) addBuyItem(item network.ShopBuyItem) {
 }
 
 func (w *ShopWindow) addBuyItemAmount(ctx Context, item network.ShopBuyItem, amount uint16) {
-	amount = clampShopAmount(amount, ^uint16(0))
+	amount = clampAmount(amount, ^uint16(0))
 	if !w.canAffordBuyAmount(ctx, item, amount) {
 		glog.Warnf("shop buy skipped: not enough zeny item=%d amount=%d", item.ItemID, amount)
 		return
@@ -1086,7 +1063,7 @@ func (w *ShopWindow) decrementBuyCartRowAmount(row int, amount uint16) {
 	if row < 0 || row >= len(w.buyCart) {
 		return
 	}
-	amount = clampShopAmount(amount, w.buyCart[row].amount)
+	amount = clampAmount(amount, w.buyCart[row].amount)
 	if w.buyCart[row].amount > amount {
 		w.buyCart[row].amount -= amount
 		return
@@ -1105,7 +1082,7 @@ func (w *ShopWindow) decrementSellCartRowAmount(row int, amount uint16) {
 	if row < 0 || row >= len(w.cart) {
 		return
 	}
-	amount = clampShopAmount(amount, w.cart[row].amount)
+	amount = clampAmount(amount, w.cart[row].amount)
 	if w.cart[row].amount > amount {
 		w.cart[row].amount -= amount
 		return

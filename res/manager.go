@@ -148,6 +148,23 @@ func (m *Manager) ReadFileExact(name string) ([]byte, error) {
 	return nil, fmt.Errorf("resource not found: %s", name)
 }
 
+// HasFileExact reports whether a resource exists at exactly name. Unlike
+// ReadFile, it does not use the legacy suffix fallback for archive entries.
+func (m *Manager) HasFileExact(name string) bool {
+	if m == nil {
+		return false
+	}
+	if _, ok := m.Find(name); ok {
+		return true
+	}
+	for _, archive := range m.Archives {
+		if archive != nil && archive.Has(name) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) FindFirst(names []string) (string, bool) {
 	for _, name := range names {
 		if path, ok := m.Find(name); ok {

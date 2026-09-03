@@ -175,6 +175,7 @@ type worldUI struct {
 	shopWindow           gameui.ShopWindow
 	vendingWindow        gameui.VendingWindow
 	itemInfoWindow       gameui.ItemInfoWindow
+	bookWindow           gameui.BookWindow
 	identifyWindow       gameui.IdentifyWindow
 	cardWindow           gameui.CardCompositionWindow
 	makingArrow          gameui.MakingArrowWindow
@@ -252,6 +253,8 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.mercenaryInfo.IsOpen() ||
 		u.mercenarySkill.IsOpen() ||
 		u.changeCartWindow.IsOpen() ||
+		u.inventoryBag.KeyboardShortcutsBlocked() ||
+		u.bookWindow.IsOpen() ||
 		u.shopWindow.KeyboardShortcutsBlocked() ||
 		u.vendingWindow.KeyboardShortcutsBlocked() ||
 		u.tradeWindow.IsOpen() ||
@@ -548,6 +551,7 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 	m.ui.equipmentWindow.Rebind(ctx, &m.ui.itemInfoWindow, &m.ui.cartWindow, m)
 	m.ui.cartWindow.Rebind(ctx, &m.ui.itemInfoWindow)
 	m.ui.itemInfoWindow.Rebind(ctx, m)
+	m.ui.bookWindow.Rebind(ctx)
 	m.ui.statsWindow.Rebind(ctx)
 	m.ui.skillWindow.Rebind(ctx, m)
 	m.ui.levelUpNotifications.Rebind(ctx)
@@ -661,6 +665,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	m.ui.console.UpdatePresentation(ctx)
+	// The drop amount prompt is modal and may overlap the always-present chat
+	// field. Give it first refusal on Escape and pointer input so a focused chat
+	// field cannot consume the cancellation before the prompt sees it.
+	if m.ui.inventoryBag.UpdateDropPrompt(ctx) {
+		return nil, nil
+	}
 	dead := playerIsDead(ctx)
 	keyboardBlocked := m.ui.keyboardInputBlocked(ctx)
 	m.updateBotInput(ctx, !dead && !keyboardBlocked)
@@ -880,12 +890,24 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		m.handleEscapeMenuAction(ctx)
 		return nil, nil
 	}
+	if m.ui.bookWindow.Update(ctx) {
+		return nil, nil
+	}
 	characterWindowConsumed := m.ui.characterWindow.Update(ctx)
 	m.ui.basicMenu.FollowCharacterWindow(ctx, &m.ui.characterWindow)
 	if characterWindowConsumed {
 		return nil, nil
 	}
 	if m.ui.itemInfoWindow.Update(ctx, m) {
+		if request := m.ui.itemInfoWindow.PopReadBookRequest(); request.ItemID != 0 {
+			if err := m.ui.bookWindow.Open(ctx, request.ItemID, request.Title); err != nil {
+				m.ui.console.AddErrorMessage("Unable to read this book.")
+				glog.Warnf("book open failed item=%d: %v", request.ItemID, err)
+			} else {
+				m.ui.itemInfoWindow.Close()
+				m.ui.itemInfoWindow.Publish(ctx)
+			}
+		}
 		return nil, nil
 	}
 	if m.ui.identifyWindow.Update(ctx) {
@@ -1365,6 +1387,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.equipmentWindow = m.ui.equipmentWindow
 	next.ui.cartWindow = m.ui.cartWindow
 	next.ui.itemInfoWindow = m.ui.itemInfoWindow
+	next.ui.bookWindow = m.ui.bookWindow
 	next.ui.cardWindow = m.ui.cardWindow
 	next.ui.petEggWindow = m.ui.petEggWindow
 	next.ui.petInfoWindow = m.ui.petInfoWindow
@@ -1689,10 +1712,11 @@ func absInt(value int) int {
 }
 
 type sceneDrawEntry struct {
-	depth       float64
-	actorIndex  int
-	shadowIndex int
-	itemIndex   int
+	depth           float64
+	actorIndex      int
+	shadowIndex     int
+	itemIndex       int
+	itemShadowIndex int
 }
 
 func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Context, projection sceneProjection, fog sceneFog, now time.Time) []sceneActorDrawEntry {
@@ -1700,20 +1724,27 @@ func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Co
 	m.drawSkillUnitRSMModels(screen, ctx, projection, now)
 	actors := m.collectSceneActorEntries(screen, ctx, projection)
 	items := m.collectSceneItemEntries(screen, ctx, projection, now)
-	entries := make([]sceneDrawEntry, 0, len(actors)+len(items))
+	entries := make([]sceneDrawEntry, 0, len(actors)*2+len(items)*2)
 	for i, item := range items {
-		entries = append(entries, sceneDrawEntry{depth: item.depth, actorIndex: -1, shadowIndex: -1, itemIndex: i})
+		entries = append(entries,
+			sceneDrawEntry{depth: item.shadowDepth, actorIndex: -1, shadowIndex: -1, itemIndex: -1, itemShadowIndex: i},
+			sceneDrawEntry{depth: item.depth, actorIndex: -1, shadowIndex: -1, itemIndex: i, itemShadowIndex: -1},
+		)
 	}
 	for i, actor := range actors {
 		if actor.castShadow {
-			entries = append(entries, sceneDrawEntry{depth: actor.shadowDepth, actorIndex: -1, shadowIndex: i, itemIndex: -1})
+			entries = append(entries, sceneDrawEntry{depth: actor.shadowDepth, actorIndex: -1, shadowIndex: i, itemIndex: -1, itemShadowIndex: -1})
 		}
-		entries = append(entries, sceneDrawEntry{depth: actor.depth, actorIndex: i, shadowIndex: -1, itemIndex: -1})
+		entries = append(entries, sceneDrawEntry{depth: actor.depth, actorIndex: i, shadowIndex: -1, itemIndex: -1, itemShadowIndex: -1})
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		return entries[i].depth > entries[j].depth
 	})
 	for _, entry := range entries {
+		if entry.itemShadowIndex >= 0 {
+			m.drawGroundItemShadowEntry3D(screen, projection, items[entry.itemShadowIndex])
+			continue
+		}
 		if entry.shadowIndex >= 0 {
 			m.drawActorShadowEntry(screen, ctx, projection, actors[entry.shadowIndex])
 			continue

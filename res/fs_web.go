@@ -89,34 +89,73 @@ func webURLPath(path string) string {
 // burning 404 round trips on separator, charset, and case variants that
 // never work on this server.
 type webPathDialect struct {
-	slash bool // forward-slash form beat the backslash original
-	utf8  bool // the EUC-KR-decoded (UTF-8) variant beat the raw bytes
-	lower bool // lowercased spelling won
-	upper bool // uppercased spelling won
+	prefix      string // leading path segment that wins ("data/", "bgm/")
+	slashWins   int    // forward-slash spellings that downloaded
+	utf8Wins    int    // UTF-8 spellings that downloaded
+	lowerWins   int    // lowercase spellings that downloaded
+	exactWins   int    // original-case spellings that downloaded
+	sampleCount int
 }
 
 var webDialect struct {
 	sync.Mutex
-	learned  bool
-	settings webPathDialect
+	d webPathDialect
 }
 
-// noteCandidateOutcome learns the dialect from a candidate that downloaded
-// successfully.
+// noteCandidateOutcome folds a successful download into the dialect stats.
+// Every win counts (not just the first): hosts consistently speak one
+// dialect, so the aggregates converge to it within a couple of loads.
 func noteCandidateOutcome(c webCandidate) {
 	webDialect.Lock()
 	defer webDialect.Unlock()
-	if webDialect.learned {
-		return // keep the first win; mixed dialects are rare and the
-		// full candidate list is still probed on misses
+	d := &webDialect.d
+	if c.slash {
+		d.slashWins++
 	}
-	webDialect.learned = true
-	webDialect.settings = webPathDialect{
-		slash: c.slash,
-		utf8:  c.utf8,
-		lower: c.lower,
-		upper: c.upper,
+	if c.utf8 {
+		d.utf8Wins++
 	}
+	if c.lower {
+		d.lowerWins++
+	} else if !c.upper {
+		d.exactWins++
+	}
+	if d.prefix == "" && c.path != "" {
+		// Remember the leading segment of the first success ("data/",
+		// "bgm/"); hosts keep all resources under one root.
+		p := strings.ReplaceAll(c.path, "\\", "/")
+		if i := strings.Index(p, "/"); i > 0 {
+			d.prefix = p[:i+1]
+		}
+	}
+	d.sampleCount++
+}
+
+// candidateScore ranks how well a candidate matches the learned dialect.
+func candidateScore(c webCandidate) int {
+	webDialect.Lock()
+	d := webDialect.d
+	webDialect.Unlock()
+	if d.sampleCount == 0 {
+		return 0
+	}
+	score := 0
+	if d.prefix != "" {
+		p := strings.ReplaceAll(c.path, "\\", "/")
+		if strings.HasPrefix(strings.ToLower(p), d.prefix) {
+			score += 4 // this host keeps everything under the learned root
+		}
+	}
+	if d.slashWins > 0 && c.slash {
+		score++
+	}
+	if d.utf8Wins > 0 && c.utf8 {
+		score++
+	}
+	if d.lowerWins > d.exactWins && c.lower {
+		score += 2 // lowercase filenames dominate on this host
+	}
+	return score
 }
 
 // candidateTags remembers the dialect traits of recently built probe URLs
@@ -273,30 +312,9 @@ func (m *Manager) candidatePaths(normalized string) []string {
 	}
 
 	// Order by agreement with the learned dialect (stable for ties).
-	webDialect.Lock()
-	d := webDialect.settings
-	learned := webDialect.learned
-	webDialect.Unlock()
-	if learned {
-		score := func(c webCandidate) int {
-			n := 0
-			if c.slash == d.slash {
-				n++
-			}
-			if c.utf8 == d.utf8 {
-				n++
-			}
-			if d.lower && c.lower {
-				n++
-			} else if d.upper && c.upper {
-				n++
-			}
-			return n
-		}
-		sort.SliceStable(candidates, func(i, j int) bool {
-			return score(candidates[i]) > score(candidates[j])
-		})
-	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidateScore(candidates[i]) > candidateScore(candidates[j])
+	})
 	out := make([]string, len(candidates))
 	for i, c := range candidates {
 		out[i] = c.url

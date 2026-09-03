@@ -26,6 +26,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
@@ -64,4 +65,5 @@ replace github.com/godexture/metadata-id3 => github.com/godexture/godec/plugins/
 replace github.com/gogpu/wgpu => ./.web-patches/wgpu
 
 replace github.com/gogpu/gogpu => ./.web-patches/gogpu
+
 replace github.com/gogpu/ui => ./.web-patches/ui

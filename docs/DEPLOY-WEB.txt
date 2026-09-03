@@ -68,6 +68,20 @@
 ข้อกำหนดฝั่ง rAthena (บน 192.168.1.162)
 --------------------------------------
 - ให้ login/char/map server รันอยู่บนเครื่องเดียวกับ webbridge (ตามแผน)
+
+## Keepalive กันโดน proxy ตัดการเชื่อมต่อ (สำคัญ)
+
+webbridge เวอร์ชันใหม่ (คอมมิต "Keep browser WebSockets alive through
+reverse proxies") ส่ง WebSocket ping ทุก 25 วินาที เพื่อไม่ให้ nginx
+(NPM) ตัดการเชื่อมต่อที่เงียบเกิน proxy_read_timeout 60 วินาที
+(อาการที่ผู้เล่นเจอ: ยืนเฉย/อ่าน dialog นาน ๆ แล้วโดนเด้งออกเป็นระยะ)
+
+- ถ้ายังใช้ webbridge.exe เวอร์ชันเก่าบน 192.168.1.162 ให้แทนที่ด้วย
+  webbridge.exe ตัวใหม่ในโฟลเดอร์นี้ แล้ว restart service
+- ยกระดับเพิ่ม (ถ้าทำได้): ใน NPM ของโดเมนเกม ใส่ custom config ที่
+  location /wsro/ ดังนี้เพื่อกันเหนียวอีกชั้น:
+      proxy_read_timeout 3600s;
+      proxy_send_timeout 3600s;
 - rAthena ควร advertise ที่อยู่ char/map server เป็น 127.0.0.1
   (ค่า default ของ char_athena.conf / map_athena.conf) —
   เพราะ webbridge จะ dial ผ่าน loopback ของเครื่อง .162 เอง

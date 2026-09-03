@@ -71,6 +71,7 @@ type NPCDialog struct {
 	menuWindow   Window
 	inputWindow  Window
 	dirty        bool
+	onClose      func()
 }
 
 type npcDialogTextRun struct {
@@ -148,6 +149,7 @@ func (d *NPCDialog) Apply(packet network.NPCDialog) {
 }
 
 func (d *NPCDialog) Reset() {
+	wasOpen := d.open
 	d.closeWindows()
 	d.open = false
 	d.npcID = 0
@@ -162,6 +164,13 @@ func (d *NPCDialog) Reset() {
 	}
 	d.clearInput()
 	d.dirty = true
+	if wasOpen && d.onClose != nil {
+		d.onClose()
+	}
+}
+
+func (d *NPCDialog) SetCloseHandler(handler func()) {
+	d.onClose = handler
 }
 
 func (d *NPCDialog) ResetPublished(ctx Context) {
@@ -188,10 +197,16 @@ func (d *NPCDialog) Update(ctx Context) bool {
 		return true
 	}
 	if ctx.Input.JustPressed(input.KeyEscape) {
-		if d.action == npcDialogActionMenu {
+		switch d.action {
+		case npcDialogActionMenu:
 			d.choose(ctx, 255)
-		} else {
+		case npcDialogActionClose:
 			d.close(ctx)
+		default:
+			// The original client claims Escape while an NPC dialog is open,
+			// but only closes a menu or a dialog that is waiting for Close.
+			// In particular, a dialog waiting for Next must remain intact.
+			return true
 		}
 		d.publish(ctx)
 		return true

@@ -9,6 +9,7 @@ import (
 )
 
 func (m *WorldMode) startMapFadeOut(change network.MapChange, now time.Time) {
+	m.ui.npcCutin.Clear()
 	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
 		m.mapFade = mapFadeState{
 			phase:     mapFadeHold,
@@ -26,6 +27,7 @@ func (m *WorldMode) startMapFadeOut(change network.MapChange, now time.Time) {
 }
 
 func (m *WorldMode) startCharacterSelectFadeOut(now time.Time) {
+	m.ui.npcCutin.Clear()
 	m.mapFade = mapFadeState{
 		phase:           mapFadeOut,
 		started:         now,

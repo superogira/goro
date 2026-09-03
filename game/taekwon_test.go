@@ -1,7 +1,12 @@
 package game
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
@@ -163,5 +168,73 @@ func TestTaekwonMissionAndRankingMessages(t *testing.T) {
 	}
 	if messages[1].Text != "=========== Taekwon Rank ===========" || messages[2].Text != "[1] Kicker : 123 Points" || messages[11].Text != "[10] None : 0 Points" {
 		t.Fatalf("ranking messages = %+v", messages[1:])
+	}
+}
+
+func TestStarPlaceRequestOpensConfirmationAndAccepts(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, _ := listener.Accept()
+		accepted <- conn
+	}()
+
+	netClient := network.NewClient(20080910, false)
+	defer netClient.Close()
+	address := listener.Addr().(*net.TCPAddr)
+	if err := netClient.Connect(context.Background(), address.IP.String(), address.Port); err != nil {
+		t.Fatal(err)
+	}
+	serverConn := <-accepted
+	if serverConn == nil {
+		t.Fatal("server did not accept test client")
+	}
+	defer serverConn.Close()
+
+	ctx := client.Context{Network: netClient, ScreenW: 800, ScreenH: 600}
+	mode := &WorldMode{}
+	packet := network.Packet{ID: network.PacketZCStarPlace, Data: []byte{0x53, 0x02, 0x01}}
+	if next, stop := mode.handleNetworkPacket(ctx, packet, time.Now()); next != nil || stop {
+		t.Fatalf("star place request changed mode: next=%T stop=%t", next, stop)
+	}
+	if !mode.ui.starPlaceConfirm.IsOpen() {
+		t.Fatal("star place request did not open confirmation")
+	}
+	if !mode.ui.interactionModalOpen() {
+		t.Fatal("star place confirmation did not block world interactions")
+	}
+
+	mode.ui.starPlaceConfirm.Confirm(ctx)
+
+	if err := serverConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	want := network.BuildAgreeStarPlacePacket(1)
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(serverConn, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("star place reply = %x, want %x", got, want)
+	}
+}
+
+func TestStarPlaceCancelDoesNotSendAgreement(t *testing.T) {
+	mode := &WorldMode{}
+	ctx := client.Context{Network: network.NewClient(20080910, false), ScreenW: 800, ScreenH: 600}
+
+	mode.applyStarPlaceRequest(ctx, network.StarPlace{Place: 2})
+	mode.ui.starPlaceConfirm.Cancel(ctx)
+
+	if mode.ui.starPlaceConfirm.IsOpen() {
+		t.Fatal("star place confirmation stayed open after cancel")
+	}
+	if messages := mode.ui.console.Messages(); len(messages) != 0 {
+		t.Fatalf("cancel attempted a network reply: %+v", messages)
 	}
 }

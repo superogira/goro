@@ -311,6 +311,15 @@ func (w *Window) Publish(ctx client.Context) {
 	ctx.UIManager.AddOverlay(root)
 }
 
+func (w *Window) Raise(ctx client.Context) {
+	if w == nil || w.published == nil || ctx.UIManager == nil {
+		return
+	}
+	if manager, ok := ctx.UIManager.(interface{ RaiseOverlay(widget.Widget) }); ok {
+		manager.RaiseOverlay(w.published)
+	}
+}
+
 func (w *Window) Unpublish(ctx client.Context) {
 	if w == nil || ctx.UIManager == nil || w.published == nil {
 		return

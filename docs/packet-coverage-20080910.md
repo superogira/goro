@@ -484,7 +484,7 @@ email check.
 | `0x0251` | C->S | missing | `HEADER_CZ_AUCTION_ITEM_SEARCH` | `sizeof( PACKET_CZ_AUCTION_ITEM_SEARCH )` | `clif_parse_Auction_search` | - |
 | `0x0252` | S->C | untracked | `0x0252` | `-1` | `-` | - |
 | `0x0253` | S->C | implemented | `0x0253` | `3` | `-` | taekwon_packets.go, packet.go |
-| `0x0254` | C->S | missing | `0x0254` | `3` | `clif_parse_FeelSaveOk` | - |
+| `0x0254` | C->S | implemented | `0x0254` | `3` | `clif_parse_FeelSaveOk` | taekwon_packets.go |
 | `0x0255` | S->C | untracked | `0x0255` | `5` | `-` | - |
 | `0x0256` | S->C | untracked | `0x0256` | `5` | `-` | - |
 | `0x0257` | S->C | untracked | `0x0257` | `8` | `-` | - |

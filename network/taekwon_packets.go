@@ -6,11 +6,12 @@ import (
 )
 
 const (
-	PacketZCStarSkill    uint16 = 0x020E
-	PacketZCTaekwonPoint uint16 = 0x0224
-	PacketCZTaekwonRank  uint16 = 0x0225
-	PacketZCTaekwonRank  uint16 = 0x0226
-	PacketZCStarPlace    uint16 = 0x0253
+	PacketZCStarSkill      uint16 = 0x020E
+	PacketZCTaekwonPoint   uint16 = 0x0224
+	PacketCZTaekwonRank    uint16 = 0x0225
+	PacketZCTaekwonRank    uint16 = 0x0226
+	PacketZCStarPlace      uint16 = 0x0253
+	PacketCZAgreeStarPlace uint16 = 0x0254
 )
 
 const taekwonRankEntryCount = 10
@@ -94,7 +95,11 @@ func ParseStarPlace(packet Packet) (StarPlace, bool, error) {
 	if len(packet.Data) < 3 {
 		return StarPlace{}, true, fmt.Errorf("ZC_STARPLACE too short: %d", len(packet.Data))
 	}
-	return StarPlace{Place: packet.Data[2]}, true, nil
+	place := packet.Data[2]
+	if place > 2 {
+		return StarPlace{}, true, fmt.Errorf("ZC_STARPLACE invalid place: %d", place)
+	}
+	return StarPlace{Place: place}, true, nil
 }
 
 func BuildTaekwonRankRequestPacket() []byte {
@@ -103,6 +108,20 @@ func BuildTaekwonRankRequestPacket() []byte {
 	return packet
 }
 
+func BuildAgreeStarPlacePacket(place uint8) []byte {
+	packet := make([]byte, 3)
+	binary.LittleEndian.PutUint16(packet[0:2], PacketCZAgreeStarPlace)
+	packet[2] = place
+	return packet
+}
+
 func (c *Client) SendTaekwonRankRequest() error {
 	return c.Send(BuildTaekwonRankRequestPacket())
+}
+
+func (c *Client) SendAgreeStarPlace(place uint8) error {
+	if place > 2 {
+		return fmt.Errorf("invalid Star Gladiator place: %d", place)
+	}
+	return c.Send(BuildAgreeStarPlacePacket(place))
 }

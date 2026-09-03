@@ -26,6 +26,35 @@ type NPCDialog struct {
 	Options []string
 }
 
+const (
+	PacketZCShowImage2 uint16 = 0x01B3
+
+	NPCCutinLeft       uint8 = 0
+	NPCCutinCenter     uint8 = 1
+	NPCCutinRight      uint8 = 2
+	NPCCutinWindow     uint8 = 3
+	NPCCutinWindowless uint8 = 4
+	NPCCutinClear      uint8 = 255
+)
+
+type NPCCutin struct {
+	Image    string
+	Position uint8
+}
+
+func ParseNPCCutin(packet Packet) (NPCCutin, bool, error) {
+	if packet.ID != PacketZCShowImage2 {
+		return NPCCutin{}, false, nil
+	}
+	if len(packet.Data) < 67 {
+		return NPCCutin{}, true, fmt.Errorf("ZC_SHOW_IMAGE2 too short: %d", len(packet.Data))
+	}
+	return NPCCutin{
+		Image:    decodeROFixedString(packet.Data[2:66]),
+		Position: packet.Data[66],
+	}, true, nil
+}
+
 func ParseNPCDialog(packet Packet) (NPCDialog, bool, error) {
 	switch packet.ID {
 	case 0x00B4:

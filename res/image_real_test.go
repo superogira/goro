@@ -17,6 +17,18 @@ func TestEffectTextureRealArchiveWhenConfigured(t *testing.T) {
 	t.Logf("decoded %s bounds=%v", source, img.Bounds())
 }
 
+func TestNPCCutinTextureRealArchiveWhenConfigured(t *testing.T) {
+	manager := realDataManager(t)
+	img, source, err := LoadImage(manager, NPCCutinTextureCandidates("kafra_06"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Empty() {
+		t.Fatalf("invalid %s bounds %v", source, img.Bounds())
+	}
+	t.Logf("decoded %s bounds=%v", source, img.Bounds())
+}
+
 func TestWeatherCloudTexturesKeepVisibleAlphaWhenConfigured(t *testing.T) {
 	manager := realDataManager(t)
 	for _, name := range []string{"fog1", "fog2", "fog3", "cloud1", "cloud2", "cloud4"} {

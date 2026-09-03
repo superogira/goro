@@ -3403,6 +3403,43 @@ func TestSpecialEffectNotifyAddsLevelUpEffects(t *testing.T) {
 	if mode.scheduledSounds[0].paths[0] != "levelup.wav" {
 		t.Fatalf("base level-up sound = %+v", mode.scheduledSounds[0])
 	}
+	if !mode.ui.levelUpNotifications.BaseVisible() || !mode.ui.levelUpNotifications.JobVisible() {
+		t.Fatal("local level-up effects did not show both availability notifications")
+	}
+}
+
+func TestRemoteLevelUpEffectDoesNotShowAvailabilityNotification(t *testing.T) {
+	world := worldstate.New()
+	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
+	mode := &WorldMode{}
+	ctx := client.Context{Session: &session.Session{AccountID: 2000000}, World: world}
+
+	mode.applySpecialEffectNotify(ctx, network.SpecialEffectNotify{AID: 3000000, EffectID: network.SpecialEffectBaseLevelUp})
+	mode.applySpecialEffectNotify(ctx, network.SpecialEffectNotify{AID: 3000000, EffectID: network.SpecialEffectJobLevelUp})
+
+	if mode.ui.levelUpNotifications.BaseVisible() || mode.ui.levelUpNotifications.JobVisible() {
+		t.Fatal("remote level-up effect showed a local availability notification")
+	}
+}
+
+func TestLevelUpNotificationActionsOpenStatusAndSkillWindows(t *testing.T) {
+	mode := &WorldMode{}
+	ctx := client.Context{
+		Session:   &session.Session{},
+		UIManager: gameui.NewManager(),
+		ScreenW:   800,
+		ScreenH:   600,
+	}
+
+	if !mode.handleLevelUpNotificationAction(ctx, gameui.LevelUpNotificationBase|gameui.LevelUpNotificationJob) {
+		t.Fatal("level-up notification action was not handled")
+	}
+	if !mode.ui.statsWindow.IsOpen() {
+		t.Fatal("base notification did not open the status window")
+	}
+	if !mode.ui.skillWindow.IsOpen() {
+		t.Fatal("job notification did not open the skill window")
+	}
 }
 
 func TestSpecialEffectNotifyMapsServerResultEffects(t *testing.T) {
@@ -3511,6 +3548,9 @@ func TestParameterChangeLevelUpFallbackIsDeduped(t *testing.T) {
 	}
 	if mode.worldEffects[0].effectID != effectBaseLevelUp || mode.worldEffects[1].effectID != effectJobLevelUp {
 		t.Fatalf("world effects = %+v", mode.worldEffects)
+	}
+	if !mode.ui.levelUpNotifications.BaseVisible() || !mode.ui.levelUpNotifications.JobVisible() {
+		t.Fatal("parameter level-up fallback did not show both availability notifications")
 	}
 }
 

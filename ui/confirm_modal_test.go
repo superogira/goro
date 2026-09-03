@@ -54,6 +54,20 @@ func TestConfirmModalKeepsRoomForWrappedPrompt(t *testing.T) {
 	}
 }
 
+func TestConfirmModalShowsCompleteStarPlaceWarning(t *testing.T) {
+	const message = "You cannot change a map's designation once it is designated. Are you sure that you want to designate this map?"
+	var modal ConfirmModal
+	modal.Open(client.Context{ScreenW: 800, ScreenH: 600}, "Feeling the Sun, Moon and Stars", message, nil, nil)
+
+	if got := modal.messageMaxLines(); got != 3 {
+		t.Fatalf("warning lines = %d, want 3", got)
+	}
+	wantHeight := ROWindowTitleHeight + smallPromptContentH + 2*smallPromptLineH + ROWindowFooterHeight
+	if modal.height != wantHeight {
+		t.Fatalf("warning height = %d, want %d", modal.height, wantHeight)
+	}
+}
+
 func TestSmallPromptLinesWrapLongDisconnectMessage(t *testing.T) {
 	lines := smallPromptLines("You have been forced to disconnect by the Game Master Team.", alertPromptMaxLines)
 	if len(lines) != alertPromptMaxLines {

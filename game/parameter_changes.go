@@ -180,6 +180,12 @@ func (v statusVisualEffect) applyParameterChange(ctx client.Context, mode *World
 	}
 	if v.levelEffectID > 0 && current > previous {
 		mode.addWorldEffectIfMissing(ctx, v.levelEffectID, localSkillTarget(ctx))
+		switch v.levelEffectID {
+		case effectBaseLevelUp:
+			mode.ui.levelUpNotifications.NotifyBase()
+		case effectJobLevelUp:
+			mode.ui.levelUpNotifications.NotifyJob()
+		}
 	}
 }
 

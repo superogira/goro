@@ -156,6 +156,71 @@ func TestNPCDialogIgnoresInitialEmptySay(t *testing.T) {
 	}
 }
 
+func TestNPCDialogCloseHandlerRunsOnceForOpenDialog(t *testing.T) {
+	dialog := NPCDialog{}
+	closed := 0
+	dialog.SetCloseHandler(func() { closed++ })
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
+	dialog.Reset()
+	if closed != 1 {
+		t.Fatalf("close handler calls = %d, want 1", closed)
+	}
+	dialog.Reset()
+	if closed != 1 {
+		t.Fatalf("closed dialog invoked handler again: %d", closed)
+	}
+}
+
+func TestNPCDialogEscapeDoesNotCloseDialogWaitingForNext(t *testing.T) {
+	inputState := input.NewState()
+	ctx := Context{
+		Input:   inputState,
+		ScreenW: 1280,
+		ScreenH: 720,
+	}
+	dialog := NPCDialog{}
+	closed := 0
+	dialog.SetCloseHandler(func() { closed++ })
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogNext, NPCID: 100})
+	dialog.Update(ctx) // Publish the dialog before processing keyboard input.
+
+	inputState.SetKey(input.KeyEscape, true)
+	if !dialog.Update(ctx) {
+		t.Fatal("open NPC dialog did not consume Escape")
+	}
+	if !dialog.IsOpen() {
+		t.Fatal("Escape closed a dialog waiting for Next")
+	}
+	if dialog.action != npcDialogActionNext {
+		t.Fatalf("dialog action = %d, want Next", dialog.action)
+	}
+	if closed != 0 {
+		t.Fatalf("close handler calls = %d, want 0", closed)
+	}
+}
+
+func TestNPCDialogEscapeClosesDialogWaitingForClose(t *testing.T) {
+	inputState := input.NewState()
+	ctx := Context{
+		Input:   inputState,
+		ScreenW: 1280,
+		ScreenH: 720,
+	}
+	dialog := NPCDialog{}
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Goodbye"})
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+	dialog.Update(ctx)
+
+	inputState.SetKey(input.KeyEscape, true)
+	if !dialog.Update(ctx) {
+		t.Fatal("dialog waiting for Close did not consume Escape")
+	}
+	if dialog.IsOpen() {
+		t.Fatal("Escape left a dialog waiting for Close open")
+	}
+}
+
 func npcDialogPlainText(runs []npcDialogTextRun) string {
 	text := ""
 	for _, run := range runs {

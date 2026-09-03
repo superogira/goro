@@ -22,6 +22,7 @@ func (m *WorldMode) handleNetworkPackets(ctx client.Context, now time.Time) (Mod
 	}
 	networkErrors := ctx.Network.DrainErrors()
 	if handleNetworkDisconnectErrors(ctx, &m.ui.disconnectDialog, networkErrors) {
+		m.ui.npcCutin.Clear()
 		return nil, true
 	}
 	for _, err := range networkErrors {
@@ -36,6 +37,7 @@ func (m *WorldMode) handleNetworkPackets(ctx client.Context, now time.Time) (Mod
 // transition.
 func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, now time.Time) (Mode, bool) {
 	if handleDisconnectPacket(ctx, &m.ui.disconnectDialog, pkt) {
+		m.ui.npcCutin.Clear()
 		return nil, false
 	}
 	if notify, ok, err := network.ParseMapInfoNotify(pkt); err != nil {
@@ -102,7 +104,7 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	if place, ok, err := network.ParseStarPlace(pkt); err != nil {
 		glog.Errorf("parse star place 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		glog.Debugf("star gladiator place request=%d", place.Place)
+		m.applyStarPlaceRequest(ctx, place)
 		return nil, false
 	}
 	if whisper, ok, err := network.ParseWhisperMessage(pkt); err != nil {
@@ -223,6 +225,17 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		glog.Errorf("parse npc dialog 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		m.ui.npcDialog.Apply(dialog)
+		if !m.ui.npcDialog.IsOpen() && (dialog.Kind == network.NPCDialogClear || dialog.Kind == network.NPCDialogClose) {
+			m.ui.npcCutin.Clear()
+		}
+		return nil, false
+	}
+	if cutin, ok, err := network.ParseNPCCutin(pkt); err != nil {
+		glog.Errorf("parse NPC cut-in 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		if err := m.applyNPCCutin(ctx, cutin); err != nil {
+			glog.Warnf("NPC cut-in unavailable image=%q position=%d: %v", cutin.Image, cutin.Position, err)
+		}
 		return nil, false
 	}
 	if compass, ok, err := network.ParseMinimapCompass(pkt); err != nil {

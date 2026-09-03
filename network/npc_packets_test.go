@@ -3,7 +3,53 @@ package network
 import (
 	"encoding/binary"
 	"testing"
+
+	"golang.org/x/text/encoding/korean"
+	"golang.org/x/text/transform"
 )
+
+func TestParseNPCCutin(t *testing.T) {
+	data := make([]byte, 67)
+	binary.LittleEndian.PutUint16(data[0:2], PacketZCShowImage2)
+	encoded, _, err := transform.Bytes(korean.EUCKR.NewEncoder(), []byte("도우미"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(data[2:66], encoded)
+	data[66] = NPCCutinRight
+
+	cutin, ok, err := ParseNPCCutin(Packet{ID: PacketZCShowImage2, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("cut-in packet not recognized")
+	}
+	if cutin.Image != "도우미" || cutin.Position != NPCCutinRight {
+		t.Fatalf("cut-in = %+v", cutin)
+	}
+}
+
+func TestParseNPCCutinClear(t *testing.T) {
+	data := make([]byte, 67)
+	binary.LittleEndian.PutUint16(data[0:2], PacketZCShowImage2)
+	data[66] = NPCCutinClear
+
+	cutin, ok, err := ParseNPCCutin(Packet{ID: PacketZCShowImage2, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || cutin.Image != "" || cutin.Position != NPCCutinClear {
+		t.Fatalf("cut-in = %+v ok=%v", cutin, ok)
+	}
+}
+
+func TestParseNPCCutinRejectsShortPacket(t *testing.T) {
+	_, ok, err := ParseNPCCutin(Packet{ID: PacketZCShowImage2, Data: make([]byte, 66)})
+	if !ok || err == nil {
+		t.Fatalf("ok=%v err=%v, want recognized error", ok, err)
+	}
+}
 
 func TestParseNPCSayDialog(t *testing.T) {
 	data := make([]byte, 8+len("hello")+1)

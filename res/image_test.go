@@ -3,8 +3,37 @@ package res
 import (
 	"image"
 	"image/color"
+	"strings"
 	"testing"
 )
+
+func TestNPCCutinTextureCandidatesUseROIllustrationPath(t *testing.T) {
+	got := NPCCutinTextureCandidates("guide")
+	want := "data\\texture\\유저인터페이스\\illust\\guide.bmp"
+	if len(got) == 0 || got[0] != want {
+		t.Fatalf("candidates = %q, want first %q", got, want)
+	}
+	for _, candidate := range got {
+		if strings.HasSuffix(candidate, ".bmp.bmp") {
+			t.Fatalf("candidate has duplicate extension: %q", candidate)
+		}
+	}
+
+	withExtension := NPCCutinTextureCandidates("guide.BMP")
+	if len(withExtension) == 0 || withExtension[0] != "data\\texture\\유저인터페이스\\illust\\guide.BMP" {
+		t.Fatalf("extended candidates = %q", withExtension)
+	}
+
+	untrusted := NPCCutinTextureCandidates("../../guide")
+	for _, candidate := range untrusted {
+		if strings.Contains(candidate, "..") {
+			t.Fatalf("cut-in candidate retained path traversal: %q", candidate)
+		}
+	}
+	if got := NPCCutinTextureCandidates(".."); len(got) != 0 {
+		t.Fatalf("parent-directory cut-in candidates = %q, want none", got)
+	}
+}
 
 func TestApplyROTransparency(t *testing.T) {
 	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))

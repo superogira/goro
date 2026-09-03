@@ -1223,6 +1223,17 @@ func (m *WorldMode) applySpecialEffectNotify(ctx client.Context, notify network.
 	if effectID <= 0 {
 		return
 	}
+	if isLocalActor(ctx, notify.AID) {
+		switch notify.EffectID {
+		case network.SpecialEffectBaseLevelUp,
+			network.SpecialEffectSuperNoviceBaseLevelUp,
+			network.SpecialEffectTaekwonBaseLevelUp:
+			m.ui.levelUpNotifications.NotifyBase()
+		case network.SpecialEffectJobLevelUp,
+			network.SpecialEffectSuperNoviceJobLevelUp:
+			m.ui.levelUpNotifications.NotifyJob()
+		}
+	}
 	spec, _ := worldEffectSpecForID(effectID)
 	if craftingResultSpecialEffect(notify.EffectID) {
 		m.replaceCraftingResultEffect(ctx, notify, effectID, spec)

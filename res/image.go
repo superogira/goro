@@ -261,6 +261,53 @@ func InterfaceTextureCandidates(resource string) []string {
 	return out
 }
 
+func NPCCutinTextureCandidates(resource string) []string {
+	resource = strings.TrimSpace(resource)
+	if resource == "" {
+		return nil
+	}
+	filenameOnly := strings.TrimRight(strings.ReplaceAll(resource, "/", "\\"), "\\")
+	if pos := strings.LastIndexAny(filenameOnly, `\/`); pos >= 0 && pos+1 < len(filenameOnly) {
+		filenameOnly = filenameOnly[pos+1:]
+	}
+	if filenameOnly == "" || filenameOnly == "." || filenameOnly == ".." {
+		return nil
+	}
+	if dot := strings.LastIndexByte(filenameOnly, '.'); dot < 0 {
+		filenameOnly += ".bmp"
+	}
+
+	const uiIllustrationPrefix = "data\\texture\\유저인터페이스\\illust\\"
+	prefixes := []string{
+		uiIllustrationPrefix,
+		strings.ReplaceAll(uiIllustrationPrefix, "\\", "/"),
+		"texture\\유저인터페이스\\illust\\",
+		"data\\texture\\interface\\illust\\",
+		"data/texture/interface/illust/",
+		"texture\\interface\\illust\\",
+		"texture/interface/illust/",
+		"illust\\",
+		"illust/",
+	}
+	seen := make(map[string]struct{}, len(prefixes)+1)
+	out := make([]string, 0, len(prefixes)+1)
+	add := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	for _, prefix := range prefixes {
+		add(prefix + filenameOnly)
+	}
+	add(filenameOnly)
+	return out
+}
+
 func ItemCollectionTextureCandidates(resource string) []string {
 	resource = strings.TrimSpace(strings.TrimSuffix(resource, ".bmp"))
 	if resource == "" {

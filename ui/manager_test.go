@@ -141,6 +141,29 @@ func TestClickingPlainOverlayDoesNotRaiseIt(t *testing.T) {
 	}
 }
 
+func TestForegroundOverlayStaysAboveNewWindows(t *testing.T) {
+	manager := NewManager()
+	foregroundContent := newCountingOverlay()
+	foreground := positionedWidget(foregroundContent, 100, 100, 80, 80)
+	lower := positionedWidget(newCountingOverlay(), 100, 100, 80, 80)
+	window := positionedWidget(newCountingOverlay(), 100, 100, 80, 80)
+
+	manager.AddForegroundOverlay(foreground)
+	manager.AddOverlay(lower)
+	manager.AddOverlay(window)
+	manager.RaiseOverlay(lower)
+	if len(manager.overlays) != 3 || manager.overlays[0] != window || manager.overlays[1] != lower || manager.overlays[2] != foreground {
+		t.Fatalf("overlay order = %+v", manager.overlays)
+	}
+
+	manager.root.Layout(widget.NewContext(), geometry.Tight(geometry.Sz(300, 240)))
+	point := geometry.Pt(120, 120)
+	manager.root.Event(widget.NewContext(), event.NewMouseEvent(event.MousePress, event.ButtonLeft, 0, point, point, event.ModNone))
+	if foregroundContent.events != 1 {
+		t.Fatalf("foreground events = %d, want 1", foregroundContent.events)
+	}
+}
+
 func TestOverlayRootDrawSkipsChildrenOutsideClip(t *testing.T) {
 	left := newCountingOverlay()
 	right := newCountingOverlay()

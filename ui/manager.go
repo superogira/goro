@@ -9,9 +9,10 @@ import (
 )
 
 type Manager struct {
-	app      client.UIApp
-	root     *overlayRoot
-	overlays []widget.Widget
+	app        client.UIApp
+	root       *overlayRoot
+	overlays   []widget.Widget
+	foreground []widget.Widget
 }
 
 func NewManager() *Manager {
@@ -36,7 +37,27 @@ func (m *Manager) AddOverlay(root widget.Widget) {
 		}
 	}
 	disableRootRepaintBoundary(root)
+	insert := len(m.overlays) - len(m.foreground)
+	m.overlays = append(m.overlays, nil)
+	copy(m.overlays[insert+1:], m.overlays[insert:])
+	m.overlays[insert] = root
+	m.apply()
+}
+
+// AddForegroundOverlay publishes an overlay above ordinary windows. New and
+// raised windows remain below it until the foreground overlay is removed.
+func (m *Manager) AddForegroundOverlay(root widget.Widget) {
+	if m == nil || root == nil {
+		return
+	}
+	for _, child := range m.overlays {
+		if child == root {
+			return
+		}
+	}
+	disableRootRepaintBoundary(root)
 	m.overlays = append(m.overlays, root)
+	m.foreground = append(m.foreground, root)
 	m.apply()
 }
 
@@ -47,6 +68,12 @@ func (m *Manager) RemoveOverlay(root widget.Widget) {
 	for i, child := range m.overlays {
 		if child == root {
 			m.overlays = append(m.overlays[:i], m.overlays[i+1:]...)
+			for j, foreground := range m.foreground {
+				if foreground == root {
+					m.foreground = append(m.foreground[:j], m.foreground[j+1:]...)
+					break
+				}
+			}
 			m.apply()
 			return
 		}
@@ -58,11 +85,16 @@ func (m *Manager) Clear() {
 		return
 	}
 	m.overlays = nil
+	m.foreground = nil
 	m.apply()
 }
 
 func (m *Manager) PointerBlocked(x, y int) bool {
 	return m != nil && m.root != nil && m.root.PointerBlocked(geometry.Pt(float32(x), float32(y)))
+}
+
+func (m *Manager) RaiseOverlay(root widget.Widget) {
+	m.raiseOverlay(root)
 }
 
 func (m *Manager) apply() {
@@ -158,12 +190,16 @@ func (m *Manager) raiseOverlay(overlay widget.Widget) {
 	if m == nil || overlay == nil || len(m.overlays) < 2 {
 		return
 	}
+	top := len(m.overlays) - len(m.foreground) - 1
+	if top < 0 {
+		return
+	}
 	for i, child := range m.overlays {
-		if child != overlay || i == len(m.overlays)-1 {
+		if child != overlay || i >= top {
 			continue
 		}
-		copy(m.overlays[i:], m.overlays[i+1:])
-		m.overlays[len(m.overlays)-1] = overlay
+		copy(m.overlays[i:], m.overlays[i+1:top+1])
+		m.overlays[top] = overlay
 		if m.root != nil {
 			// Keep the active root so pointer capture and keyboard focus survive.
 			m.root.children = append(m.root.children[:0], m.overlays...)

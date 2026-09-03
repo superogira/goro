@@ -143,9 +143,11 @@ type worldUI struct {
 	statusIcons          gameui.StatusIcons
 	pvpCounter           gameui.PvPCounter
 	perfHUD              gameui.PerfHUD
+	levelUpNotifications gameui.LevelUpNotifications
 	announcement         gameui.Announcement
 	console              gameui.ChatConsole
 	npcDialog            gameui.NPCDialog
+	npcCutin             gameui.NPCCutinOverlay
 	escapeMenu           gameui.EscapeMenu
 	teleportModal        gameui.TeleportModal
 	autoSpellWindow      gameui.AutoSpellWindow
@@ -159,6 +161,7 @@ type worldUI struct {
 	guildMemberPrompt    gameui.TextPromptWindow
 	tradeRequest         gameui.ConfirmModal
 	adoptionRequest      gameui.ConfirmModal
+	starPlaceConfirm     gameui.ConfirmModal
 	characterWindow      gameui.CharacterWindow
 	basicMenu            gameui.BasicMenu
 	inventoryBag         gameui.InventoryBagWindow
@@ -232,6 +235,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.petConfirm.IsOpen() ||
 		u.homunculusConfirm.IsOpen() ||
 		u.mercenaryConfirm.IsOpen() ||
+		u.starPlaceConfirm.IsOpen() ||
 		u.settingsWindow.IsOpen() ||
 		u.autoSpellWindow.IsOpen() ||
 		u.identifyWindow.IsOpen() ||
@@ -274,7 +278,8 @@ func (u *worldUI) interactionModalOpen() bool {
 		u.guildRelationConfirm.IsOpen() ||
 		u.guildMemberPrompt.IsOpen() ||
 		u.tradeRequest.IsOpen() ||
-		u.adoptionRequest.IsOpen()
+		u.adoptionRequest.IsOpen() ||
+		u.starPlaceConfirm.IsOpen()
 }
 
 func (m *WorldMode) KeyboardShortcutsBlocked(ctx client.Context) bool {
@@ -360,7 +365,9 @@ var (
 )
 
 func NewWorldMode() *WorldMode {
-	return &WorldMode{}
+	m := &WorldMode{}
+	m.bindNPCDialogLifecycle()
+	return m
 }
 
 func (m *WorldMode) Name() string {
@@ -369,6 +376,7 @@ func (m *WorldMode) Name() string {
 
 func (m *WorldMode) Enter(ctx client.Context) {
 	now := time.Now()
+	m.bindNPCDialogLifecycle()
 	m.startMapPrewarm()
 	m.camera.ResetTracking()
 	ctx.World.GAT = nil
@@ -444,6 +452,7 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	m.speechBubbles = make(map[uint32]speechBubble)
 	m.syncCurrentActorEffectStateEffects(ctx)
 	m.ui.npcDialog.ResetPublished(ctx)
+	m.ui.npcCutin.Clear()
 	ctx.World.Items = make(map[uint32]worldstate.FloorItem)
 	playerStatus := ""
 	character := ctx.Session.SelectedCharacter()
@@ -540,6 +549,7 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 	m.ui.itemInfoWindow.Rebind(ctx, m)
 	m.ui.statsWindow.Rebind(ctx)
 	m.ui.skillWindow.Rebind(ctx, m)
+	m.ui.levelUpNotifications.Rebind(ctx)
 	m.ui.emoteWindow.Rebind(ctx, &m.ui.console)
 	m.ui.homunculusSkill.Rebind(ctx, m)
 	m.ui.mercenarySkill.Rebind(ctx, m)
@@ -612,6 +622,11 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	}
 	m.ui.pvpCounter.Update(ctx)
 	m.ui.perfHUD.Update(ctx)
+	if m.handleLevelUpNotificationAction(ctx, m.ui.levelUpNotifications.Update(ctx)) {
+		// The notification click belongs exclusively to the UI. Returning here
+		// prevents the same press from reaching the map after the icon closes.
+		return nil, nil
+	}
 
 	m.updatePendingAttack(ctx, "update", false)
 	m.processPendingAttack(ctx)
@@ -752,7 +767,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if !dead && m.openPlayerContextFromInput(ctx, now) {
 		return nil, nil
 	}
-	if !m.petSlotMachine.active && !m.ui.escapeMenu.IsOpen() && !m.ui.interactionModalOpen() && !m.ui.settingsWindow.IsOpen() && !m.ui.identifyWindow.IsOpen() && !m.ui.petEggWindow.IsOpen() && !m.ui.petInfoWindow.IsOpen() && !m.ui.petConfirm.IsOpen() && !m.ui.homunculusInfo.IsOpen() && !m.ui.homunculusSkill.IsOpen() && !m.ui.homunculusConfirm.IsOpen() && !m.ui.mercenaryInfo.IsOpen() && !m.ui.mercenarySkill.IsOpen() && !m.ui.mercenaryConfirm.IsOpen() {
+	if !m.petSlotMachine.active && !m.npcCutinPointerBlocked(ctx) && !m.ui.escapeMenu.IsOpen() && !m.ui.interactionModalOpen() && !m.ui.settingsWindow.IsOpen() && !m.ui.identifyWindow.IsOpen() && !m.ui.petEggWindow.IsOpen() && !m.ui.petInfoWindow.IsOpen() && !m.ui.petConfirm.IsOpen() && !m.ui.homunculusInfo.IsOpen() && !m.ui.homunculusSkill.IsOpen() && !m.ui.homunculusConfirm.IsOpen() && !m.ui.mercenaryInfo.IsOpen() && !m.ui.mercenarySkill.IsOpen() && !m.ui.mercenaryConfirm.IsOpen() {
 		m.updateCameraRotation(ctx)
 	}
 	if !dead && m.ui.escapeMenu.IsOpen() {
@@ -788,6 +803,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.adoptionRequest.Update(ctx) {
 		return nil, nil
 	}
+	if m.ui.starPlaceConfirm.Update(ctx) {
+		return nil, nil
+	}
 	if m.ui.petConfirm.Update(ctx) {
 		return nil, nil
 	}
@@ -819,6 +837,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	if m.ui.npcDialog.Update(ctx) {
+		return nil, nil
+	}
+	if m.ui.npcCutin.Update(ctx) {
 		return nil, nil
 	}
 	if m.updateWhisperWindow(ctx) {
@@ -1270,8 +1291,12 @@ func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange
 	m.clearLocalActorAction(ctx)
 	m.scheduledStops = nil
 	m.ui.npcDialog.ResetPublished(ctx)
+	m.ui.npcCutin.Clear()
 	m.ui.teleportModal = gameui.TeleportModal{}
 	m.ui.autoSpellWindow.Reset(ctx)
+	if m.ui.starPlaceConfirm.IsOpen() {
+		m.ui.starPlaceConfirm.Close(ctx)
+	}
 	m.clearLocalDeathState(ctx)
 	currentMap := ctx.World.MapName
 	reuseLoadedMap := !change.ServerMove && sameLoadedMap(ctx, change.MapName)
@@ -1314,6 +1339,16 @@ func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange
 		return nil
 	}
 	return m.nextWorldMode()
+}
+
+func (m *WorldMode) handleLevelUpNotificationAction(ctx client.Context, action gameui.LevelUpNotificationAction) bool {
+	if action&gameui.LevelUpNotificationBase != 0 {
+		m.ui.statsWindow.OpenWindow(ctx)
+	}
+	if action&gameui.LevelUpNotificationJob != 0 {
+		m.ui.skillWindow.OpenWindow(ctx)
+	}
+	return action != gameui.LevelUpNotificationNone
 }
 
 func (m *WorldMode) nextWorldMode() *WorldMode {
@@ -1359,6 +1394,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.minimap = m.ui.minimap
 	next.ui.pvpCounter = m.ui.pvpCounter
 	next.ui.perfHUD = m.ui.perfHUD
+	next.ui.levelUpNotifications = m.ui.levelUpNotifications
 	m.companionAI.close()
 	return next
 }
@@ -1448,6 +1484,7 @@ func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
 	m.drawDamageFloaters(screen, ctx, projection, now)
 
 	if !ctx.Config.Render.NoUI {
+		m.ui.npcCutin.Draw(screen)
 		m.ui.inventoryBag.Draw(screen, ctx, m)
 		m.ui.storageWindow.Draw(screen, ctx, m)
 		m.ui.cartWindow.Draw(screen, ctx, m)

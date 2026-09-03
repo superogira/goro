@@ -121,7 +121,7 @@ func (m *ConfirmModal) messageMaxLines() int {
 	if m.okOnly {
 		return alertPromptMaxLines
 	}
-	return smallPromptVisibleLineCount(m.message, smallPromptDefaultLines)
+	return smallPromptVisibleLineCount(m.message, alertPromptMaxLines)
 }
 
 func (m *ConfirmModal) widgetTree(ctx client.Context) widget.Widget {

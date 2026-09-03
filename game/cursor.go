@@ -158,6 +158,9 @@ func (m *WorldMode) cursorDesiredAction(ctx client.Context, projection sceneProj
 	if m.petSlotMachine.active {
 		return cursorActionClick
 	}
+	if m.npcCutinPointerBlocked(ctx) {
+		return cursorActionDefault
+	}
 	if action, ok := uiCursorAction(ctx); ok {
 		return action
 	}
@@ -399,9 +402,9 @@ func uiPointerBlocked(ctx client.Context) bool {
 }
 
 func (m *WorldMode) mapPointerBlocked(ctx client.Context) bool {
-	// The pet slot machine is drawn outside the gogpu UI manager, so include it
-	// explicitly alongside regular UI overlays when gating map interactions.
-	return m.petSlotMachine.active || uiPointerBlocked(ctx)
+	// The pet slot machine and NPC cut-ins are drawn outside the gogpu UI
+	// manager, so include them explicitly when gating map interactions.
+	return m.petSlotMachine.active || m.npcCutinPointerBlocked(ctx) || uiPointerBlocked(ctx)
 }
 
 func hoveredCursorActor(ctx client.Context, projection sceneProjection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (world.Actor, bool) {

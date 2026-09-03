@@ -54,9 +54,12 @@ func TestParseTaekwonRanking(t *testing.T) {
 }
 
 func TestParseStarPlace(t *testing.T) {
-	place, ok, err := ParseStarPlace(Packet{ID: PacketZCStarPlace, Data: []byte{0x53, 0x02, 3}})
-	if err != nil || !ok || place.Place != 3 {
+	place, ok, err := ParseStarPlace(Packet{ID: PacketZCStarPlace, Data: []byte{0x53, 0x02, 2}})
+	if err != nil || !ok || place.Place != 2 {
 		t.Fatalf("place = %+v ok=%t err=%v", place, ok, err)
+	}
+	if _, ok, err := ParseStarPlace(Packet{ID: PacketZCStarPlace, Data: []byte{0x53, 0x02, 3}}); !ok || err == nil {
+		t.Fatalf("invalid place ok=%t err=%v", ok, err)
 	}
 }
 
@@ -64,6 +67,19 @@ func TestBuildTaekwonRankRequestPacket(t *testing.T) {
 	packet := BuildTaekwonRankRequestPacket()
 	if len(packet) != 2 || binary.LittleEndian.Uint16(packet) != PacketCZTaekwonRank {
 		t.Fatalf("packet = % X", packet)
+	}
+}
+
+func TestBuildAgreeStarPlacePacket(t *testing.T) {
+	packet := BuildAgreeStarPlacePacket(1)
+	if len(packet) != 3 {
+		t.Fatalf("packet len = %d", len(packet))
+	}
+	if got := binary.LittleEndian.Uint16(packet[0:2]); got != PacketCZAgreeStarPlace {
+		t.Fatalf("opcode = 0x%04X", got)
+	}
+	if packet[2] != 1 {
+		t.Fatalf("place = %d", packet[2])
 	}
 }
 
@@ -89,5 +105,8 @@ func TestTaekwonPacketParsersRejectShortPackets(t *testing.T) {
 	}
 	if _, ok, err := ParseTaekwonRanking(Packet{ID: PacketZCTaekwonRank, Data: make([]byte, 281)}); !ok || err == nil {
 		t.Fatalf("short ranking ok=%t err=%v", ok, err)
+	}
+	if _, ok, err := ParseStarPlace(Packet{ID: PacketZCStarPlace, Data: make([]byte, 2)}); !ok || err == nil {
+		t.Fatalf("short star place ok=%t err=%v", ok, err)
 	}
 }

@@ -52,6 +52,16 @@ func (w *StatsWindow) Toggle(ctx Context) {
 		w.Publish(ctx)
 		return
 	}
+	w.OpenWindow(ctx)
+}
+
+func (w *StatsWindow) OpenWindow(ctx Context) {
+	w.EnsureWindow(statsWindowWidth, statsWindowHeight)
+	if w.IsOpen() {
+		w.Publish(ctx)
+		w.Raise(ctx)
+		return
+	}
 	x, y := statsWindowPosition(ctx)
 	w.snapshot = statsWindowSnapshot(ctx.Session)
 	w.OpenAt(x, y, w.widgetTree(ctx))

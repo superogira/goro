@@ -93,6 +93,16 @@ func (w *SkillWindow) Toggle(ctx Context) {
 		w.close(ctx)
 		return
 	}
+	w.OpenWindow(ctx)
+}
+
+func (w *SkillWindow) OpenWindow(ctx Context) {
+	w.EnsureWindow(skillWindowWidth, skillWindowHeight)
+	if w.IsOpen() {
+		w.Publish(ctx)
+		w.Raise(ctx)
+		return
+	}
 	w.openAtDefault(ctx)
 }
 

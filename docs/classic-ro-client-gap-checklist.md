@@ -56,7 +56,7 @@ This means the legacy mail system, not a newer RODEX-only implementation. See
 ### Skill-specific client flows
 
 - [x] Implement the Sage Auto Spell choice list and send selection packet `0x01CE`.
-- [ ] Turn the Star Gladiator place/Feel request into the original confirmation flow instead of only logging it, then send `0x0254`.
+- [x] Turn the Star Gladiator place/Feel request into the original confirmation flow instead of only logging it, then send `0x0254`.
 - [ ] Implement the original `/doridori` client behavior and packet `0x01E7`.
 - [ ] Verify whether the 2008 Novice Explosion Spirits request (`0x01ED`) needs a distinct client action, then implement it if applicable.
 - [ ] Verify and implement the 2008 auto-revive response (`0x0292`) if it is used by supported gameplay.
@@ -143,11 +143,11 @@ Current limitation: `inventoryDropAmount` always returns `1`.
 
 ### Level-up availability notifications
 
-- [ ] Show the small Base-level/stat notification when unspent stat points become available.
-- [ ] Show the Job-level/skill notification when unspent skill points become available.
-- [ ] Make each notification open the corresponding window or section.
-- [ ] Dismiss the notification after activation without sharing the click with the map or another window.
-- [ ] Keep these notifications distinct from the existing level-up world effect and sound.
+- [x] Show the small Base-level/stat notification when unspent stat points become available.
+- [x] Show the Job-level/skill notification when unspent skill points become available.
+- [x] Make each notification open the corresponding window or section.
+- [x] Dismiss the notification after activation without sharing the click with the map or another window.
+- [x] Keep these notifications distinct from the existing level-up world effect and sound.
 
 ### Monster information / Sense
 
@@ -159,12 +159,12 @@ Current limitation: `inventoryDropAmount` always returns `1`.
 
 ### NPC cut-in illustrations
 
-- [ ] Parse NPC cut-in packet `0x01B3`.
-- [ ] Load the requested illustration from the GRF.
-- [ ] Support the original left, center, and right positions.
-- [ ] Support clearing/replacing an existing cut-in.
-- [ ] Clear cut-ins on dialog close, map transition, character change, and disconnect.
-- [ ] Ensure cut-ins and NPC dialogs compose correctly without leaking map clicks.
+- [x] Parse NPC cut-in packet `0x01B3`.
+- [x] Load the requested illustration from the GRF.
+- [x] Support the original left, center, right, windowed, and windowless positions.
+- [x] Support clearing/replacing an existing cut-in.
+- [x] Clear cut-ins on dialog close, map transition, character change, and disconnect.
+- [x] Ensure cut-ins and NPC dialogs compose correctly without leaking map clicks.
 
 ### Minimap details
 

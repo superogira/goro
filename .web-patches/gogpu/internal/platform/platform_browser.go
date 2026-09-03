@@ -181,6 +181,36 @@ func (p *browserPlatform) ShowSaveFileDialog(_ FileDialogOptions) (string, error
 // Destroy is a no-op on browser.
 func (p *browserPlatform) Destroy() {}
 
+// requestWakeLockOnce asks the browser to keep the screen on while the game
+// runs. Wake locks require a user gesture to acquire, release automatically
+// when the tab is hidden, and are re-requested on the next visibility change.
+func (w *browserWindow) requestWakeLockOnce() {
+	if w.wakeLockTried {
+		return
+	}
+	w.wakeLockTried = true
+	wl := js.Global().Get("navigator").Get("wakeLock")
+	if wl.IsUndefined() {
+		return // API unavailable (e.g. iOS Safari)
+	}
+	request := func() {
+		promise := wl.Call("request", "screen")
+		// Fire-and-forget; a rejected promise (denied, low battery) is fine.
+		ok := js.FuncOf(func(js.Value, []js.Value) any { return nil })
+		fail := js.FuncOf(func(js.Value, []js.Value) any { return nil })
+		w.jsCallbacks = append(w.jsCallbacks, ok, fail)
+		promise.Call("then", ok, fail)
+	}
+	request()
+	doc := js.Global().Get("document")
+	w.addEventListener(doc, "visibilitychange", func(_ js.Value, _ []js.Value) any {
+		if doc.Get("visibilityState").String() == "visible" {
+			request()
+		}
+		return nil
+	})
+}
+
 // enqueueEvent adds an event to the platform event queue.
 func (p *browserPlatform) enqueueEvent(ev Event) {
 	p.events.Push(ev)
@@ -203,6 +233,10 @@ type browserWindow struct {
 	// beforeinput insertLineBreak, form submit), which would otherwise
 	// arrive as two Enters.
 	lastEnterAt time.Time
+	// wakeLockTried ensures the screen wake lock is requested only once per
+	// page load (it auto-releases when the tab hides; the visibilitychange
+	// listener re-requests it).
+	wakeLockTried bool
 
 	// JS callbacks stored for cleanup.
 	jsCallbacks []js.Func
@@ -269,10 +303,15 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 		ev.Call("preventDefault")
 		// Capture the pointer so move/up keep flowing to the canvas even when
 		// the finger leaves it — without this, touch drags (walk, window
-		// drag) drop events at the canvas edge.
-		if id := ev.Get("pointerId"); !id.IsUndefined() {
-			ev.Get("target").Call("setPointerCapture", id)
-		}
+		// drag) drop events at the canvas edge. Synthetic or already-released
+		// pointer IDs make this throw; a failed capture must never abort the
+		// tap itself.
+		func() {
+			defer func() { _ = recover() }()
+			if id := ev.Get("pointerId"); !id.IsUndefined() {
+				ev.Get("target").Call("setPointerCapture", id)
+			}
+		}()
 		// Focusing the canvas must not steal focus from the hidden keyboard
 		// input: blurring it collapses the OS keyboard mid-interaction, and
 		// mobile browsers refuse to re-raise it for a focus() outside the
@@ -280,6 +319,11 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 		if w.hiddenInput.IsUndefined() || !doc.Get("activeElement").Equal(w.hiddenInput) {
 			w.canvas.Call("focus")
 		}
+		// Keep the screen awake while playing: without a wake lock tablets
+		// dim and lock the display mid-session even though the game keeps
+		// rendering. Requesting requires a user gesture — the first tap is
+		// that gesture.
+		w.requestWakeLockOnce()
 		p.enqueueEvent(Event{
 			WindowID: w.id,
 			Type:     EventPointerDown,

@@ -298,9 +298,13 @@ func (e *eventSourceAdapter) dispatchPointerEvent(ev gpucontext.PointerEvent) {
 		e.gestureRecognizer.HandlePointer(ev)
 	}
 
-	// Also dispatch to legacy mouse handlers for backward compatibility
-	// Only dispatch for mouse-type pointers to avoid duplicates from touch/pen
-	if ev.PointerType == gpucontext.PointerTypeMouse {
+	// Also dispatch to legacy mouse handlers for backward compatibility.
+	// Mouse pointers always feed them. Touch/pen pointers do too on the
+	// browser build (compatMouseFromTouch): the platform suppresses the
+	// compatibility mouse events there, so without this mapping taps never
+	// reach the mouse-driven UI at all. On native platforms the OS still
+	// synthesizes mouse events for touch, and mapping both would double-fire.
+	if ev.PointerType == gpucontext.PointerTypeMouse || compatMouseFromTouch {
 		switch ev.Type {
 		case gpucontext.PointerMove:
 			if e.onMouseMove != nil {

@@ -142,6 +142,7 @@ type worldUI struct {
 	minimap              gameui.Minimap
 	statusIcons          gameui.StatusIcons
 	pvpCounter           gameui.PvPCounter
+	perfHUD              gameui.PerfHUD
 	announcement         gameui.Announcement
 	console              gameui.ChatConsole
 	npcDialog            gameui.NPCDialog
@@ -610,6 +611,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return next, nil
 	}
 	m.ui.pvpCounter.Update(ctx)
+	m.ui.perfHUD.Update(ctx)
 
 	m.updatePendingAttack(ctx, "update", false)
 	m.processPendingAttack(ctx)
@@ -1356,6 +1358,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.shortcutBar = m.ui.shortcutBar
 	next.ui.minimap = m.ui.minimap
 	next.ui.pvpCounter = m.ui.pvpCounter
+	next.ui.perfHUD = m.ui.perfHUD
 	m.companionAI.close()
 	return next
 }

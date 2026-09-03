@@ -96,7 +96,11 @@ func (h *PerfHUD) Unpublish(ctx Context) {
 }
 
 func perfHUDBounds(width, height int) (int, int) {
-	x := 0
+	// Bottom-right: the chat bar occupies the bottom-left corner.
+	x := width - perfHUDWidth
+	if x < 0 {
+		x = 0
+	}
 	y := height - perfHUDHeight
 	if y < 0 {
 		y = 0

@@ -96,6 +96,7 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 			w.callbacks.OnSubmit()
 		}
 	}
+	userFocused, passwordFocused := w.fieldFocus()
 	username, passwordValue := w.fieldValues()
 	user := rotheme.TextField(
 		username,
@@ -116,6 +117,14 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 		},
 		func(string) { submit() },
 	)
+	// Focus the fresh widgets BEFORE SetContent unmounts the previous tree:
+	// the keyboard registry must never pass through empty while a field is
+	// still logically focused, or the OS keyboard is torn down (blur) and a
+	// mobile browser refuses to raise it again outside a user gesture —
+	// which made the login screen bounce with the keyboard's resizes and
+	// broke the Next key.
+	user.SetFocused(userFocused)
+	password.SetFocused(passwordFocused)
 	w.user = user
 	w.password = password
 	labelW := float32(loginWindowFieldLeft - 36)

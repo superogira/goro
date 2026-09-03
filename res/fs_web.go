@@ -140,18 +140,68 @@ func learnFromSuccess(url string) {
 	candidateTags.Lock()
 	c, ok := candidateTags.m[url]
 	candidateTags.Unlock()
-	if ok {
-		noteCandidateOutcome(c)
+	if !ok {
+		return
+	}
+	noteCandidateOutcome(c)
+	if c.path != "" {
+		learnDirCase(c.path)
 	}
 }
 
 // webCandidate is one probe URL tagged with the dialect traits it carries.
 type webCandidate struct {
 	url   string
+	path  string // decoded path (for directory-case learning)
 	slash bool
 	utf8  bool
 	lower bool
 	upper bool
+}
+
+// webDirCase remembers the exact casing of each directory that served a
+// file successfully. Hosts extract kRO data with inconsistent per-folder
+// casing (BGM uppercase, npc/texture lowercase), so a single global
+// dialect cannot capture it; rewriting directory prefixes to their known
+// casing removes the per-directory 404 probes entirely.
+var webDirCase = struct {
+	sync.Mutex
+	dirs map[string]string // lowercase dir path -> actual casing that worked
+}{dirs: make(map[string]string)}
+
+func learnDirCase(path string) {
+	idx := strings.LastIndexAny(path, "/\\")
+	if idx <= 0 {
+		return
+	}
+	dir := path[:idx+1]
+	webDirCase.Lock()
+	defer webDirCase.Unlock()
+	if len(webDirCase.dirs) > 512 {
+		webDirCase.dirs = make(map[string]string)
+	}
+	webDirCase.dirs[strings.ToLower(dir)] = dir
+}
+
+// rewriteDirCase replaces each known directory prefix with its learned
+// casing. The longest matching prefix wins so nested directories work.
+func rewriteDirCase(path string) string {
+	webDirCase.Lock()
+	defer webDirCase.Unlock()
+	if len(webDirCase.dirs) == 0 {
+		return path
+	}
+	slashPath := strings.ReplaceAll(path, "\\", "/")
+	idx := strings.LastIndex(slashPath, "/")
+	if idx <= 0 {
+		return path
+	}
+	dir, file := slashPath[:idx+1], slashPath[idx+1:]
+	lower := strings.ToLower(dir)
+	if actual, ok := webDirCase.dirs[lower]; ok && actual != dir {
+		return actual + file
+	}
+	return path
 }
 
 // candidatePaths returns the URLs to probe for a normalized resource name,
@@ -165,7 +215,8 @@ func (m *Manager) candidatePaths(normalized string) []string {
 	base := strings.TrimSuffix(m.Root, "/")
 	seen := make(map[string]struct{}, 4)
 	var candidates []webCandidate
-	add := func(path string, slash, utf8, lower, upper bool) {
+	var add func(path string, slash, utf8, lower, upper bool)
+	add = func(path string, slash, utf8, lower, upper bool) {
 		if path == "" {
 			return
 		}
@@ -173,8 +224,15 @@ func (m *Manager) candidatePaths(normalized string) []string {
 			return
 		}
 		seen[path] = struct{}{}
+		if rewritten := rewriteDirCase(path); rewritten != path {
+			// The learned casing of this directory exists on the host —
+			// probe it ahead of the raw spellings.
+			add(rewritten, slash, utf8, lower, upper)
+			return
+		}
 		c := webCandidate{
 			url:   base + "/" + webURLPath(path),
+			path:  path,
 			slash: slash,
 			utf8:  utf8,
 			lower: lower,

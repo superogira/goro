@@ -521,6 +521,7 @@ func (b *BGM) ensureContext(preferredSampleRate int) *oto.Context {
 	// screen once" gate — players buffer silently and sound starts with the
 	// first interaction instead.
 	waitForAudioReady(ready)
+	registerGestureAudioResume(context)
 	b.context = context
 	b.sampleRate = preferredSampleRate
 	glog.Debugf("bgm created audio context sample_rate=%d", b.sampleRate)

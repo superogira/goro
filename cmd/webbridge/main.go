@@ -27,33 +27,58 @@ import (
 // keepaliveInterval must stay well below the common 60s proxy_read_timeout.
 const keepaliveInterval = 25 * time.Second
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  32 << 10,
-	WriteBufferSize: 32 << 10,
-	// Same-origin policy, matching the previous x/net/websocket behavior:
-	// the game page is served from the same host as the bridge. Requests
-	// without an Origin header (curl, health checks) are allowed through.
-	// Only hostnames are compared: reverse proxies commonly strip the port
-	// from the forwarded Host header.
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
-		u, err := url.Parse(origin)
-		if err != nil {
-			return false
-		}
-		originHost, _, err := net.SplitHostPort(u.Host)
-		if err != nil {
-			originHost = u.Host
-		}
-		reqHost, _, err := net.SplitHostPort(r.Host)
-		if err != nil {
-			reqHost = r.Host
-		}
-		return strings.EqualFold(originHost, reqHost)
-	},
+func hostnameOf(hostPort string) string {
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return hostPort
+	}
+	return host
+}
+
+func isLoopbackName(host string) bool {
+	switch strings.ToLower(strings.Trim(host, "[]")) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// makeUpgrader builds the WebSocket upgrader with an origin check that
+// survives real reverse-proxy setups:
+//   - no Origin header (curl, health checks) is allowed,
+//   - same-hostname origins are allowed,
+//   - loopback origins (local dev at localhost vs 127.0.0.1) are allowed,
+//   - a Host header pointing at the bridge's own listen port means a proxy
+//     forwarded $proxy_host instead of the browser's Host, making origin
+//     comparison impossible — allow rather than lock out every player
+//     behind such a proxy. The destination allowlist remains the security
+//     boundary.
+func makeUpgrader(listenAddr string) websocket.Upgrader {
+	_, port, _ := net.SplitHostPort(listenAddr)
+	if port == "" {
+		port = "80"
+	}
+	proxyHostSuffix := ":" + port
+	return websocket.Upgrader{
+		ReadBufferSize:  32 << 10,
+		WriteBufferSize: 32 << 10,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			u, err := url.Parse(origin)
+			if err != nil {
+				return false
+			}
+			oh := hostnameOf(u.Host)
+			rh := hostnameOf(r.Host)
+			if strings.EqualFold(oh, rh) || isLoopbackName(oh) || isLoopbackName(rh) {
+				return true
+			}
+			return strings.HasSuffix(r.Host, proxyHostSuffix)
+		},
+	}
 }
 
 func main() {
@@ -64,6 +89,8 @@ func main() {
 	destinationAllowed := func(ip net.IP) bool {
 		return ip.IsLoopback() || (*allowPrivate && ip.IsPrivate())
 	}
+
+	upgrader := makeUpgrader(*addr)
 
 	http.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("addr")

@@ -113,6 +113,7 @@ func LoadConfig(args []string) (Config, error) {
 	if err := applyCLI(&cfg, args); err != nil {
 		return Config{}, err
 	}
+	applyServerINI(&cfg)
 	applyWebLoginQuery(&cfg)
 	cfg.DataDir = resolveDataDir(cfg.DataDir)
 	return cfg, nil
@@ -400,7 +401,7 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setFloat(value, &cfg.Audio.BGMVolume)
 	case "audio.sfxvolume":
 		return setFloat(value, &cfg.Audio.SFXVolume)
-	case "audio.login_bgm_pool":
+	case "audio.loginbgmpool": // ini keys are normalized: underscores stripped
 		cfg.Audio.LoginBGMPool = strings.TrimSpace(value)
 	case "render.graphicsapi":
 		cfg.Render.GraphicsAPI = value

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"syscall/js"
+	"time"
 
 	"github.com/gogpu/gogpu/internal/platform/eventqueue"
 	"github.com/gogpu/gpucontext"
@@ -197,6 +198,11 @@ type browserWindow struct {
 	// hiddenLastValue tracks the hidden input's content so `input` events
 	// can be translated into appended runes / backspaces.
 	hiddenLastValue string
+	// lastEnterAt deduplicates Enter forwards: soft keyboards can report a
+	// single action-key press through several channels at once (keydown,
+	// beforeinput insertLineBreak, form submit), which would otherwise
+	// arrive as two Enters.
+	lastEnterAt time.Time
 
 	// JS callbacks stored for cleanup.
 	jsCallbacks []js.Func
@@ -383,6 +389,12 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 // game as EventChar / backspace key events.
 func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 	doc := js.Global().Get("document")
+	// The input lives inside a form: mobile browsers reliably fire `submit`
+	// for the OS keyboard's action key (Next/Send/Done) — some IME layouts
+	// (Thai Gboard among them) report it only that way, with the keydown
+	// showing up as keyCode 229 / key "Unidentified".
+	form := doc.Call("createElement", "form")
+	form.Get("style").Set("display", "contents")
 	input := doc.Call("createElement", "input")
 	input.Set("type", "text")
 	input.Set("autocapitalize", "off")
@@ -401,13 +413,65 @@ func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 	style.Set("border", "none")
 	style.Set("padding", "0px")
 	style.Set("zIndex", "-1")
-	doc.Get("body").Call("appendChild", input)
+	form.Call("appendChild", input)
+	doc.Get("body").Call("appendChild", form)
 	w.hiddenInput = input
+
+	// forwardEnter enqueues a deduplicated Enter press. A single action-key
+	// press can surface through several channels (keydown, beforeinput,
+	// keypress, form submit, an inserted newline); without dedup each extra
+	// channel would double-submit.
+	forwardEnter := func() {
+		if time.Since(w.lastEnterAt) < 80*time.Millisecond {
+			return
+		}
+		w.lastEnterAt = time.Now()
+		p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyDown, Key: gpucontext.KeyEnter})
+		p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyUp, Key: gpucontext.KeyEnter})
+	}
+
+	w.addEventListener(form, "submit", func(_ js.Value, args []js.Value) any {
+		args[0].Call("preventDefault")
+		forwardEnter()
+		return nil
+	})
+
+	w.addEventListener(input, "beforeinput", func(_ js.Value, args []js.Value) any {
+		ev := args[0]
+		switch ev.Get("inputType").String() {
+		case "insertLineBreak", "insertParagraph":
+			ev.Call("preventDefault")
+			forwardEnter()
+		}
+		return nil
+	})
+
+	w.addEventListener(input, "keypress", func(_ js.Value, args []js.Value) any {
+		ev := args[0]
+		if ev.Get("key").String() == "Enter" || ev.Get("which").Int() == 13 || ev.Get("keyCode").Int() == 13 {
+			ev.Call("preventDefault")
+			forwardEnter()
+		}
+		return nil
+	})
 
 	w.addEventListener(input, "input", func(_ js.Value, args []js.Value) any {
 		value := input.Get("value").String()
 		old, next := w.hiddenLastValue, value
 		w.hiddenLastValue = value
+		// Some soft keyboards express the action key as an inserted newline.
+		if strings.ContainsAny(next, "\n\r") {
+			cleaned := strings.TrimRight(next, "\n\r")
+			input.Set("value", cleaned)
+			w.hiddenLastValue = cleaned
+			for _, r := range strings.TrimRight(next[len(old):], "\n\r") {
+				if r != '\n' && r != '\r' {
+					p.enqueueEvent(Event{WindowID: w.id, Type: EventChar, Char: r})
+				}
+			}
+			forwardEnter()
+			return nil
+		}
 		switch {
 		case len(next) > len(old) && strings.HasPrefix(next, old):
 			// Appended runes — forward each as EventChar.
@@ -436,23 +500,45 @@ func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 
 	w.addEventListener(input, "keydown", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
+		// keyCode 229 = the IME is processing the key (Thai/other IME
+		// layouts report EVERY key this way); the actual text arrives via
+		// `input` events, so don't forward the placeholder.
+		if ev.Get("keyCode").Int() == 229 {
+			return nil
+		}
 		// Non-printable control keys (Enter, Backspace, arrows) never fire
 		// `input`; forward them like the document handler does. Printable
 		// single-rune keys must NOT be preventDefaulted — that suppresses
 		// the text insertion, so the `input` event never fires and the
 		// character never reaches the game on real keyboards.
 		keyStr := ev.Get("key").String()
+		keyCode := ev.Get("keyCode").Int()
 		if len([]rune(keyStr)) != 1 {
+			ev.Call("preventDefault")
+			// Enter goes through forwardEnter: some mobile keyboards report
+			// the action key as keyCode 13 with an "Unidentified" key string,
+			// and the same press may also surface as a form submit or a
+			// beforeinput line break — the dedup keeps it a single Enter.
+			if keyCode == 13 || keyStr == "Enter" {
+				forwardEnter()
+				return nil
+			}
 			key, mods := translateKeyEvent(ev)
 			p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyDown, Key: key, Mods: mods})
-			ev.Call("preventDefault")
 		}
 		return nil
 	})
 
 	w.addEventListener(input, "keyup", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
+		if ev.Get("keyCode").Int() == 229 {
+			return nil
+		}
 		keyStr := ev.Get("key").String()
+		keyCode := ev.Get("keyCode").Int()
+		if keyCode == 13 || keyStr == "Enter" {
+			return nil // Enter down+up already sent together by forwardEnter
+		}
 		if len([]rune(keyStr)) != 1 {
 			key, mods := translateKeyEvent(ev)
 			p.enqueueEvent(Event{WindowID: w.id, Type: EventKeyUp, Key: key, Mods: mods})

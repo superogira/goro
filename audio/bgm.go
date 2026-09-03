@@ -514,14 +514,13 @@ func (b *BGM) ensureContext(preferredSampleRate int) *oto.Context {
 		glog.Warnf("bgm create audio context failed sample_rate=%d: %v", preferredSampleRate, err)
 		return nil
 	}
-	// On the web the AudioContext only resumes after a user gesture, and
-	// oto's ready channel stays open until then. Blocking here would freeze
-	// the whole game behind a "touch the screen once" gate, so the wait runs
-	// in the background: players created before the gesture buffer silently
-	// and sound starts with the first interaction.
-	go func() {
-		<-ready
-	}()
+	// waitForAudioReady blocks until the driver is ready on native platforms
+	// (returning the context early silences every player there). On the web
+	// it must NOT block: the AudioContext only resumes after a user gesture,
+	// so blocking here would freeze the whole game behind a "touch the
+	// screen once" gate — players buffer silently and sound starts with the
+	// first interaction instead.
+	waitForAudioReady(ready)
 	b.context = context
 	b.sampleRate = preferredSampleRate
 	glog.Debugf("bgm created audio context sample_rate=%d", b.sampleRate)

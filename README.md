@@ -93,6 +93,51 @@ Useful options:
 --script <path> # run an optional Lua character-control script in game
 ```
 
+## Debugging and Profiling
+
+### Web build (wasm) — URL parameters
+
+Append these to the page URL, e.g. `webro/?stats=1&fps=1`. They can be combined.
+
+| Parameter | Effect |
+| --- | --- |
+| `?u=<name>&p=<pass>` | Prefill login credentials |
+| `?auto=1` | Connect and log in automatically on startup |
+| `?char-slot=N` | Pick character slot N automatically after login (0-based); with `auto=1` the session runs from the title screen into the map with no taps |
+| `?mute=1` | Disable BGM and SFX |
+| `?stats=1` | Enable render stats: one-per-second frame-split lines and slow-frame warnings (>16ms) in the browser console, plus the FPS/MEM widget HUD in the bottom-right corner of the map |
+| `?fps=1` | Show the engine FPS counter (top-left). Drawn straight to the frame, so it stays visible with `noui=1` |
+| `?noui=1` | Skip the widget UI layer entirely once inside the map — pure 3D world with no windows. Login and character select stay playable; tap/keyboard input still works. Used to measure how much frame budget the UI raster costs |
+| `?nobg=1` | Title screen without the background art |
+| `?nowin=1` | Title screen without the login window |
+| `?nocursor=1` | Hide the in-game cursor sprite (use the OS cursor) |
+
+Any unique unused parameter (e.g. `?nocache=123456`) also works as a cache
+buster when a heuristic cache serves a stale `index.html`.
+
+Reading the `?stats=1` console output: each slow frame logs a breakdown such
+as `split_game_draw_ms` (3D world), `split_screen_ui_ms` / `ui_canvas_ms`
+(widget raster on the CPU), and `split_gpu_ms` (GPU submission). High
+`ui_canvas_ms` with low `split_gpu_ms` means the frame budget is spent
+rastering UI, which `noui=1` isolates.
+
+### Native build — command-line flags
+
+The equivalents of the web switches (also settable in `goro.ini`):
+
+```sh
+--render-stats # same as ?stats=1: frame-split logging + FPS/MEM HUD
+--fps # same as ?fps=1: engine FPS counter
+--no-ui # disable UI rendering entirely from boot (benchmarking only; login needs UI)
+--world-debug-stats # world renderer stats
+--net-trace # log raw network packets
+--no-audio # disable BGM and SFX output (useful for profiling)
+```
+
+Note the difference between `--no-ui` and the web's `?noui=1`: the CLI flag
+removes the UI everywhere including the login screen, while the web parameter
+only suppresses it inside the map so the session stays playable.
+
 ## Getting Started
 
 These are tutorials on how to setup a development environment.

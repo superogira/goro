@@ -36,8 +36,7 @@ func (m *Manager) AddOverlay(root widget.Widget) {
 			return
 		}
 	}
-	// boundaries stay enabled: hover damage must clip at the overlay root,
-	// otherwise every hover rasterizes the full canvas (87ms/frame).
+	disableRootRepaintBoundary(root)
 	insert := len(m.overlays) - len(m.foreground)
 	m.overlays = append(m.overlays, nil)
 	copy(m.overlays[insert+1:], m.overlays[insert:])
@@ -56,8 +55,7 @@ func (m *Manager) AddForegroundOverlay(root widget.Widget) {
 			return
 		}
 	}
-	// boundaries stay enabled: hover damage must clip at the overlay root,
-	// otherwise every hover rasterizes the full canvas (87ms/frame).
+	disableRootRepaintBoundary(root)
 	m.overlays = append(m.overlays, root)
 	m.foreground = append(m.foreground, root)
 	m.apply()
@@ -211,14 +209,15 @@ func (m *Manager) raiseOverlay(overlay widget.Widget) {
 	}
 }
 
-// disableRootRepaintBoundary is kept as a no-op: overlay repaint
-// boundaries must stay ENABLED. Hover and other widget-level damage needs
-// a boundary to clip at, otherwise the dirty union escalates to the whole
-// canvas and every hover re-rasters 1280x720 of UI (~87ms a frame). The
-// historical reason for disabling — the scene recorder degrading rounded
-// clips to rectangles — is handled by mounting overlays explicitly and
-// marking them dirty in apply().
-func disableRootRepaintBoundary(widget.Widget) {}
+func disableRootRepaintBoundary(root widget.Widget) {
+	type boundarySetter interface{ SetRepaintBoundary(bool) }
+	if rb, ok := root.(boundarySetter); ok {
+		// The renderer already caches the complete UI image between dirty frames.
+		// Drawing the root directly keeps rounded clipping on the normal canvas;
+		// gogpu/ui's scene recorder currently degrades rounded clips to rectangles.
+		rb.SetRepaintBoundary(false)
+	}
+}
 
 type overlayRoot struct {
 	widget.WidgetBase

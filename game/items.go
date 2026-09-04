@@ -120,6 +120,15 @@ func (m *WorldMode) prefetchItemSprite(manager *res.Manager, itemID uint16, iden
 		res.ItemSpriteResourceCandidates(resourceName, "act"),
 		res.ItemSpriteResourceCandidates(resourceName, "spr"),
 	)
+	// The pickup notification shows this item's icon bitmap (inventory,
+	// cart, and storage reuse the same texture); warming it here gives the
+	// fetch the whole walk-to-the-item as lead time.
+	if m.itemIconPrefetch == nil {
+		m.itemIconPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
+	}
+	if m.itemIconPrefetch[key] == nil {
+		m.itemIconPrefetch[key] = manager.Prefetch(res.ItemIconTextureCandidates(resourceName))
+	}
 }
 
 func (m *WorldMode) applyFloorItemDisappear(ctx client.Context, disappear network.FloorItemDisappear) {
@@ -627,6 +636,23 @@ func (m *WorldMode) itemIconTexture(manager *res.Manager, itemID uint16, identif
 		return texture
 	}
 	if _, ok := m.textureMiss[key]; ok {
+		return nil
+	}
+	// Gate the bitmap load behind a background prefetch (usually started
+	// back when the item dropped; items from other routes start it here):
+	// draw a blank icon for a few frames rather than fetching on this frame.
+	// Inventory, cart, storage, and pickup notifications all route through
+	// here, so the first sighting anywhere warms it for everywhere.
+	prefetchKey := itemSpriteKey{itemID: itemID, identified: identified}
+	if m.itemIconPrefetch == nil {
+		m.itemIconPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
+	}
+	if handle := m.itemIconPrefetch[prefetchKey]; handle != nil {
+		if !handle.Done() && !handle.Stalled(prefetchStallGrace) {
+			return nil
+		}
+	} else {
+		m.itemIconPrefetch[prefetchKey] = manager.Prefetch(res.ItemIconTextureCandidates(resourceName))
 		return nil
 	}
 	img, _, err := res.LoadImage(manager, res.ItemIconTextureCandidates(resourceName))

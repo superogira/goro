@@ -22,6 +22,7 @@ import (
 	uirender "github.com/gogpu/ui/render"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/buildinfo"
 	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
@@ -753,6 +754,9 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 		return err
 	}
 	if err := r.drawFullscreenButton(r.screen, width, height, deviceScale); err != nil {
+		return err
+	}
+	if err := r.drawVersionBadge(r.screen, width, height, deviceScale); err != nil {
 		return err
 	}
 	if err := r.savePendingScreenshot(ctx); err != nil {
@@ -2142,6 +2146,41 @@ func (r *runner) drawFullscreenButton(screen *Frame, width, height int, deviceSc
 		return fmt.Errorf("draw fullscreen button: %w", err)
 	}
 	drawCachedOverlayImage(screen, cached, float64(x), float64(y))
+	return nil
+}
+
+// drawVersionBadge shows the injected build version and date directly below
+// the fullscreen toggle, right-aligned. Same overlay pattern as the FPS
+// meter (cached label, one quad per frame), so it is cheap and visible with
+// ?noui=1. "dev" labels are kept too — knowing a session runs an uninjected
+// build is exactly when the badge matters.
+func (r *runner) drawVersionBadge(screen *Frame, width, height int, deviceScale float64) error {
+	if screen == nil || width <= 0 || height <= 0 {
+		return nil
+	}
+	label := buildinfo.Label()
+	if label == "" {
+		return nil
+	}
+	provider := r.app.GPUContextProvider()
+	if provider == nil {
+		return nil
+	}
+	if deviceScale <= 0 {
+		deviceScale = 1
+	}
+	cached, err := r.cachedTextLabelImage(provider, UITextLabelCommand{
+		Text:       label,
+		Size:       12,
+		Foreground: color.RGBA{R: 200, G: 208, B: 216, A: 215},
+		Outline:    color.RGBA{R: 0, G: 0, B: 0, A: 170},
+	}, deviceScale)
+	if err != nil {
+		return fmt.Errorf("draw version badge: %w", err)
+	}
+	x := float64(width) - 10 - float64(cached.width)
+	y := float64(height - fullscreenButtonSize - fullscreenButtonBottom + fullscreenButtonSize + 6)
+	drawCachedOverlayImage(screen, cached, x, y)
 	return nil
 }
 

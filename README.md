@@ -75,6 +75,25 @@ CGO_ENABLED=0 go run -tags nofakecgo . --data-dir ~/kRO --fullscreen
 CGO_ENABLED=0 go run -tags nofakecgo . --config ./goro.ini --bgm=false --graphics-api vulkan
 ```
 
+Builds can stamp themselves with a version and build timestamp, shown as a
+small badge in the bottom-right corner of the window (below the fullscreen
+toggle on the web build):
+
+```sh
+CGO_ENABLED=0 go build -tags nofakecgo -ldflags "-s -w \
+  -X github.com/kivutar/goro/buildinfo.Version=v85 \
+  -X 'github.com/kivutar/goro/buildinfo.BuildTime=2026-09-04 18:00'" .
+```
+
+Unstamped builds show `dev`. The web (wasm) build uses the same flags:
+
+```sh
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -tags nofakecgo -ldflags "-s -w \
+  -X github.com/kivutar/goro/buildinfo.Version=v85 \
+  -X 'github.com/kivutar/goro/buildinfo.BuildTime=2026-09-04 18:00'" \
+  -o goro.wasm .
+```
+
 Useful options:
 
 ```sh

@@ -421,6 +421,54 @@ func (m *WorldMode) groundTexture(manager *res.Manager, name string) *render.Ima
 	return texture
 }
 
+// prefetchMapTextures warms every texture file the map can ask for at run
+// time — ground tiles, model skins, and the whole 32-frame water animation —
+// because their names are all known the moment the map files are parsed.
+// Without this, the first frame a building chunk or water frame comes into
+// view pays a network round trip inside groundTexture/waterTexture. Web only
+// (native Prefetch is a no-op); first-existing-candidate semantics match
+// res.LoadImage.
+func (m *WorldMode) prefetchMapTextures(manager *res.Manager, gnd *res.GND, rsw *res.RSW, models map[string]*res.RSM) {
+	if manager == nil {
+		return
+	}
+	var groups [][]string
+	seen := make(map[string]struct{})
+	add := func(candidates []string) {
+		if len(candidates) == 0 {
+			return
+		}
+		if _, dup := seen[candidates[0]]; dup {
+			return
+		}
+		seen[candidates[0]] = struct{}{}
+		groups = append(groups, candidates)
+	}
+	if gnd != nil {
+		for _, name := range gnd.Textures {
+			add(res.GroundTextureCandidates(name))
+		}
+	}
+	for _, rsm := range models {
+		if rsm == nil {
+			continue
+		}
+		for _, name := range rsm.Textures {
+			add(res.GroundTextureCandidates(name))
+		}
+	}
+	if rsw != nil {
+		// Water animates through 32 texture frames; prefetch them all or
+		// every first-played frame hitches.
+		for frame := 0; frame < 32; frame++ {
+			add(res.WaterTextureCandidates(int(rsw.Water.Type), frame))
+		}
+	}
+	if len(groups) > 0 {
+		manager.Prefetch(groups...)
+	}
+}
+
 func gndTextureName(gnd *res.GND, textureID int) string {
 	if gnd == nil || textureID < 0 || textureID >= len(gnd.Textures) {
 		return ""

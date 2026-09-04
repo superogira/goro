@@ -519,11 +519,13 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	if rsw, rswSource, err := loadRSW(ctx.Resources, ctx.World.MapName); err == nil {
 		ctx.World.RSW = rsw
 		ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, rsw, defaultRSMLoadLimit)
+		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, rsw, ctx.World.RSM)
 		m.playMapBGM(ctx, rswSource)
 	} else {
 		ctx.World.RSW = nil
 		ctx.World.RSM = nil
 		ctx.World.RSMFail = 0
+		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, nil, nil)
 		m.playMapBGM(ctx, ctx.World.MapName)
 	}
 	if err := ctx.Network.SendLoadEndAck(); err == nil {

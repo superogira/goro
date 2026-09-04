@@ -149,19 +149,11 @@ func (m *Manager) apply() {
 		if wasChild(overlay) {
 			continue
 		}
-		// Added overlay: replicate what SetRoot does for a fresh tree, minus
-		// the full-repaint sledgehammer (hover tooltips add/remove overlays
-		// per hover; a full repaint cost 150ms a frame).
-		//   1. link the parent so redraw/layout propagation reaches the
-		//      overlay root boundary — MountTree only wires the subtree,
-		//      and an orphaned overlay never wakes the renderer (invisible);
-		//   2. mount so lifecycle bindings run;
-		//   3. mark dirty and invalidate the overlay's bounds; the window
-		//      folds pending invalidations into its dirty tracker, so the
-		//      raster covers just this region.
-		if setter, ok := overlay.(interface{ SetParent(widget.Widget) }); ok {
-			setter.SetParent(m.root)
-		}
+		// Added overlay: mount so lifecycle bindings run and mark the tree
+		// dirty, then damage ONLY the overlay's bounds. A full repaint here
+		// made every hover tooltip (overlay add + remove per hover) raster
+		// the whole screen — 150ms a frame. Partial damage keeps the shared
+		// image cache; the raster cost scales with the union of dirty rects.
 		if m.app != nil {
 			if ctx := m.app.WidgetContext(); ctx != nil {
 				widget.MountTree(overlay, ctx)
@@ -171,9 +163,6 @@ func (m *Manager) apply() {
 		if bounds := overlayBounds(overlay); !bounds.IsEmpty() {
 			if m.app != nil {
 				m.app.InvalidateRect(bounds)
-				if redrawer, ok := m.app.(interface{ RequestRedraw() }); ok {
-					redrawer.RequestRedraw()
-				}
 			}
 		} else {
 			addedNeedsFull = true

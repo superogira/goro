@@ -300,6 +300,13 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 	// keeps it in the natural focus chain for any canvas-scoped handlers.
 	w.addEventListener(w.canvas, "pointerdown", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
+		// The on-screen fullscreen toggle (drawn by the game's render
+		// backend, rect published as window.__goroFSBtn) is handled here so
+		// the Fullscreen API call runs inside the user gesture task and the
+		// tap never reaches the game as a walk/click.
+		if w.hitFullscreenButton(ev) {
+			return nil
+		}
 		ev.Call("preventDefault")
 		// Capture the pointer so move/up keep flowing to the canvas even when
 		// the finger leaves it — without this, touch drags (walk, window
@@ -720,6 +727,53 @@ func (w *browserWindow) SetFullscreen(fullscreen bool) {
 	} else {
 		js.Global().Get("document").Call("exitFullscreen")
 	}
+}
+
+// hitFullscreenButton reports whether the pointer event lands on the
+// on-screen fullscreen toggle, and when it does, flips the browser
+// fullscreen state. The rect comes from the game (window.__goroFSBtn,
+// canvas-space). Toggling here — synchronously inside the gesture dispatch —
+// is what makes requestFullscreen pass the browser's user-activation check;
+// calling it from the render loop after the fact is rejected. When the
+// Fullscreen API is unavailable (iPhone Safari), the tap falls through to
+// the game untouched.
+func (w *browserWindow) hitFullscreenButton(ev js.Value) bool {
+	rect := js.Global().Get("__goroFSBtn")
+	if rect.IsUndefined() || rect.IsNull() {
+		return false
+	}
+	x := rect.Get("x").Int()
+	y := rect.Get("y").Int()
+	rw := rect.Get("w").Int()
+	rh := rect.Get("h").Int()
+	bounds := w.canvas.Call("getBoundingClientRect")
+	px := ev.Get("clientX").Float() - bounds.Get("left").Float()
+	py := ev.Get("clientY").Float() - bounds.Get("top").Float()
+	if px < float64(x) || py < float64(y) || px >= float64(x+rw) || py >= float64(y+rh) {
+		return false
+	}
+	doc := js.Global().Get("document")
+	if fse := doc.Get("fullscreenElement"); !fse.IsNull() && !fse.IsUndefined() {
+		doc.Call("exitFullscreen")
+		return true
+	}
+	el := doc.Get("documentElement")
+	name := "requestFullscreen"
+	if el.Get(name).IsUndefined() {
+		name = "webkitRequestFullscreen"
+	}
+	if el.Get(name).IsUndefined() {
+		return false
+	}
+	res := el.Call(name)
+	if !res.IsUndefined() && !res.IsNull() {
+		// Dismissed requests reject; swallow so it does not surface as an
+		// unhandledrejection error in the console.
+		if res.Get("catch").Type() == js.TypeFunction {
+			res.Call("catch", js.FuncOf(func(js.Value, []js.Value) any { return nil }))
+		}
+	}
+	return true
 }
 
 // IsFullscreen returns true if the document is in fullscreen mode.

@@ -752,6 +752,9 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	if err := r.drawFPSMeter(r.screen, deviceScale); err != nil {
 		return err
 	}
+	if err := r.drawFullscreenButton(r.screen, width, height, deviceScale); err != nil {
+		return err
+	}
 	if err := r.savePendingScreenshot(ctx); err != nil {
 		return err
 	}
@@ -2105,4 +2108,101 @@ func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {
 	x, y := uiTextBoxPosition(screen, box, cached)
 	drawCachedOverlayImage(screen, cached, x, y)
 	return nil
+}
+
+// On-screen fullscreen toggle geometry (logical px). The button sits in the
+// bottom-right corner, lifted clear of the level-up notification icons
+// (bottom 0..~64px strip) and the stats HUD strip (bottom 60px).
+const (
+	fullscreenButtonSize   = 30
+	fullscreenButtonRight  = 10
+	fullscreenButtonBottom = 100
+)
+
+// drawFullscreenButton blits the on-screen fullscreen toggle. Web-only: the
+// icon is rasterized once per variant and cached, so the per-frame cost is a
+// single 30x30 quad — independent of the widget UI layer and therefore
+// visible with ?noui=1 and immune to dirty-region repaints.
+func (r *runner) drawFullscreenButton(screen *Frame, width, height int, deviceScale float64) error {
+	if !webFullscreenButton || screen == nil || width <= 0 || height <= 0 {
+		return nil
+	}
+	x := width - fullscreenButtonSize - fullscreenButtonRight
+	y := height - fullscreenButtonSize - fullscreenButtonBottom
+	publishFullscreenButtonRect(x, y, fullscreenButtonSize)
+	provider := r.app.GPUContextProvider()
+	if provider == nil {
+		return nil
+	}
+	if deviceScale <= 0 {
+		deviceScale = 1
+	}
+	cached, err := r.cachedFullscreenButtonIcon(provider, r.app.IsFullscreen(), deviceScale)
+	if err != nil {
+		return fmt.Errorf("draw fullscreen button: %w", err)
+	}
+	drawCachedOverlayImage(screen, cached, float64(x), float64(y))
+	return nil
+}
+
+// cachedFullscreenButtonIcon renders the toggle's backdrop and corner-bracket
+// glyph into a cached overlay image, keyed by variant and device scale.
+func (r *runner) cachedFullscreenButtonIcon(provider gpucontext.DeviceProvider, fullscreen bool, deviceScale float64) (cachedOverlayImage, error) {
+	key := fmt.Sprintf("fsbtn|%t|%.3f", fullscreen, deviceScale)
+	if cached, ok := r.uiTextCache[key]; ok {
+		return cached, nil
+	}
+	const s = fullscreenButtonSize
+	canvas, err := r.ensureOverlayCanvas(provider, s, s, deviceScale)
+	if err != nil {
+		return cachedOverlayImage{}, err
+	}
+	if err := canvas.Draw(func(cc *gg.Context) {
+		ui := uirender.NewCanvas(cc, s, s)
+		ui.Clear(widget.RGBA8(0, 0, 0, 0))
+		ui.DrawRect(geometry.NewRect(0, 0, s, s), widget.RGBA8(12, 16, 22, 140))
+		fg := widget.RGBA8(235, 240, 245, 230)
+		drawFullscreenButtonGlyph(ui, fg, fullscreen)
+	}); err != nil {
+		return cachedOverlayImage{}, fmt.Errorf("draw fullscreen button icon: %w", err)
+	}
+	if _, err := canvas.Flush(); err != nil {
+		return cachedOverlayImage{}, fmt.Errorf("flush fullscreen button icon: %w", err)
+	}
+	cached := cachedOverlayImage{image: updateCanvasImage(canvas, nil), width: s, height: s}
+	if r.uiTextCache == nil {
+		r.uiTextCache = make(map[string]cachedOverlayImage)
+	}
+	r.uiTextCache[key] = cached
+	trimOverlayImageCache(r.uiTextCache)
+	return cached, nil
+}
+
+// drawFullscreenButtonGlyph draws the expand (four corner brackets) or the
+// collapse (brackets flipped inward) glyph from thin filled rects.
+func drawFullscreenButtonGlyph(ui widget.Canvas, fg widget.Color, fullscreen bool) {
+	const (
+		s   = float32(fullscreenButtonSize)
+		pad = float32(7)
+		t   = float32(2.5)
+		l   = float32(7)
+	)
+	far := s - pad
+	if fullscreen {
+		// Collapse: two brackets whose Ls open toward the center.
+		ui.DrawRect(geometry.NewRect(pad, pad, t, l), fg)
+		ui.DrawRect(geometry.NewRect(pad, pad+l-t, l, t), fg)
+		ui.DrawRect(geometry.NewRect(far-t, far-l, t, l), fg)
+		ui.DrawRect(geometry.NewRect(far-l, far-t, l, t), fg)
+		return
+	}
+	// Expand: four corner brackets pointing outward.
+	ui.DrawRect(geometry.NewRect(pad, pad, l, t), fg)
+	ui.DrawRect(geometry.NewRect(pad, pad, t, l), fg)
+	ui.DrawRect(geometry.NewRect(far-l, pad, l, t), fg)
+	ui.DrawRect(geometry.NewRect(far-t, pad, t, l), fg)
+	ui.DrawRect(geometry.NewRect(pad, far-t, l, t), fg)
+	ui.DrawRect(geometry.NewRect(pad, far-l, t, l), fg)
+	ui.DrawRect(geometry.NewRect(far-l, far-t, l, t), fg)
+	ui.DrawRect(geometry.NewRect(far-t, far-l, t, l), fg)
 }

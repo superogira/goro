@@ -600,7 +600,13 @@ func wireInput(events gpucontext.EventSource, state *input.State) {
 	// gesture recognizer; on desktop nothing registers until a second
 	// pointer exists, so mouse-driven camera control is untouched.
 	if gestureSource, ok := events.(gpucontext.GestureEventSource); ok {
+		gestureSeen := false
 		gestureSource.OnGesture(func(ev gpucontext.GestureEvent) {
+			if !gestureSeen && (ev.ZoomDelta != 1 || ev.TranslationDelta.X != 0 || ev.TranslationDelta.Y != 0) {
+				gestureSeen = true
+				glog.Infof("touch gesture active pointers=%d zoom=%.3f pan=%.1f,%.1f",
+					ev.NumPointers, ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
+			}
 			state.ApplyGesture(ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
 		})
 	}

@@ -75,6 +75,25 @@ func (p *browserPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 	style.Set("-webkit-tap-highlight-color", "transparent")
 	style.Set("overscroll-behavior", "none")
 
+	// The same protections must cover the document, not only the canvas: a
+	// touch that begins on any other element (hidden form, future overlay)
+	// still lets the browser claim a two-finger pinch as page zoom and
+	// pointercancel our stream. iOS Safari additionally emits non-standard
+	// GestureEvents for system pinch-zoom — cancel those too.
+	for _, target := range []js.Value{doc.Get("documentElement"), doc.Get("body")} {
+		s := target.Get("style")
+		s.Set("touch-action", "none")
+		s.Set("overscroll-behavior", "none")
+	}
+	for _, gestureEvent := range []string{"gesturestart", "gesturechange", "gestureend"} {
+		doc.Call("addEventListener", gestureEvent, js.FuncOf(func(_ js.Value, args []js.Value) any {
+			if len(args) > 0 {
+				args[0].Call("preventDefault")
+			}
+			return nil
+		}), js.ValueOf(map[string]any{"passive": false, "capture": true}))
+	}
+
 	w := &browserWindow{
 		id:     NewWindowID(),
 		canvas: canvas,
@@ -352,8 +371,16 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 	// The browser cancels an active pointer stream when it reclaims the
 	// gesture (scroll/pinch despite touch-action) or the device interrupts
 	// it — release the game's notion of the press so drags don't stick.
+	// Touch cancels are also surfaced on the console: a cancel during a
+	// two-finger gesture means the browser stole it (page zoom/scroll), the
+	// exact failure mode to look for when touch camera controls misbehave.
 	w.addEventListener(w.canvas, "pointercancel", func(_ js.Value, args []js.Value) any {
 		ev := args[0]
+		if ev.Get("pointerType").String() == "touch" {
+			js.Global().Get("console").Call("warn",
+				"goro: pointercancel id="+ev.Get("pointerId").String()+
+					" — the browser reclaimed this touch (page zoom/scroll?)")
+		}
 		p.enqueueEvent(Event{
 			WindowID: w.id,
 			Type:     EventPointerUp,

@@ -270,3 +270,9 @@ func sfxPathCandidates(path string) []string {
 	}
 	return uniqueStrings(candidates)
 }
+
+// SFXPathCandidates exposes the wav location candidates for a sound name so
+// other packages can prefetch exactly the files playback will read.
+func SFXPathCandidates(path string) []string {
+	return sfxPathCandidates(path)
+}

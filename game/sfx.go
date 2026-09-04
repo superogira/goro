@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	gameaudio "github.com/kivutar/goro/audio"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/glog"
@@ -281,6 +282,35 @@ func actionSoundName(act *res.ACT, action res.ACTAction, motion int) string {
 		return ""
 	}
 	return sound
+}
+
+// prefetchSpriteSounds warms the wav files referenced by a sprite's ACT
+// sound table — the walk/attack/death cues fire on the frame that first
+// reaches them, and each first play would otherwise fetch its file
+// synchronously (a visible hitch on high-latency hosts). Sound names are
+// only known once the sprite has loaded, so this runs right after the
+// sprite view enters the cache. The "atk" marker is skipped, matching
+// actionSoundName.
+func (m *WorldMode) prefetchSpriteSounds(manager *res.Manager, act *res.ACT) {
+	if manager == nil || act == nil || len(act.Sounds) == 0 {
+		return
+	}
+	var groups [][]string
+	seen := make(map[string]struct{})
+	for _, name := range act.Sounds {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.EqualFold(name, "atk") {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		groups = append(groups, gameaudio.SFXPathCandidates(name))
+	}
+	if len(groups) > 0 {
+		manager.Prefetch(groups...)
+	}
 }
 
 func actionAttackMarkerMotion(act *res.ACT, action res.ACTAction) int {

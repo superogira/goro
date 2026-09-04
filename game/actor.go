@@ -1617,6 +1617,7 @@ func (m *WorldMode) nonPCSpriteView(ctx client.Context, actor worldstate.Actor) 
 		return nil
 	}
 	m.nonPCViews[job] = loaded
+	m.prefetchSpriteSounds(ctx.Resources, loaded.act)
 	glog.Debugf("nonpc sprite resources id=%d job=%d %s", actor.ID, job, status)
 	return m.petAccessorySpriteView(ctx, actor, loaded)
 }

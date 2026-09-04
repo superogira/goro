@@ -61,6 +61,7 @@ type WorldMode struct {
 	itemMarker        *render.Image
 	itemViews         map[itemSpriteKey]*spriteView
 	itemViewMiss      map[itemSpriteKey]struct{}
+	itemViewPrefetch  map[itemSpriteKey]*res.PrefetchHandle
 	effectViews       map[string]*spriteView
 	effectViewMiss    map[string]struct{}
 	actorViews        map[actorSpriteKey]*humanoidSpriteView
@@ -414,6 +415,7 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	m.itemMarker = nil
 	m.itemViews = make(map[itemSpriteKey]*spriteView)
 	m.itemViewMiss = make(map[itemSpriteKey]struct{})
+	m.itemViewPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
 	m.effectViews = make(map[string]*spriteView)
 	m.effectViewMiss = make(map[string]struct{})
 	m.actorViews = make(map[actorSpriteKey]*humanoidSpriteView)

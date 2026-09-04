@@ -84,7 +84,42 @@ func (m *WorldMode) applyFloorItemEntry(ctx client.Context, entry network.FloorI
 		DroppedAt:  time.Now(),
 	}
 	ctx.World.UpsertItem(item)
+	// Start warming the drop sprite the instant the server announces the
+	// item — the monster-death frame is the worst possible moment to fetch.
+	m.prefetchItemSprite(ctx.Resources, entry.ItemID, entry.Identified)
 	glog.Debugf("floor item entry id=%d item_id=%d identified=%t amount=%d x=%d y=%d sub=%d,%d falling=%t", item.ID, item.ItemID, item.Identified, item.Amount, item.X, item.Y, item.SubX, item.SubY, item.Falling)
+}
+
+// prefetchItemSprite warms the act/spr pair for a floor item's sprite. The
+// resource name comes from the client's item tables, so no drop-table data
+// from the server is needed — the drop packet itself names the item.
+func (m *WorldMode) prefetchItemSprite(manager *res.Manager, itemID uint16, identified bool) {
+	if manager == nil || itemID == 0 {
+		return
+	}
+	key := itemSpriteKey{itemID: itemID, identified: identified}
+	if m.itemViewPrefetch == nil {
+		m.itemViewPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
+	}
+	if _, pending := m.itemViewPrefetch[key]; pending {
+		return
+	}
+	if m.itemViews != nil && m.itemViews[key] != nil {
+		return
+	}
+	if m.itemViewMiss != nil {
+		if _, missed := m.itemViewMiss[key]; missed {
+			return
+		}
+	}
+	resourceName, ok := manager.ItemResourceName(int(itemID), identified)
+	if !ok {
+		return
+	}
+	m.itemViewPrefetch[key] = manager.Prefetch(
+		res.ItemSpriteResourceCandidates(resourceName, "act"),
+		res.ItemSpriteResourceCandidates(resourceName, "spr"),
+	)
 }
 
 func (m *WorldMode) applyFloorItemDisappear(ctx client.Context, disappear network.FloorItemDisappear) {
@@ -753,6 +788,24 @@ func (m *WorldMode) itemSpriteView(manager *res.Manager, itemID uint16, identifi
 	if !ok {
 		m.itemViewMiss[key] = struct{}{}
 		glog.Warnf("item sprite resource missing item_id=%d identified=%t", itemID, identified)
+		return nil
+	}
+	// Gate the load behind the prefetch started when the drop was announced
+	// (or right here, if this view is reached by another path): draw nothing
+	// until the files are cached, so no frame pays the fetch. The stall
+	// grace falls back to the inline load rather than dropping the sprite.
+	if m.itemViewPrefetch == nil {
+		m.itemViewPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
+	}
+	if handle := m.itemViewPrefetch[key]; handle != nil {
+		if !handle.Done() && !handle.Stalled(prefetchStallGrace) {
+			return nil
+		}
+	} else {
+		m.itemViewPrefetch[key] = manager.Prefetch(
+			res.ItemSpriteResourceCandidates(resourceName, "act"),
+			res.ItemSpriteResourceCandidates(resourceName, "spr"),
+		)
 		return nil
 	}
 	view, status := loadSpriteView(

@@ -423,7 +423,24 @@ func TestMinimapGuildMarkerLifecycle(t *testing.T) {
 	}
 }
 
-func TestMinimapMapChangeClearsGuildMarkers(t *testing.T) {
+func TestMinimapBossMarkerLifecycle(t *testing.T) {
+	var m Minimap
+	m.SetBossMarker(123, 45)
+	if m.boss == nil || m.boss.x != 123 || m.boss.y != 45 {
+		t.Fatalf("boss marker = %+v", m.boss)
+	}
+	revision := m.bossRevision
+	m.SetBossMarker(123, 45)
+	if m.bossRevision != revision {
+		t.Fatal("unchanged boss marker advanced its revision")
+	}
+	m.ClearBossMarker()
+	if m.boss != nil || m.bossRevision != revision+1 {
+		t.Fatalf("cleared boss marker = %+v revision=%d", m.boss, m.bossRevision)
+	}
+}
+
+func TestMinimapMapChangeClearsServerMarkers(t *testing.T) {
 	world := worldstate.New()
 	world.MapName = "prontera"
 	ctx := Context{
@@ -438,10 +455,14 @@ func TestMinimapMapChangeClearsGuildMarkers(t *testing.T) {
 	m := &Minimap{}
 	m.Update(ctx)
 	m.ApplyGuildMemberPosition(2, 10, 20)
+	m.SetBossMarker(30, 40)
 	world.MapName = "payon"
 	m.Update(ctx)
 	if len(m.guild) != 0 {
 		t.Fatalf("guild markers survived map change: %+v", m.guild)
+	}
+	if m.boss != nil {
+		t.Fatalf("boss marker survived map change: %+v", m.boss)
 	}
 }
 

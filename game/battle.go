@@ -2068,10 +2068,13 @@ func actorLifeRatio(value, maxValue int) float64 {
 }
 
 func (m *WorldMode) drawActorCastBar(screen *render.Frame, entry sceneActorDrawEntry, now time.Time) {
-	if entry.actor.ID == 0 || m.actorCastBars == nil {
+	if entry.actor.ID == 0 {
 		return
 	}
-	bar, ok := m.actorCastBars[entry.actor.ID]
+	bar, ok := m.serverProgressBar(entry.isPlayer, now)
+	if !ok && m.actorCastBars != nil {
+		bar, ok = m.actorCastBars[entry.actor.ID]
+	}
 	if !ok {
 		return
 	}

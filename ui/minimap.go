@@ -33,6 +33,7 @@ var (
 	minimapMutedColor  = MutedTextColor
 	minimapPlayerColor = color.RGBA{R: 255, G: 232, B: 96, A: 255}
 	minimapGuildColor  = color.RGBA{R: 255, G: 140, B: 26, A: 255}
+	minimapBossColor   = color.RGBA{R: 255, G: 0, B: 0, A: 255}
 )
 
 type Minimap struct {
@@ -56,6 +57,8 @@ type Minimap struct {
 	compass          map[uint8]minimapCompassMarker
 	compassRevision  uint64
 	compassDrawnRev  uint64
+	boss             *minimapBossMarker
+	bossRevision     uint64
 	guild            map[uint32]minimapGuildMarker
 	guildRevision    uint64
 	guildDrawnRev    uint64
@@ -87,6 +90,11 @@ type minimapGuildMarker struct {
 	y         int
 }
 
+type minimapBossMarker struct {
+	x int
+	y int
+}
+
 type minimapPlayerMarkerState struct {
 	valid bool
 	mapID string
@@ -115,6 +123,7 @@ func (m *Minimap) Update(ctx Context) bool {
 	if mapChanged && previousMap != "" {
 		compassChanged = m.clearCompassMarkers()
 		m.clearGuildMarkers()
+		m.ClearBossMarker()
 	}
 	if m.pruneCompassMarkers(now) {
 		compassChanged = true
@@ -129,6 +138,7 @@ func (m *Minimap) Update(ctx Context) bool {
 	m.widget.now = now
 	m.widget.compassMarkers = m.compassSnapshot()
 	m.widget.guildMarkers = m.guildSnapshot()
+	m.widget.bossMarker = m.boss
 	markerChanged := m.playerMarkerChanged(ctx.World.Player.X, ctx.World.Player.Y, ctx.World.Player.Dir)
 	visualKey := m.currentVisualKey(ctx, now)
 	visualChanged := visualKey != m.visualKey
@@ -320,6 +330,25 @@ func (m *Minimap) ApplyCompass(id uint8, typ, x, y int, rgb uint32, now time.Tim
 	m.markCompassDirty()
 }
 
+func (m *Minimap) SetBossMarker(x, y int) {
+	marker := minimapBossMarker{x: x, y: y}
+	if m.boss != nil && *m.boss == marker {
+		return
+	}
+	m.boss = &marker
+	m.bossRevision++
+	m.markCompassDirty()
+}
+
+func (m *Minimap) ClearBossMarker() {
+	if m.boss == nil {
+		return
+	}
+	m.boss = nil
+	m.bossRevision++
+	m.markCompassDirty()
+}
+
 // ApplyGuildMemberPosition updates one guild member marker. The server uses
 // negative coordinates to remove a member who left the map or went offline.
 func (m *Minimap) ApplyGuildMemberPosition(accountID uint32, x, y int) {
@@ -494,7 +523,7 @@ func (m *Minimap) currentVisualKey(ctx Context, now time.Time) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "map=%s|img=%s|compass=%d|guild=%d", m.mapName, minimapImageStateKey(m.widget.image), m.compassRevision, m.guildRevision)
+	fmt.Fprintf(&b, "map=%s|img=%s|compass=%d|boss=%d|guild=%d", m.mapName, minimapImageStateKey(m.widget.image), m.compassRevision, m.bossRevision, m.guildRevision)
 	if len(m.widget.compassMarkers) > 0 {
 		fmt.Fprintf(&b, "|blink=%d", minimapCompassBlinkPhase(now, ctx.Started))
 		for _, marker := range m.widget.compassMarkers {
@@ -569,6 +598,7 @@ type minimapWidget struct {
 	arrow          image.Image
 	now            time.Time
 	compassMarkers []minimapCompassMarker
+	bossMarker     *minimapBossMarker
 	guildMarkers   []minimapGuildMarker
 	dirtyRect      geometry.Rect
 }
@@ -601,6 +631,7 @@ func (w *minimapWidget) Draw(_ widget.Context, canvas widget.Canvas) {
 		if mapW > 0 && mapH > 0 {
 			drawMinimapGuildMarkers(canvas, rect, mapW, mapH, w.ctx, w.guildMarkers)
 			drawMinimapPartyMarkers(canvas, rect, mapW, mapH, w.ctx)
+			drawMinimapBossMarker(canvas, rect, mapW, mapH, w.bossMarker)
 			drawMinimapPlayerMarker(canvas, rect, mapW, mapH, w.ctx.World.Player.X, w.ctx.World.Player.Y, w.arrow)
 			drawMinimapCompassMarkers(canvas, rect, mapW, mapH, w.compassMarkers, w.now, w.ctx.Started)
 		}
@@ -719,6 +750,17 @@ func drawMinimapCompassMarkers(canvas widget.Canvas, rect minimapRect, mapW, map
 		}
 		drawMinimapCross(canvas, x, y, marker.color)
 	}
+}
+
+func drawMinimapBossMarker(canvas widget.Canvas, rect minimapRect, mapW, mapH int, marker *minimapBossMarker) {
+	if marker == nil {
+		return
+	}
+	x, y, ok := minimapCellToScreen(rect, mapW, mapH, marker.x, marker.y)
+	if !ok {
+		return
+	}
+	drawMinimapCross(canvas, x, y, minimapBossColor)
 }
 
 func drawMinimapPartyMarkers(canvas widget.Canvas, rect minimapRect, mapW, mapH int, ctx Context) {

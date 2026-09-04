@@ -57,20 +57,20 @@ This means the legacy mail system, not a newer RODEX-only implementation. See
 
 - [x] Implement the Sage Auto Spell choice list and send selection packet `0x01CE`.
 - [x] Turn the Star Gladiator place/Feel request into the original confirmation flow instead of only logging it, then send `0x0254`.
-- [ ] Implement the original `/doridori` client behavior and packet `0x01E7`.
+- [x] Implement the original `/doridori` client behavior and packet `0x01E7`.
 - [ ] Verify whether the 2008 Novice Explosion Spirits request (`0x01ED`) needs a distinct client action, then implement it if applicable.
 - [ ] Verify and implement the 2008 auto-revive response (`0x0292`) if it is used by supported gameplay.
 - [ ] Add end-to-end tests ensuring these skills cannot silently stall while waiting for a client response.
 
 ### Server-driven progress and information
 
-- [ ] Parse and render NPC progress-bar start packet `0x02F0`.
-- [ ] Send progress-bar completion/cancel acknowledgement `0x02F1`.
-- [ ] Handle server cancellation (`0x02F2`, if applicable to the 2008 profile).
-- [ ] Ensure the progress display swallows input where the original client did.
-- [ ] Implement server `ShowDigit` countdown displays.
-- [ ] Implement boss information, map marker, death, and respawn-time updates.
-- [ ] Implement remaining skill-message feedback that currently has no dedicated presentation.
+- [x] Parse and render NPC progress-bar start packet `0x02F0`.
+- [x] Send progress-bar completion/cancel acknowledgement `0x02F1`.
+- [x] Handle server cancellation (`0x02F2`, if applicable to the 2008 profile).
+- [x] Ensure the progress display swallows input where the original client did.
+- [x] Implement server `ShowDigit` countdown displays.
+- [x] Implement boss information, map marker, death, and respawn-time updates.
+- [x] Implement remaining skill-message feedback that currently has no dedicated presentation.
 
 ### Storage password
 

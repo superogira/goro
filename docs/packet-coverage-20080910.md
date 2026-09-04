@@ -22,8 +22,8 @@ Status meaning:
 - Effective unique map opcodes: `603`
 - Overwritten historical/remap declarations: `283`
 - Client-to-map packets accepted by rAthena: `177`
-- Effective map opcodes referenced by Goro: `219`
-- Client-to-map accepted packets referenced by Goro: `99` / `177`
+- Effective map opcodes referenced by Goro: `225`
+- Client-to-map accepted packets referenced by Goro: `101` / `177`
 - Unresolved packet aliases in this generated pass: `0`
 
 ## Homunculus Compatibility Notes
@@ -58,6 +58,14 @@ companion UI, AI, skill, and visual coverage.
 | `0x0B76` | S->C | compatibility parser | later homunculus property layout with 32-bit HP/SP | companion_packets.go, packet.go |
 | `0x0BA4` | S->C | compatibility parser | later homunculus property layout with 64-bit EXP | companion_packets.go, packet.go |
 | `0x0BA5` | S->C | compatibility parser | later 64-bit homunculus param change | companion_packets.go, packet.go |
+
+## Server-Driven Display Notes
+
+Goro handles the 2008 ShowDigit clock (`0x01B1`), Convex Mirror boss report
+(`0x0293`), and NPC progress lifecycle (`0x02F0`-`0x02F2`). It also handles
+the fixed Gospel/Full Strip skill notice (`0x0215`); rAthena sends that packet
+to 2008 clients even though it is not declared in the effective map parser
+table used to generate the full table below.
 
 ## High Priority Gaps
 
@@ -353,7 +361,7 @@ email check.
 | `0x01AE` | C->S | implemented | `HEADER_CZ_REQ_MAKINGARROW` | `sizeof( PACKET_CZ_REQ_MAKINGARROW )` | `clif_parse_SelectArrow` | item_packets.go |
 | `0x01AF` | C->S | referenced | `0x01af` | `4` | `clif_parse_ChangeCart` | skill_packets.go |
 | `0x01B0` | S->C | untracked | `0x01b0` | `11` | `-` | - |
-| `0x01B1` | S->C | untracked | `0x01b1` | `7` | `-` | - |
+| `0x01B1` | S->C | implemented | `0x01b1` | `7` | `-` | packet.go, server_info_packets.go |
 | `0x01B2` | C->S | referenced | `0x01b2` | `-1` | `clif_parse_OpenVending` | vending_packets.go |
 | `0x01B5` | S->C | referenced | `0x01b5` | `18` | `-` | packet.go |
 | `0x01B6` | S->C | referenced | `0x01b6` | `114` | `-` | guild_packets.go, packet.go |
@@ -395,7 +403,7 @@ email check.
 | `0x01E4` | S->C | untracked | `0x01e4` | `2` | `-` | - |
 | `0x01E5` | S->C | untracked | `0x01e5` | `6` | `-` | - |
 | `0x01E6` | S->C | untracked | `0x01e6` | `26` | `-` | - |
-| `0x01E7` | C->S | missing | `0x01e7` | `2` | `clif_parse_NoviceDoriDori` | - |
+| `0x01E7` | C->S | implemented | `0x01e7` | `2` | `clif_parse_NoviceDoriDori` | novice_packets.go |
 | `0x01E8` | C->S | implemented | `HEADER_CZ_MAKE_GROUP2` | `sizeof( PACKET_CZ_MAKE_GROUP2 )` | `clif_parse_CreateParty2` | party_packets.go |
 | `0x01EC` | S->C | untracked | `0x01ec` | `26` | `-` | - |
 | `0x01ED` | C->S | missing | `0x01ed` | `2` | `clif_parse_NoviceExplosionSpirits` | - |
@@ -541,7 +549,7 @@ email check.
 | `0x028F` | S->C | untracked | `0x028f` | `6` | `-` | - |
 | `0x0290` | S->C | untracked | `0x0290` | `4` | `-` | - |
 | `0x0292` | C->S | missing | `0x0292` | `2` | `clif_parse_AutoRevive` | - |
-| `0x0293` | S->C | untracked | `0x0293` | `70` | `-` | - |
+| `0x0293` | S->C | implemented | `0x0293` | `70` | `-` | packet.go, server_info_packets.go |
 | `0x0294` | S->C | untracked | `0x0294` | `10` | `-` | - |
 | `0x029B` | S->C | implemented | `0x029b` | `80` | `-` | companion_packets.go, packet.go |
 | `0x029C` | S->C | implemented | `0x029c` | `66` | `-` | companion_packets.go, packet.go |
@@ -615,9 +623,9 @@ email check.
 | `0x02ED` | S->C | referenced | `0x02ed` | `59` | `-` | actor_packets.go, packet.go |
 | `0x02EE` | S->C | referenced | `0x02ee` | `60` | `-` | actor_packets.go, packet.go |
 | `0x02EF` | S->C | referenced | `0x02ef` | `8` | `-` | packet.go |
-| `0x02F0` | S->C | untracked | `0x02f0` | `10` | `-` | - |
-| `0x02F1` | C->S | missing | `0x02f1` | `2` | `clif_parse_progressbar` | - |
-| `0x02F2` | S->C | untracked | `0x02f2` | `2` | `-` | - |
+| `0x02F0` | S->C | implemented | `0x02f0` | `10` | `-` | packet.go, server_info_packets.go |
+| `0x02F1` | C->S | implemented | `0x02f1` | `2` | `clif_parse_progressbar` | server_info_packets.go |
+| `0x02F2` | S->C | implemented | `0x02f2` | `2` | `-` | packet.go, server_info_packets.go |
 | `0x02F3` | S->C | untracked | `0x02f3` | `-1` | `-` | - |
 | `0x02F4` | S->C | untracked | `0x02f4` | `-1` | `-` | - |
 | `0x02F5` | S->C | untracked | `0x02f5` | `-1` | `-` | - |

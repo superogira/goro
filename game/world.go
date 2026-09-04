@@ -58,6 +58,8 @@ type WorldMode struct {
 	cursorLevelNums   map[string]*spriteBillboard
 	damageMsgView     *spriteView
 	damageMsgMiss     bool
+	timeFontView      *spriteView
+	timeFontMiss      bool
 	itemMarker        *render.Image
 	itemViews         map[itemSpriteKey]*spriteView
 	itemViewMiss      map[itemSpriteKey]struct{}
@@ -115,6 +117,8 @@ type WorldMode struct {
 	damageFloaters    []damageFloater
 	worldEffects      []worldEffect
 	actorCastBars     map[uint32]actorCastBar
+	serverProgress    serverProgressState
+	showDigit         showDigitState
 	scheduledSounds   []scheduledSound
 	scheduledStops    []scheduledActorStop
 	scheduledResumes  []scheduledWalkResume
@@ -151,6 +155,7 @@ type worldUI struct {
 	perfHUD              gameui.PerfHUD
 	levelUpNotifications gameui.LevelUpNotifications
 	announcement         gameui.Announcement
+	poptips              gameui.Poptips
 	console              gameui.ChatConsole
 	npcDialog            gameui.NPCDialog
 	npcCutin             gameui.NPCCutinOverlay
@@ -413,6 +418,8 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	m.cursorLevelNums = make(map[string]*spriteBillboard)
 	m.damageMsgView = nil
 	m.damageMsgMiss = false
+	m.timeFontView = nil
+	m.timeFontMiss = false
 	m.itemMarker = nil
 	m.itemViews = make(map[itemSpriteKey]*spriteView)
 	m.itemViewMiss = make(map[itemSpriteKey]struct{})
@@ -456,6 +463,10 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	m.lastChaseAt = time.Time{}
 	m.actorAnims = make(map[uint32]actorAnimation)
 	m.damageFloaters = nil
+	m.serverProgress = serverProgressState{}
+	m.showDigit = showDigitState{}
+	m.ui.minimap.ClearBossMarker()
+	m.ui.poptips.Clear()
 	m.scheduledSounds = nil
 	m.scheduledStops = nil
 	m.mapSoundNext = make(map[int]time.Time)
@@ -532,6 +543,9 @@ func (m *WorldMode) Enter(ctx client.Context) {
 		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, nil, nil)
 		m.playMapBGM(ctx, ctx.World.MapName)
 	}
+	// Server-driven digit displays load their sprite on first use; warm it
+	// with the rest of the map.
+	ctx.Resources.Prefetch(serverDigitSpritePrefetchGroups()...)
 	if err := ctx.Network.SendLoadEndAck(); err == nil {
 		m.tickCooldown = 1
 	}
@@ -647,19 +661,21 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if ctx.Config.Render.Stats {
 		m.ui.perfHUD.Update(ctx)
 	}
-	if m.handleLevelUpNotificationAction(ctx, m.ui.levelUpNotifications.Update(ctx)) {
+	progressBlocksActions := m.updateServerProgress(ctx, now)
+	if !progressBlocksActions && m.handleLevelUpNotificationAction(ctx, m.ui.levelUpNotifications.Update(ctx)) {
 		// The notification click belongs exclusively to the UI. Returning here
 		// prevents the same press from reaching the map after the icon closes.
 		return nil, nil
 	}
-
-	m.updatePendingAttack(ctx, "update", false)
-	m.processPendingAttack(ctx)
-	m.updatePendingPickup(ctx, "update", false)
-	m.processPendingPickup(ctx)
-	m.skills().UpdatePendingTarget(ctx, "update", false)
-	m.skills().ProcessPendingTarget(ctx)
-	m.processLockedAttack(ctx)
+	if !progressBlocksActions {
+		m.updatePendingAttack(ctx, "update", false)
+		m.processPendingAttack(ctx)
+		m.updatePendingPickup(ctx, "update", false)
+		m.processPendingPickup(ctx)
+		m.skills().UpdatePendingTarget(ctx, "update", false)
+		m.skills().ProcessPendingTarget(ctx)
+		m.processLockedAttack(ctx)
+	}
 	now = time.Now()
 	m.cleanupDeadActors(ctx, now)
 	m.cleanupVanishedActors(ctx, now)
@@ -685,6 +701,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	m.ui.console.UpdatePresentation(ctx)
+	if progressBlocksActions {
+		return nil, nil
+	}
 	if m.updateStoragePasswordWindow(ctx) {
 		return nil, nil
 	}
@@ -1334,6 +1353,10 @@ func (m *WorldMode) requestSessionGuildEmblem(ctx client.Context) {
 }
 
 func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange) Mode {
+	m.clearServerProgress()
+	m.showDigit = showDigitState{}
+	m.ui.minimap.ClearBossMarker()
+	m.ui.poptips.Clear()
 	m.pendingAttack = attackIntent{}
 	m.clearLockedAttack()
 	m.clearAttackFocus()
@@ -1568,7 +1591,9 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 		return
 	}
 	now := time.Now()
+	m.drawShowDigit(screen, ctx, now)
 	m.ui.announcement.Draw(screen, now)
+	m.ui.poptips.Draw(screen, now)
 	m.ui.inventoryBag.DrawTooltip(ctx, screen)
 	m.ui.equipmentWindow.DrawTooltip(ctx, screen)
 	m.ui.cartWindow.DrawTooltip(ctx, screen)

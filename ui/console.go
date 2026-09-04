@@ -27,6 +27,9 @@ const (
 	consoleMaxHistory = 20
 	consoleFieldH     = 24
 	consoleLineH      = 14
+	doriDoriTurns     = 5
+	doriDoriMinSpan   = 1500 * time.Millisecond
+	doriDoriMaxSpan   = 3 * time.Second
 )
 
 var (
@@ -55,6 +58,7 @@ type ChatConsole struct {
 	hasPendingSubmit bool
 	lastMessage      string
 	lastMessageAt    time.Time
+	doriDoriTimes    [doriDoriTurns]time.Time
 
 	OnGuildWindow func()
 
@@ -304,6 +308,9 @@ func (c *ChatConsole) SubmitCommand(ctx client.Context, text string) bool {
 		return true
 	case "/stand":
 		c.submitSitStand(ctx, false)
+		return true
+	case "/doridori":
+		c.submitDoriDori(ctx, time.Now())
 		return true
 	case "/noshift", "/ns":
 		if ctx.Session == nil {
@@ -832,6 +839,53 @@ func (c *ChatConsole) submitSitStand(ctx client.Context, sit bool) {
 	}
 	c.setInput("")
 	c.setActive(false)
+}
+
+func (c *ChatConsole) submitDoriDori(ctx client.Context, now time.Time) {
+	defer func() {
+		c.setInput("")
+		c.setActive(false)
+	}()
+	if ctx.World == nil {
+		c.AddErrorMessage("doridori failed: no world")
+		return
+	}
+	if ctx.Network == nil {
+		c.AddErrorMessage("send failed: not connected")
+		return
+	}
+
+	headDir := nextDoriDoriHeadDir(ctx.World.Player.HeadDir)
+	if err := ctx.Network.SendChangeDirection(headDir, uint8(ctx.World.Player.Dir)); err != nil {
+		c.AddErrorMessage("send failed: %s", err)
+		return
+	}
+	ctx.World.Player.HeadDir = headDir
+
+	if ctx.World.Player.Sitting && recordDoriDoriTurn(&c.doriDoriTimes, now) {
+		c.doriDoriTimes = [doriDoriTurns]time.Time{}
+		if err := ctx.Network.SendDoriDori(); err != nil {
+			c.AddErrorMessage("send failed: %s", err)
+			return
+		}
+	}
+}
+
+func nextDoriDoriHeadDir(current uint8) uint8 {
+	if current == 1 {
+		return 2
+	}
+	return 1
+}
+
+func recordDoriDoriTurn(turns *[doriDoriTurns]time.Time, now time.Time) bool {
+	copy(turns[:], turns[1:])
+	turns[len(turns)-1] = now
+	if turns[0].IsZero() {
+		return false
+	}
+	span := turns[len(turns)-1].Sub(turns[0])
+	return span > doriDoriMinSpan && span < doriDoriMaxSpan
 }
 
 func consolePlayerSitting(ctx client.Context) bool {

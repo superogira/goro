@@ -6,6 +6,7 @@
   - [x] Quit game: 0x018A QuitGame
   - [x] Less effects toggle: 0x021D LessEffect
   - [x] Hotkey save: 0x02BA Hotkey
+  - [x] Server ShowDigit clock, boss reports/marker, and fixed skill notices: 0x01B1, 0x0215, 0x0293
 
   NPC Dialogs
 
@@ -104,13 +105,13 @@
 
   - [ ] Quest state ack: 0x02B6
   - [ ] Memorial dungeon command: 0x02CF
-  - [ ] Progress bar ack/cancel: 0x02F1 progressbar
+  - [x] Server-owned NPC progress bar start/completion/cancel: 0x02F0, 0x02F1, 0x02F2
 
   Class-Specific / Skill Dialog Choices
 
   - [x] Wizard and mercenary Sense monster information: 0x018C
   - [x] Sage autospell choice list and selection: 0x01CD, 0x01CE
-  - [ ] Novice dori-dori: 0x01E7
+  - [x] Novice dori-dori command, head motion, and recovery bonus: 0x01E7
   - [ ] Novice explosion spirits: 0x01ED
   - [x] Star Gladiator feel save confirmation: 0x0253, 0x0254
   - [ ] Auto-revive: 0x0292

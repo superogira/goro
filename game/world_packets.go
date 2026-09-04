@@ -71,6 +71,36 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		m.ui.shortcutBar.SyncFromSession(ctx)
 		return nil, false
 	}
+	if show, ok, err := network.ParseShowDigit(pkt); err != nil {
+		glog.Errorf("parse show digit 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.showDigit = newShowDigitState(show, now)
+		return nil, false
+	}
+	if message, ok, err := network.ParseSkillMessage(pkt); err != nil {
+		glog.Errorf("parse skill message 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.applySkillMessage(message, now)
+		return nil, false
+	}
+	if info, ok, err := network.ParseBossInfo(pkt); err != nil {
+		glog.Errorf("parse boss information 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.applyBossInfo(info)
+		return nil, false
+	}
+	if progress, ok, err := network.ParseProgressBar(pkt); err != nil {
+		glog.Errorf("parse progress bar 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.startServerProgress(ctx, progress, now)
+		return nil, false
+	}
+	if ok, err := network.ParseProgressBarCancel(pkt); err != nil {
+		glog.Errorf("parse progress bar cancellation 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.finishServerProgress(ctx, "server cancel")
+		return nil, false
+	}
 	if chat, ok, err := network.ParseChatMessage(pkt); err != nil {
 		glog.Errorf("parse chat message 0x%04X: %v", pkt.ID, err)
 	} else if ok {

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gogpu/ui/event"
 	"github.com/kivutar/goro/client"
@@ -128,6 +129,9 @@ func TestConsoleMemoCommandWithoutNetwork(t *testing.T) {
 	if len(console.messages) != 1 || console.messages[0].Text != "send failed: not connected" {
 		t.Fatalf("console messages = %+v", console.messages)
 	}
+	if console.active || console.input != "" {
+		t.Fatalf("console active=%t input=%q, want closed empty input", console.active, console.input)
+	}
 }
 
 func TestConsoleBreakGuildCommandIsHandledLocally(t *testing.T) {
@@ -155,6 +159,56 @@ func TestConsoleTaekwonCommandWithoutNetwork(t *testing.T) {
 	}
 	if len(console.messages) != 1 || console.messages[0].Text != "send failed: not connected" {
 		t.Fatalf("console messages = %+v", console.messages)
+	}
+}
+
+func TestConsoleDoriDoriCommandWithoutNetwork(t *testing.T) {
+	console := &ChatConsole{input: "/doridori", active: true}
+	world := worldstate.New()
+
+	if !console.SubmitCommand(client.Context{World: world}, "/doridori") {
+		t.Fatal("doridori command was not handled")
+	}
+	if world.Player.HeadDir != 0 {
+		t.Fatalf("head direction = %d after failed send, want unchanged", world.Player.HeadDir)
+	}
+	if len(console.messages) != 1 || console.messages[0].Text != "send failed: not connected" {
+		t.Fatalf("console messages = %+v", console.messages)
+	}
+}
+
+func TestDoriDoriHeadDirectionAlternates(t *testing.T) {
+	if got := nextDoriDoriHeadDir(0); got != 1 {
+		t.Fatalf("center head direction became %d, want 1", got)
+	}
+	if got := nextDoriDoriHeadDir(1); got != 2 {
+		t.Fatalf("left head direction became %d, want 2", got)
+	}
+	if got := nextDoriDoriHeadDir(2); got != 1 {
+		t.Fatalf("right head direction became %d, want 1", got)
+	}
+}
+
+func TestDoriDoriRecoveryTiming(t *testing.T) {
+	start := time.Unix(100, 0)
+	var turns [doriDoriTurns]time.Time
+	for i := 0; i < doriDoriTurns-1; i++ {
+		if recordDoriDoriTurn(&turns, start.Add(time.Duration(i)*500*time.Millisecond)) {
+			t.Fatalf("recovery triggered after %d turns", i+1)
+		}
+	}
+	if !recordDoriDoriTurn(&turns, start.Add(2*time.Second)) {
+		t.Fatal("five turns spanning two seconds did not trigger recovery")
+	}
+
+	for _, span := range []time.Duration{1500 * time.Millisecond, 3 * time.Second} {
+		turns = [doriDoriTurns]time.Time{}
+		for i := 0; i < doriDoriTurns; i++ {
+			at := start.Add(time.Duration(i) * span / (doriDoriTurns - 1))
+			if got := recordDoriDoriTurn(&turns, at); got {
+				t.Fatalf("boundary span %s triggered recovery", span)
+			}
+		}
 	}
 }
 

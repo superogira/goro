@@ -65,10 +65,12 @@ type WorldMode struct {
 	effectViewMiss    map[string]struct{}
 	actorViews        map[actorSpriteKey]*humanoidSpriteView
 	actorViewMiss     map[actorSpriteKey]struct{}
+	actorViewPrefetch map[actorSpriteKey]*res.PrefetchHandle
 	mercenaryViews    map[actorSpriteKey]*humanoidSpriteView
 	mercenaryViewMiss map[actorSpriteKey]struct{}
 	nonPCViews        map[int]*spriteView
 	nonPCViewMiss     map[int]struct{}
+	nonPCViewPrefetch map[int]*res.PrefetchHandle
 	gr2Models         map[int]*gr2ModelView
 	gr2ModelMiss      map[int]struct{}
 	petAccessoryIDs   map[uint32]uint32
@@ -416,10 +418,12 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	m.effectViewMiss = make(map[string]struct{})
 	m.actorViews = make(map[actorSpriteKey]*humanoidSpriteView)
 	m.actorViewMiss = make(map[actorSpriteKey]struct{})
+	m.actorViewPrefetch = make(map[actorSpriteKey]*res.PrefetchHandle)
 	m.mercenaryViews = make(map[actorSpriteKey]*humanoidSpriteView)
 	m.mercenaryViewMiss = make(map[actorSpriteKey]struct{})
 	m.nonPCViews = make(map[int]*spriteView)
 	m.nonPCViewMiss = make(map[int]struct{})
+	m.nonPCViewPrefetch = make(map[int]*res.PrefetchHandle)
 	m.gr2Models = make(map[int]*gr2ModelView)
 	m.gr2ModelMiss = make(map[int]struct{})
 	m.petAccessoryIDs = make(map[uint32]uint32)

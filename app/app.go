@@ -78,6 +78,9 @@ func (g *Game) Update() error {
 	defer g.input.EndFrame()
 	g.network.Pump()
 	g.modes.UpdateContext(g.modeContext())
+	// Drive resource prefetching: the web build warms sprite files between
+	// frames so a first-seen actor never stalls the frame on network reads.
+	res.PrefetchTick()
 	return g.modes.Update()
 }
 

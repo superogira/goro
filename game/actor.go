@@ -1411,6 +1411,22 @@ func (m *WorldMode) drawActorSprite3D(screen *render.Frame, ctx client.Context, 
 	}
 	view, ok := m.actorViews[key]
 	if !ok {
+		// First sight of this appearance: warm the file cache in the
+		// background instead of blocking this frame on a burst of network
+		// round trips. The sprite pops in a few frames later; the frame
+		// that discovered it stays smooth. Once the handle reports done,
+		// the synchronous load below is served from the cache.
+		handle := m.actorViewPrefetch[key]
+		if handle == nil {
+			if m.actorViewPrefetch == nil {
+				m.actorViewPrefetch = make(map[actorSpriteKey]*res.PrefetchHandle)
+			}
+			m.actorViewPrefetch[key] = ctx.Resources.Prefetch(humanoidSpriteViewPrefetchGroups(ctx.Resources, humanoidAppearance(key))...)
+			return false
+		}
+		if !handle.Done() && !handle.Stalled(prefetchStallGrace) {
+			return false
+		}
 		loaded, status := loadHumanoidSpriteViewWithAppearance(ctx.Resources, humanoidAppearance(key), "actor")
 		if loaded == nil {
 			m.actorViewMiss[key] = struct{}{}
@@ -1575,6 +1591,20 @@ func (m *WorldMode) nonPCSpriteView(ctx client.Context, actor worldstate.Actor) 
 		return m.petAccessorySpriteView(ctx, actor, view)
 	}
 	if ctx.Resources == nil {
+		return nil
+	}
+	// Same background-warming pattern as drawActorSprite3D: the first frame
+	// that sees this monster/NPC kicks a prefetch and draws nothing; the
+	// real load runs once the fetches settled, hitting only the file cache.
+	handle := m.nonPCViewPrefetch[job]
+	if handle == nil {
+		if m.nonPCViewPrefetch == nil {
+			m.nonPCViewPrefetch = make(map[int]*res.PrefetchHandle)
+		}
+		m.nonPCViewPrefetch[job] = ctx.Resources.Prefetch(nonPCSpriteViewPrefetchGroups(ctx.Resources, job)...)
+		return nil
+	}
+	if !handle.Done() && !handle.Stalled(prefetchStallGrace) {
 		return nil
 	}
 	loaded, status := loadNonPCSpriteView(ctx.Resources, job, "nonpc")

@@ -11,6 +11,11 @@ import (
 	"github.com/kivutar/goro/session"
 )
 
+// prefetchStallGrace bounds how long a draw path waits on a background
+// prefetch before falling back to the old synchronous load, so a wedged
+// fetch can never make a sprite permanently invisible.
+const prefetchStallGrace = 5 * time.Second
+
 func loadPlayerHumanoidSpriteView(manager *res.Manager, character session.Character, sex byte, admin bool) (*humanoidSpriteView, string) {
 	weapon, shield := res.NormalizePlayerWeaponShield(int(character.Weapon), int(character.Shield))
 	return loadHumanoidSpriteViewWithAppearance(manager, humanoidAppearance{
@@ -79,6 +84,81 @@ func loadHumanoidSpriteView(manager *res.Manager, job int, head int, sex byte, b
 		bodyPalette: bodyPalette,
 		headPalette: headPalette,
 	}, label)
+}
+
+// humanoidSpriteViewPrefetchGroups lists the candidate files
+// loadHumanoidSpriteViewWithAppearance will read, grouped so each group
+// matches one readFirstResource call (first existing candidate wins). Keep
+// in sync with the loader; the loader remains the source of truth and
+// prefetching a wrong file only costs one background request.
+func humanoidSpriteViewPrefetchGroups(manager *res.Manager, appearance humanoidAppearance) [][]string {
+	var groups [][]string
+	bodyACT := res.PlayerBodyResourceCandidates(appearance.job, appearance.sex, "act")
+	bodySPR := res.PlayerBodyResourceCandidates(appearance.job, appearance.sex, "spr")
+	if appearance.admin {
+		bodyACT = append(res.PlayerAdminBodyResourceCandidates(appearance.sex, "act"), bodyACT...)
+		bodySPR = append(res.PlayerAdminBodyResourceCandidates(appearance.sex, "spr"), bodySPR...)
+	}
+	groups = append(groups,
+		bodyACT,
+		bodySPR,
+		res.PlayerBodyPaletteResourceCandidates(appearance.job, appearance.sex, appearance.bodyPalette, "pal"),
+		res.PlayerHeadResourceCandidates(appearance.job, appearance.head, appearance.sex, "act"),
+		res.PlayerHeadResourceCandidates(appearance.job, appearance.head, appearance.sex, "spr"),
+		res.PlayerHeadPaletteResourceCandidates(appearance.job, appearance.head, appearance.sex, appearance.headPalette, "pal"),
+		res.PlayerIMFResourceCandidates(appearance.job, appearance.sex),
+	)
+	for _, viewID := range []int{appearance.headLow, appearance.headMid, appearance.headTop} {
+		if viewID <= 0 {
+			continue
+		}
+		resourceName := ""
+		if manager != nil {
+			resourceName, _ = manager.AccessoryResourceName(viewID)
+		}
+		if viewID != 185 && resourceName == "" {
+			continue
+		}
+		groups = append(groups,
+			res.PlayerAccessoryResourceCandidates(appearance.job, appearance.head, appearance.sex, viewID, resourceName, "act"),
+			res.PlayerAccessoryResourceCandidates(appearance.job, appearance.head, appearance.sex, viewID, resourceName, "spr"),
+		)
+	}
+	if appearance.weapon > 0 {
+		viewID := appearance.weapon
+		if manager != nil {
+			viewID = manager.PlayerWeaponViewID(appearance.weapon)
+		}
+		groups = append(groups,
+			res.PlayerWeaponOverlayResourceCandidatesForItem(appearance.job, appearance.sex, appearance.weapon, viewID, false, "act"),
+			res.PlayerWeaponOverlayResourceCandidatesForItem(appearance.job, appearance.sex, appearance.weapon, viewID, false, "spr"),
+			res.PlayerWeaponOverlayResourceCandidatesForItem(appearance.job, appearance.sex, appearance.weapon, viewID, true, "act"),
+			res.PlayerWeaponOverlayResourceCandidatesForItem(appearance.job, appearance.sex, appearance.weapon, viewID, true, "spr"),
+		)
+	}
+	if appearance.shield > 0 {
+		groups = append(groups,
+			res.PlayerShieldOverlayResourceCandidates(appearance.job, appearance.sex, appearance.shield, "act"),
+			res.PlayerShieldOverlayResourceCandidates(appearance.job, appearance.sex, appearance.shield, "spr"),
+		)
+	}
+	return groups
+}
+
+// nonPCSpriteViewPrefetchGroups lists the candidate files
+// loadNonPCSpriteView will read for the given job.
+func nonPCSpriteViewPrefetchGroups(manager *res.Manager, job int) [][]string {
+	if manager == nil || actorJobHasNoSprite(job) {
+		return nil
+	}
+	resourceName, ok := manager.NonPCResourceName(job)
+	if !ok || isGR2Resource(resourceName) {
+		return nil
+	}
+	return [][]string{
+		res.NonPCSpriteResourceCandidates(job, resourceName, "act"),
+		res.NonPCSpriteResourceCandidates(job, resourceName, "spr"),
+	}
 }
 
 func loadHumanoidSpriteViewWithAppearance(manager *res.Manager, appearance humanoidAppearance, label string) (*humanoidSpriteView, string) {

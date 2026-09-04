@@ -144,33 +144,27 @@ func (m *Manager) apply() {
 
 	m.root.children = append(m.root.children[:0], m.overlays...)
 
-	addedNeedsFull := false
+	added := false
 	for _, overlay := range m.overlays {
 		if wasChild(overlay) {
 			continue
 		}
-		// Added overlay: mount so lifecycle bindings run and mark the tree
-		// dirty, then damage ONLY the overlay's bounds. A full repaint here
-		// made every hover tooltip (overlay add + remove per hover) raster
-		// the whole screen — 150ms a frame. Partial damage keeps the shared
-		// image cache; the raster cost scales with the union of dirty rects.
+		// Added overlay: mount so lifecycle bindings run, then escalate to a
+		// full repaint. SetRoot normally does both; attaching in place
+		// skips them, and an unmounted subtree neither hit-tests nor paints
+		// (its boundaries serve an empty cached scene), even when the
+		// wrapper already carries pre-computed bounds. The full repaint
+		// keeps the shared image cache, so unaffected windows re-blit from
+		// cache instead of re-rastering.
 		if m.app != nil {
 			if ctx := m.app.WidgetContext(); ctx != nil {
 				widget.MountTree(overlay, ctx)
 			}
 		}
 		widget.MarkRedrawInTree(overlay)
-		if bounds := overlayBounds(overlay); !bounds.IsEmpty() {
-			if m.app != nil {
-				m.app.InvalidateRect(bounds)
-			}
-		} else {
-			addedNeedsFull = true
-		}
+		added = true
 	}
-	if addedNeedsFull && m.app != nil {
-		// No bounds yet (never laid out): fall back to a full repaint so
-		// the overlay cannot silently fail to appear.
+	if added && m.app != nil {
 		m.app.RequestFullRepaint()
 	}
 }

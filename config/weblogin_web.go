@@ -34,4 +34,10 @@ func applyWebLoginQuery(cfg *Config) {
 	if query.Get("stats") == "1" {
 		cfg.Render.Stats = true
 	}
+	if query.Get("nobg") == "1" {
+		cfg.Login.DebugNoBackground = true
+	}
+	if query.Get("nowin") == "1" {
+		cfg.Login.DebugNoWindow = true
+	}
 }

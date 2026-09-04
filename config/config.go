@@ -44,6 +44,10 @@ type LoginConfig struct {
 	Password  string
 	AutoLogin bool
 	CharSlot  int
+	// Debug-only switches for title-screen profiling (?nobg=1 / ?nowin=1):
+	// draw the screen without the background art or without any window.
+	DebugNoBackground bool
+	DebugNoWindow     bool
 }
 
 type AudioConfig struct {

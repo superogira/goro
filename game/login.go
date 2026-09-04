@@ -711,6 +711,10 @@ func (m *LoginMode) updateFade(ctx client.Context, now time.Time) bool {
 
 func (m *LoginMode) publishPhaseWindow(ctx client.Context) {
 	m.clearLoginWindows(ctx)
+	if ctx.Config.Login.DebugNoWindow {
+		// Profiling mode (?nowin=1): keep the mode running, publish nothing.
+		return
+	}
 	switch m.phase {
 	case loginPhaseCharacter:
 		m.showCharacterSelectWindow(ctx)
@@ -825,6 +829,11 @@ func (m *LoginMode) submitSelectedCharacter(ctx client.Context) {
 }
 
 func (m *LoginMode) drawBackground(ctx client.Context, screen *render.Frame) {
+	if ctx.Config.Login.DebugNoBackground {
+		// Profiling mode (?nobg=1): plain fill, no art, no tiles.
+		screen.Fill(color.Black)
+		return
+	}
 	screen.Fill(color.Black)
 	width, height := ctx.ScreenSize()
 	if width <= 0 || height <= 0 {
@@ -864,7 +873,7 @@ func (m *LoginMode) drawBackground(ctx client.Context, screen *render.Frame) {
 }
 
 func (m *LoginMode) loadBackground(ctx client.Context) {
-	if m.bgLoaded {
+	if m.bgLoaded || ctx.Config.Login.DebugNoBackground {
 		return
 	}
 	m.bgLoaded = true

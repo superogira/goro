@@ -197,13 +197,21 @@ func (m *WorldMode) updateCameraRotation(ctx client.Context) {
 		return
 	}
 	delta := 0.0
+	screenW, _ := ctx.ScreenSize()
 	if ctx.Input.MousePressed(input.MouseButtonRight) {
-		screenW, _ := ctx.ScreenSize()
 		if ctx.Input.Pressed(input.KeyShift) {
 			m.camera.Tilt(cameraDragPitchDelta(ctx.Input.MouseDY))
 			return
 		}
 		delta = cameraDragYawDelta(ctx.Input.MouseDX, screenW)
+	}
+	// Two-finger pan rotates the camera with the same sensitivity as
+	// right-drag; the vertical component tilts (bounded as usual).
+	if panDX := ctx.Input.GesturePanDX; panDX != 0 {
+		delta += cameraDragYawDelta(int(panDX), screenW)
+	}
+	if panDY := ctx.Input.GesturePanDY; math.Abs(panDY) >= 2 {
+		m.camera.Tilt(cameraDragPitchDelta(int(panDY)))
 	}
 	if delta != 0 {
 		m.camera.Rotate(delta)
@@ -220,6 +228,11 @@ func (m *WorldMode) updateCameraZoom(ctx client.Context) {
 	}
 	if ctx.Input.PinchDelta != 0 {
 		factor *= cameraPinchZoomFactor(ctx.Input.PinchDelta)
+	}
+	// Two-finger pinch: the gesture reports a distance ratio (>1 = fingers
+	// spread = zoom in), which is the inverse of the zoom factor.
+	if zoom := ctx.Input.GestureZoom; zoom > 0 && zoom != 1 {
+		m.camera.ZoomBy(1 / zoom)
 	}
 	if factor != 1 {
 		m.camera.ZoomBy(factor)

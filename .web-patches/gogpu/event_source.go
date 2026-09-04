@@ -39,6 +39,12 @@ type eventSourceAdapter struct {
 
 	// Gesture recognizer for computing gesture deltas from pointer events
 	gestureRecognizer *GestureRecognizer
+
+	// touchGestureActive latches while a multi-touch gesture owns the touch
+	// stream: touch pointers stop feeding the legacy mouse handlers (which
+	// would otherwise walk/click from the first finger mid-gesture) until
+	// every touch pointer is up.
+	touchGestureActive bool
 }
 
 // OnKeyPress registers a callback for key press events.
@@ -298,6 +304,30 @@ func (e *eventSourceAdapter) dispatchPointerEvent(ev gpucontext.PointerEvent) {
 		e.gestureRecognizer.HandlePointer(ev)
 	}
 
+	// Two-finger gestures own the touch stream. Once a second finger lands,
+	// the legacy mouse mapping (which drives walking and UI clicks from the
+	// first finger) must stop, and a drag already in progress is released so
+	// the character doesn't keep walking mid-gesture. The latch holds until
+	// every touch pointer is up, so lifting one finger doesn't turn the
+	// remaining finger into a phantom tap. Mouse pointers never latch.
+	touchLike := ev.PointerType == gpucontext.PointerTypeTouch || ev.PointerType == gpucontext.PointerTypePen
+	if touchLike {
+		if e.touchGestureActive {
+			if e.gestureRecognizer == nil || e.gestureRecognizer.NumActivePointers() == 0 {
+				e.touchGestureActive = false
+			}
+			return
+		}
+		if compatMouseFromTouch && ev.Type == gpucontext.PointerDown &&
+			e.gestureRecognizer != nil && e.gestureRecognizer.NumActivePointers() >= 2 {
+			e.touchGestureActive = true
+			if e.onMouseRelease != nil {
+				e.onMouseRelease(gpucontext.MouseButtonLeft, ev.X, ev.Y)
+			}
+			return
+		}
+	}
+
 	// Also dispatch to legacy mouse handlers for backward compatibility.
 	// Mouse pointers always feed them. Touch/pen pointers do too on the
 	// browser build (compatMouseFromTouch): the platform suppresses the
@@ -357,6 +387,7 @@ func (e *eventSourceAdapter) dispatchEndFrame() {
 //
 //nolint:unused // Will be called by platform handlers in EVENT-006
 func (e *eventSourceAdapter) resetGestureRecognizer() {
+	e.touchGestureActive = false
 	if e.gestureRecognizer != nil {
 		e.gestureRecognizer.Reset()
 	}

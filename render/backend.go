@@ -438,6 +438,7 @@ type fanoutEventSource struct {
 	imeCompositionStart  []func()
 	imeCompositionEnd    []func(string)
 	imeCompositionUpdate []func(gpucontext.IMEState)
+	gesture              []func(gpucontext.GestureEvent)
 }
 
 func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
@@ -502,7 +503,21 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 			fn(committed)
 		}
 	})
+	// Gesture events are computed at the platform's end of frame; forward
+	// them through the fanout so every subscriber (game input, UI) shares
+	// the single OnGesture registration slot.
+	if gestureSource, ok := source.(gpucontext.GestureEventSource); ok {
+		gestureSource.OnGesture(func(ev gpucontext.GestureEvent) {
+			for _, fn := range f.gesture {
+				fn(ev)
+			}
+		})
+	}
 	return f
+}
+
+func (f *fanoutEventSource) OnGesture(fn func(gpucontext.GestureEvent)) {
+	f.gesture = append(f.gesture, fn)
 }
 
 func (f *fanoutEventSource) OnKeyPress(fn func(gpucontext.Key, gpucontext.Modifiers)) {
@@ -581,6 +596,14 @@ func wireInput(events gpucontext.EventSource, state *input.State) {
 	events.OnScroll(func(x, y float64) {
 		state.AddWheel(x, y)
 	})
+	// Two-finger gestures (pinch zoom, pan) arrive once per frame from the
+	// gesture recognizer; on desktop nothing registers until a second
+	// pointer exists, so mouse-driven camera control is untouched.
+	if gestureSource, ok := events.(gpucontext.GestureEventSource); ok {
+		gestureSource.OnGesture(func(ev gpucontext.GestureEvent) {
+			state.ApplyGesture(ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
+		})
+	}
 	events.OnTextInput(func(text string) {
 		state.AddTextInput(text)
 	})

@@ -87,6 +87,13 @@ type State struct {
 
 	WheelX        float64
 	WheelY        float64
+	// GestureZoom is the two-finger pinch ratio for this frame (0 = none,
+	// 1 = no change, >1 = fingers spread apart = zoom in).
+	GestureZoom float64
+	// GesturePanDX/GesturePanDY are the two-finger pan movement in pixels
+	// for this frame (the centroid travel of the gesture).
+	GesturePanDX float64
+	GesturePanDY float64
 	textInput     []rune
 	TouchPoints   []TouchPoint
 	PinchDelta    float64
@@ -152,6 +159,9 @@ func (s *State) EndFrame() {
 	s.MouseDY = 0
 	s.WheelX = 0
 	s.WheelY = 0
+	s.GestureZoom = 0
+	s.GesturePanDX = 0
+	s.GesturePanDY = 0
 	s.textInput = s.textInput[:0]
 	s.updateTouches()
 }
@@ -199,6 +209,17 @@ func (s *State) SetMousePosition(x, y int) {
 func (s *State) AddWheel(x, y float64) {
 	s.WheelX += x
 	s.WheelY += y
+}
+
+// ApplyGesture folds a frame's two-finger gesture into the state: zoom is
+// the pinch distance ratio (1 = unchanged) and panDX/panDY the centroid
+// travel in pixels.
+func (s *State) ApplyGesture(zoom, panDX, panDY float64) {
+	if zoom > 0 && !math.IsNaN(zoom) && !math.IsInf(zoom, 0) {
+		s.GestureZoom = zoom
+	}
+	s.GesturePanDX += panDX
+	s.GesturePanDY += panDY
 }
 
 func (s *State) AddTextInput(text string) {

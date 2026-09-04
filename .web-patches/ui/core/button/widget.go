@@ -54,6 +54,12 @@ func New(opts ...Option) *Widget {
 	}
 	w.SetVisible(true)
 	w.SetEnabled(true)
+	// Buttons are ideal repaint boundaries: hover feedback dirties only the
+	// button's own small rect, so sweeping the mouse across the menu bar or
+	// NPC choices no longer escalates to a whole-window raster. Overlay
+	// roots must NOT be boundaries (stale cached scenes with in-place
+	// overlay mutation); buttons mount/unmount through the normal tree.
+	w.SetRepaintBoundary(true)
 
 	// Default size is Medium.
 	w.cfg.size = Medium

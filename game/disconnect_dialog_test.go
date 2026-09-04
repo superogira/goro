@@ -44,7 +44,7 @@ func TestHandleDisconnectPacketOpensAlertAndOKQuits(t *testing.T) {
 		Data: []byte{0x81, 0x00, 15},
 	}
 
-	if !handleDisconnectPacket(ctx, &modal, packet) {
+	if !handleDisconnectPacket(ctx, &modal, packet, nil) {
 		t.Fatal("disconnect packet was not handled")
 	}
 	if !modal.IsOpen() {
@@ -61,7 +61,7 @@ func TestHandleNetworkDisconnectErrorsIgnoresFrameErrors(t *testing.T) {
 	var modal gameui.ConfirmModal
 	handled := handleNetworkDisconnectErrors(client.Context{}, &modal, []error{
 		network.FrameError{Err: errors.New("bad frame")},
-	})
+	}, nil)
 	if handled {
 		t.Fatal("frame error opened disconnect dialog")
 	}
@@ -74,7 +74,7 @@ func TestHandleNetworkDisconnectErrorsOpensAlert(t *testing.T) {
 	var modal gameui.ConfirmModal
 	handled := handleNetworkDisconnectErrors(client.Context{ScreenW: 800, ScreenH: 600}, &modal, []error{
 		network.ErrDisconnected,
-	})
+	}, nil)
 	if !handled {
 		t.Fatal("disconnect error was not handled")
 	}

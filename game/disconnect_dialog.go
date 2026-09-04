@@ -66,42 +66,49 @@ func disconnectMessageText(resources *res.Manager, message disconnectMessage) st
 
 func openConnectionFailedDialog(ctx client.Context, modal *gameui.ConfirmModal) {
 	message := disconnectMessageText(ctx.Resources, disconnectMessage{1, "Failed to Connect to Server."})
-	openDisconnectDialog(ctx, modal, message)
+	openDisconnectDialog(ctx, modal, message, nil)
 }
 
-func openDisconnectDialog(ctx client.Context, modal *gameui.ConfirmModal, message string) {
+// openDisconnectDialog shows the disconnect alert. onOK runs when the player
+// acknowledges it; nil quits the client (world disconnects), while the login
+// mode passes a no-op so a failed connect returns to the credential form —
+// quitting there left the web build on a dead black screen until refresh.
+func openDisconnectDialog(ctx client.Context, modal *gameui.ConfirmModal, message string, onOK func()) {
 	if modal == nil || modal.IsOpen() {
 		return
 	}
 	if ctx.Network != nil {
 		ctx.Network.Close()
 	}
-	modal.OpenAlert(ctx, "Disconnected", message, func() {
-		if ctx.RequestQuit != nil {
-			ctx.RequestQuit()
+	if onOK == nil {
+		onOK = func() {
+			if ctx.RequestQuit != nil {
+				ctx.RequestQuit()
+			}
 		}
-	})
+	}
+	modal.OpenAlert(ctx, "Disconnected", message, onOK)
 }
 
-func handleDisconnectPacket(ctx client.Context, modal *gameui.ConfirmModal, pkt network.Packet) bool {
+func handleDisconnectPacket(ctx client.Context, modal *gameui.ConfirmModal, pkt network.Packet, onOK func()) bool {
 	if ban, ok, err := network.ParseNotifyBan(pkt); err != nil {
 		glog.Errorf("parse SC_NOTIFY_BAN 0x%04X: %v", pkt.ID, err)
 		message := disconnectMessageText(ctx.Resources, disconnectMessage{3, "Disconnected from Server!"})
-		openDisconnectDialog(ctx, modal, message)
+		openDisconnectDialog(ctx, modal, message, onOK)
 		return true
 	} else if ok {
-		openDisconnectDialog(ctx, modal, disconnectMessageForBanCode(ctx.Resources, ban.ErrorCode))
+		openDisconnectDialog(ctx, modal, disconnectMessageForBanCode(ctx.Resources, ban.ErrorCode), nil)
 		return true
 	}
 	if network.IsInterServerDisconnect(pkt) {
 		message := disconnectMessageText(ctx.Resources, disconnectMessage{3, "Disconnected from Server!"})
-		openDisconnectDialog(ctx, modal, message)
+		openDisconnectDialog(ctx, modal, message, onOK)
 		return true
 	}
 	return false
 }
 
-func handleNetworkDisconnectErrors(ctx client.Context, modal *gameui.ConfirmModal, errs []error) bool {
+func handleNetworkDisconnectErrors(ctx client.Context, modal *gameui.ConfirmModal, errs []error, onOK func()) bool {
 	if len(errs) == 0 {
 		return false
 	}
@@ -120,6 +127,6 @@ func handleNetworkDisconnectErrors(ctx client.Context, modal *gameui.ConfirmModa
 		return false
 	}
 	message := disconnectMessageText(ctx.Resources, disconnectMessage{2, "Disconnected from Server."})
-	openDisconnectDialog(ctx, modal, message)
+	openDisconnectDialog(ctx, modal, message, nil)
 	return true
 }

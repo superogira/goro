@@ -21,7 +21,7 @@ func (m *WorldMode) handleNetworkPackets(ctx client.Context, now time.Time) (Mod
 		}
 	}
 	networkErrors := ctx.Network.DrainErrors()
-	if handleNetworkDisconnectErrors(ctx, &m.ui.disconnectDialog, networkErrors) {
+	if handleNetworkDisconnectErrors(ctx, &m.ui.disconnectDialog, networkErrors, nil) {
 		m.ui.npcCutin.Clear()
 		return nil, true
 	}
@@ -36,7 +36,7 @@ func (m *WorldMode) handleNetworkPackets(ctx client.Context, now time.Time) (Mod
 // result stops the current frame when the packet changes modes or starts a map
 // transition.
 func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, now time.Time) (Mode, bool) {
-	if handleDisconnectPacket(ctx, &m.ui.disconnectDialog, pkt) {
+	if handleDisconnectPacket(ctx, &m.ui.disconnectDialog, pkt, nil) {
 		m.ui.npcCutin.Clear()
 		return nil, false
 	}

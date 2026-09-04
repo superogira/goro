@@ -195,7 +195,11 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	loginRefused := false
 	for _, pkt := range ctx.Network.DrainPackets() {
 		glog.Debugf("recv packet 0x%04X len=%d", pkt.ID, len(pkt.Data))
-		if handleDisconnectPacket(ctx, &m.disconnectDialog, pkt) {
+		if handleDisconnectPacket(ctx, &m.disconnectDialog, pkt, func() {
+		// Stay on the account phase: the login window is still up, so the
+		// player can simply edit credentials and press Login again.
+		m.loginPending = false
+	}) {
 			m.loginPending = false
 			continue
 		}
@@ -437,7 +441,9 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	if len(networkErrors) > 0 {
 		m.loginPending = false
 	}
-	if handleNetworkDisconnectErrors(ctx, &m.disconnectDialog, networkErrors) {
+	if handleNetworkDisconnectErrors(ctx, &m.disconnectDialog, networkErrors, func() {
+		m.loginPending = false
+	}) {
 		return nil, nil
 	}
 	for _, err := range networkErrors {

@@ -1366,7 +1366,7 @@ func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange
 		if err := ctx.Network.SendMapServerEnter(ctx.Session.AccountID, ctx.Session.CharID, ctx.Session.AuthCode, uint32(time.Now().UnixMilli()), ctx.Session.Sex); err != nil {
 			glog.Warnf("map re-enter failed map=%s addr=%s port=%d: %v", change.MapName, change.Address, change.Port, err)
 			message := disconnectMessageText(ctx.Resources, disconnectMessage{2, "Disconnected from Server."})
-			openDisconnectDialog(ctx, &m.ui.disconnectDialog, message)
+			openDisconnectDialog(ctx, &m.ui.disconnectDialog, message, nil)
 			return nil
 		}
 		m.pendingWarp = true

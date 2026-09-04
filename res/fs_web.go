@@ -3,6 +3,7 @@
 package res
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -106,8 +107,8 @@ var webDialect struct {
 // Every win counts (not just the first): hosts consistently speak one
 // dialect, so the aggregates converge to it within a couple of loads.
 func noteCandidateOutcome(c webCandidate) {
+	loadDialectOnce()
 	webDialect.Lock()
-	defer webDialect.Unlock()
 	d := &webDialect.d
 	if c.slash {
 		d.slashWins++
@@ -129,6 +130,8 @@ func noteCandidateOutcome(c webCandidate) {
 		}
 	}
 	d.sampleCount++
+	webDialect.Unlock()
+	saveDialect()
 }
 
 // candidateScore ranks how well a candidate matches the learned dialect.
@@ -208,6 +211,90 @@ var webDirCase = struct {
 	dirs map[string]string // lowercase dir path -> actual casing that worked
 }{dirs: make(map[string]string)}
 
+// dialectStoreKey is the localStorage key for the learned host dialect, so
+// the probe ordering survives page reloads — without it every session paid
+// the discovery 404s again on its first few files (title BGM included).
+const dialectStoreKey = "goroPathDialect"
+
+var dialectLoadOnce sync.Once
+
+type dialectPersist struct {
+	Prefix    string            `json:"prefix"`
+	SlashWins int               `json:"slash"`
+	Utf8Wins  int               `json:"utf8"`
+	LowerWins int               `json:"lower"`
+	ExactWins int               `json:"exact"`
+	Samples   int               `json:"n"`
+	DirCase   map[string]string `json:"dirs"`
+}
+
+func loadDialectOnce() {
+	dialectLoadOnce.Do(func() {
+		storage := js.Global().Get("localStorage")
+		if storage.IsUndefined() {
+			return
+		}
+		raw := storage.Call("getItem", dialectStoreKey)
+		if raw.Type() != js.TypeString {
+			return
+		}
+		var saved dialectPersist
+		if err := json.Unmarshal([]byte(raw.String()), &saved); err != nil {
+			return
+		}
+		webDialect.Lock()
+		webDialect.d = webPathDialect{
+			prefix:      saved.Prefix,
+			slashWins:   saved.SlashWins,
+			utf8Wins:    saved.Utf8Wins,
+			lowerWins:   saved.LowerWins,
+			exactWins:   saved.ExactWins,
+			sampleCount: saved.Samples,
+		}
+		webDialect.Unlock()
+		if len(saved.DirCase) > 0 {
+			webDirCase.Lock()
+			webDirCase.dirs = saved.DirCase
+			webDirCase.Unlock()
+		}
+	})
+}
+
+var dialectSaveAt time.Time
+
+func saveDialect() {
+	if time.Since(dialectSaveAt) < 5*time.Second {
+		return
+	}
+	dialectSaveAt = time.Now()
+	webDialect.Lock()
+	d := webDialect.d
+	webDialect.Unlock()
+	saved := dialectPersist{
+		Prefix:    d.prefix,
+		SlashWins: d.slashWins,
+		Utf8Wins:  d.utf8Wins,
+		LowerWins: d.lowerWins,
+		ExactWins: d.exactWins,
+		Samples:   d.sampleCount,
+	}
+	webDirCase.Lock()
+	saved.DirCase = webDirCase.dirs
+	webDirCase.Unlock()
+	if saved.Samples == 0 && len(saved.DirCase) == 0 {
+		return
+	}
+	data, err := json.Marshal(saved)
+	if err != nil {
+		return
+	}
+	storage := js.Global().Get("localStorage")
+	if storage.IsUndefined() {
+		return
+	}
+	storage.Call("setItem", dialectStoreKey, string(data))
+}
+
 func learnDirCase(path string) {
 	idx := strings.LastIndexAny(path, "/\\")
 	if idx <= 0 {
@@ -215,11 +302,12 @@ func learnDirCase(path string) {
 	}
 	dir := path[:idx+1]
 	webDirCase.Lock()
-	defer webDirCase.Unlock()
 	if len(webDirCase.dirs) > 512 {
 		webDirCase.dirs = make(map[string]string)
 	}
 	webDirCase.dirs[strings.ToLower(dir)] = dir
+	webDirCase.Unlock()
+	saveDialect()
 }
 
 // rewriteDirCase replaces each known directory prefix with its learned
@@ -251,6 +339,7 @@ func rewriteDirCase(path string) string {
 //   - case variants last (kRO data references are case-inconsistent; Linux
 //     servers 404 the wrong casing, which surfaces as white map tiles).
 func (m *Manager) candidatePaths(normalized string) []string {
+	loadDialectOnce()
 	base := strings.TrimSuffix(m.Root, "/")
 	seen := make(map[string]struct{}, 4)
 	var candidates []webCandidate

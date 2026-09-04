@@ -48,6 +48,7 @@ type LoginConfig struct {
 	// draw the screen without the background art or without any window.
 	DebugNoBackground bool
 	DebugNoWindow     bool
+	DebugNoCursor     bool
 }
 
 type AudioConfig struct {

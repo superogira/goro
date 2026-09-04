@@ -40,4 +40,7 @@ func applyWebLoginQuery(cfg *Config) {
 	if query.Get("nowin") == "1" {
 		cfg.Login.DebugNoWindow = true
 	}
+	if query.Get("nocursor") == "1" {
+		cfg.Login.DebugNoCursor = true
+	}
 }

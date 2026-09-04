@@ -49,6 +49,9 @@ type LoginConfig struct {
 	DebugNoBackground bool
 	DebugNoWindow     bool
 	DebugNoCursor     bool
+	// DebugNoUI (?noui=1) skips the widget UI layer once inside the map so
+	// the world renderer can be benchmarked without any UI raster cost.
+	DebugNoUI bool
 }
 
 type AudioConfig struct {

@@ -41,6 +41,15 @@ func (m *Manager) UpdateContext(ctx client.Context) {
 	m.ctx = ctx
 }
 
+// ModeName returns the name of the active mode ("login", "world", ...).
+// Empty when no mode is active.
+func (m *Manager) ModeName() string {
+	if m.mode == nil {
+		return ""
+	}
+	return m.mode.Name()
+}
+
 func (m *Manager) Update() error {
 	if m.mode == nil {
 		return nil

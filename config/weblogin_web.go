@@ -4,6 +4,7 @@ package config
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"syscall/js"
 )
@@ -28,6 +29,14 @@ func applyWebLoginQuery(cfg *Config) {
 	if query.Get("auto") == "1" {
 		cfg.Login.AutoLogin = true
 	}
+	// char-slot picks the character automatically after login (0-based);
+	// combined with auto=1 the session runs from title screen into the map
+	// with no taps — useful on tablets and for automated checks.
+	if value := query.Get("char-slot"); value != "" {
+		if n, err := strconv.Atoi(value); err == nil {
+			cfg.Login.CharSlot = n
+		}
+	}
 	if query.Get("mute") == "1" {
 		cfg.Audio.Disabled = true
 	}
@@ -42,5 +51,14 @@ func applyWebLoginQuery(cfg *Config) {
 	}
 	if query.Get("nocursor") == "1" {
 		cfg.Login.DebugNoCursor = true
+	}
+	if query.Get("noui") == "1" {
+		cfg.Login.DebugNoUI = true
+	}
+	// fps=1 shows the engine's own FPS counter, which is drawn straight to
+	// the frame and therefore stays visible with noui=1 (the widget FPS HUD
+	// is part of the suppressed UI layer).
+	if query.Get("fps") == "1" {
+		cfg.Render.FPS = true
 	}
 }

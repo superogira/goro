@@ -631,7 +631,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return next, nil
 	}
 	m.ui.pvpCounter.Update(ctx)
-	m.ui.perfHUD.Update(ctx)
+	// The FPS/MEM HUD is a debug instrument (?stats=1 / -render-stats). Kept
+	// off by default: its 2Hz text refresh is a recurring dirty region that
+	// unions with other UI damage and amplifies partial repaints.
+	if ctx.Config.Render.Stats {
+		m.ui.perfHUD.Update(ctx)
+	}
 	if m.handleLevelUpNotificationAction(ctx, m.ui.levelUpNotifications.Update(ctx)) {
 		// The notification click belongs exclusively to the UI. Returning here
 		// prevents the same press from reaching the map after the icon closes.

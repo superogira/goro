@@ -162,6 +162,12 @@ type frameSubmittedReceiver interface {
 	FrameSubmitted()
 }
 
+// uiSuppressor is implemented by games that can ask for the widget UI layer
+// to be skipped per frame (goro: ?noui=1 in world mode).
+type uiSuppressor interface {
+	SuppressUI() bool
+}
+
 type runtimeSettingsProvider interface {
 	RuntimeFullscreen() bool
 	RuntimeVSync() bool
@@ -1040,6 +1046,13 @@ func (r *runner) resetUIDrawMeasurement() {
 
 func (r *runner) drawUI(screen *Frame, width, height int, deviceScale float64) error {
 	if r.renderCfg.NoUI {
+		return nil
+	}
+	if s, ok := r.game.(uiSuppressor); ok && s.SuppressUI() {
+		// Drop any previously published UI texture (e.g. the character-select
+		// windows) so no stale UI stays composited while suppressed; the next
+		// unsuppressed frame sees uiDrawnOnce=false and repaints in full.
+		r.discardPublishedUI()
 		return nil
 	}
 	if r.ui == nil || screen == nil || width <= 0 || height <= 0 {

@@ -111,6 +111,14 @@ func (g *Game) InputState() *input.State {
 	return g.input
 }
 
+// SuppressUI reports whether the widget UI layer should be skipped this
+// frame (?noui=1). Only world mode suppresses — login and character select
+// are unplayable without their windows, and the point of the switch is to
+// measure the map's smoothness with zero UI raster cost.
+func (g *Game) SuppressUI() bool {
+	return g.cfg.Login.DebugNoUI && g.modes.ModeName() == "world"
+}
+
 func (g *Game) SetQuitFunc(quit func()) {
 	g.quit = quit
 }

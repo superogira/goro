@@ -326,6 +326,18 @@ func (e *eventSourceAdapter) dispatchPointerEvent(ev gpucontext.PointerEvent) {
 			}
 			return
 		}
+		// A finger has no hover. A touch move with no pointer down (the
+		// compat mouse-move fired around a tap) would only flip the hovered
+		// button's gradient and drag the game cursor — each costing a CPU
+		// raster before the actual tap, the visible pre-press stutter on
+		// tablets. Drop it. Moves while a pointer is pressed still flow, so
+		// held-walk dragging and window dragging keep working. Pens keep
+		// hover — a hovering stylus is a real input there.
+		if compatMouseFromTouch && ev.PointerType == gpucontext.PointerTypeTouch &&
+			ev.Type == gpucontext.PointerMove &&
+			e.gestureRecognizer != nil && e.gestureRecognizer.NumActivePointers() == 0 {
+			return
+		}
 	}
 
 	// Also dispatch to legacy mouse handlers for backward compatibility.

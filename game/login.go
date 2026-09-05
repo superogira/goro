@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	gameaudio "github.com/kivutar/goro/audio"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -133,6 +134,12 @@ func (m *LoginMode) Enter(ctx client.Context) {
 	m.loadBackground(ctx)
 	m.loadCharacterSelectSkin(ctx)
 	m.cursor.ensureLoaded(ctx)
+	// Warm the button-click sound while the title screen idles: it plays on
+	// login confirm and character selection, and a first press fetching its
+	// wav mid-frame is a visible stutter. Native Prefetch is a no-op.
+	if ctx.Resources != nil {
+		ctx.Resources.Prefetch(gameaudio.SFXPathCandidates(loginConfirmSFX))
+	}
 	render.SetCursorMode(render.CursorModeHidden)
 	m.playLoginBGM(ctx)
 	if m.phase == loginPhaseCharacter {

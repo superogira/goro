@@ -1347,8 +1347,11 @@ func TestGranularInvalidation_InvalidateRect_MatchesBounds(t *testing.T) {
 	handleEvent(w, ctx, enterEvt)
 
 	got := ctx.InvalidatedRect()
-	if got != bounds {
-		t.Errorf("InvalidatedRect = %v, want %v (widget bounds)", got, bounds)
+	if want := w.ScreenBounds(); got != want {
+		t.Errorf("InvalidatedRect = %v, want %v (widget screen bounds)", got, want)
+	}
+	if gw, gh := got.Width(), got.Height(); gw != bounds.Width() || gh != bounds.Height() {
+		t.Errorf("InvalidatedRect size = %fx%f, want widget size %fx%f", gw, gh, bounds.Width(), bounds.Height())
 	}
 }
 

@@ -58,6 +58,7 @@ type boundaryWidget interface {
 	SetSceneCacheSize(int, int)
 	SetOnBoundaryDirty(func())
 	Bounds() geometry.Rect
+	ScreenBounds() geometry.Rect
 }
 
 // drawBoundaryWidget handles the draw pass for a widget that has
@@ -84,7 +85,11 @@ func drawBoundaryWidget(w Widget, ctx Context, canvas Canvas, stats *DrawStats) 
 	if bw.CachedScene() == nil && bw.IsSceneDirty() && ctx != nil {
 		capturedBW := bw
 		bw.SetOnBoundaryDirty(func() {
-			ctx.InvalidateRect(capturedBW.Bounds())
+			// ScreenBounds, not Bounds: the invalidation rect is consumed
+			// in window space, and local bounds always start at (0,0) —
+			// every boundary dirtying repainted the top-left corner for
+			// nothing.
+			ctx.InvalidateRect(capturedBW.ScreenBounds())
 		})
 	}
 
@@ -112,6 +117,15 @@ func drawBoundaryWidget(w Widget, ctx Context, canvas Canvas, stats *DrawStats) 
 	if !bw.IsSceneDirty() && bw.CachedScene() != nil {
 		if stats != nil {
 			stats.CachedWidgets++
+		}
+		// Nothing of this boundary can land inside the active clip: skip
+		// the replay entirely. ReplayScene re-executes the recorded
+		// commands (text rasterization included) even when every pixel is
+		// clipped away, which cost several milliseconds per dirty-region
+		// pass for every clean boundary on screen.
+		if clip := canvas.ClipBounds(); clip.IsEmpty() || !clip.Intersects(bounds) {
+			StampScreenOrigin(w, canvas)
+			return
 		}
 		// Stamp screen origin even on cache hit so dirty.Collector gets
 		// correct screen positions. Draw is NOT called on cache hit,

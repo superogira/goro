@@ -30,14 +30,14 @@ func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 		w.state = stateHover
 		ctx.SetCursor(widget.CursorPointer)
 		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.Bounds())
+		ctx.InvalidateRect(w.ScreenBounds())
 		return true
 
 	case event.MouseLeave:
 		w.state = stateNormal
 		ctx.SetCursor(widget.CursorDefault)
 		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.Bounds())
+		ctx.InvalidateRect(w.ScreenBounds())
 		return true
 
 	case event.MousePress:
@@ -47,7 +47,9 @@ func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 		w.state = statePressed
 		ctx.RequestFocus(w)
 		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.Bounds())
+		// ScreenBounds: the invalidation rect is consumed in window space —
+		// local bounds (origin 0,0) repainted a phantom top-left corner.
+		ctx.InvalidateRect(w.ScreenBounds())
 		return true
 
 	case event.MouseRelease:
@@ -62,7 +64,7 @@ func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 			w.state = stateNormal
 		}
 		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.Bounds())
+		ctx.InvalidateRect(w.ScreenBounds())
 		if wasPressed && w.Bounds().Contains(e.Position) {
 			fireOnClick(w)
 		}

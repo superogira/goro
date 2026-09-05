@@ -59,7 +59,7 @@ This means the legacy mail system, not a newer RODEX-only implementation. See
 - [x] Turn the Star Gladiator place/Feel request into the original confirmation flow instead of only logging it, then send `0x0254`.
 - [x] Implement the original `/doridori` client behavior and packet `0x01E7`.
 - [ ] Verify whether the 2008 Novice Explosion Spirits request (`0x01ED`) needs a distinct client action, then implement it if applicable.
-- [ ] Verify and implement the 2008 auto-revive response (`0x0292`) if it is used by supported gameplay.
+- [x] Implement Token of Siegfried self-revival through the 2008 auto-revive request (`0x0292`).
 - [ ] Add end-to-end tests ensuring these skills cannot silently stall while waiting for a client response.
 
 ### Server-driven progress and information
@@ -84,11 +84,11 @@ This means the legacy mail system, not a newer RODEX-only implementation. See
 
 ### Rankings and fame feedback
 
-- [ ] Implement `/blacksmith` top-ten ranking request and response (`0x0217`).
-- [ ] Implement `/alchemist` top-ten ranking request and response (`0x0218`).
-- [ ] Format ranking entries consistently in the console.
-- [ ] Handle Blacksmith and Alchemist fame-point gain notifications.
-- [ ] Preserve the existing TaeKwon mission and ranking implementation.
+- [x] Implement `/blacksmith` top-ten ranking request and response (`0x0217`).
+- [x] Implement `/alchemist` top-ten ranking request and response (`0x0218`).
+- [x] Format ranking entries consistently in the console.
+- [x] Handle Blacksmith and Alchemist fame-point gain notifications.
+- [x] Preserve the existing TaeKwon mission and ranking implementation.
 - [ ] Investigate the `0x0237` killer ranking separately before treating it as a 2008 parity requirement.
 
 ## Client UI and quality-of-life
@@ -167,13 +167,14 @@ Goro.
 
 ### Minimap details
 
-- [ ] Show a party member's name when hovering their existing minimap marker.
-- [ ] Keep hover hit-testing cheap and avoid rebuilding the minimap widget tree every frame.
-- [ ] Ensure labels remain on-screen and do not conflict with the coordinate footer.
 - [ ] Add quest and guide-direction markers as part of the quest implementation.
 - [x] Party-member minimap markers already exist.
 - [x] Same-map guild-member markers already exist.
 - [x] Server compass markers already exist.
+
+Party-name hover belongs to the 2007 world-map feature, not to the small HUD
+minimap. The latter only needs the existing coloured party markers for 2008
+parity.
 
 ### Graphics options and small rendering details
 
@@ -204,7 +205,7 @@ work. First establish that the feature belongs to the 2008 client and that the
 OldRO data contains the required assets/tables.
 
 - [ ] Validate whether the world map UI and its map-position tables belong in the selected 2008 client profile.
-- [ ] If valid, implement the world map, current-map/player indicator, party markers, and per-map minimap inset.
+- [ ] If valid, implement the world map, current-map/player indicator, party markers with names on hover, and per-map minimap inset.
 - [ ] Validate skill/global cooldown packets for `20080910` before adding cooldown gating or shortcut overlays.
 - [ ] Validate whether the status-icon clock-wedge display is appropriate for 2008; Goro already has tooltips and a duration bar.
 - [ ] Validate party-booking packets `0x0802` and `0x0806`; they appear newer and should not be pulled into the 2008 backlog by default.
@@ -221,7 +222,7 @@ missing work.
 - [x] Same-map guild-member minimap markers.
 - [x] Server compass markers.
 - [x] Status-icon tooltips and remaining-duration presentation.
-- [x] Item information illustrations and card-slot/card composition support.
+- [x] Item information illustrations, full card illustrations, and card-slot/card composition support.
 - [x] Talkie Box and Graffiti text prompts and outbound talkbox skill packet.
 - [x] Positional actor, effect, and RSW audio.
 - [x] Party creation, invitation by name, settings, and member actions.

@@ -129,6 +129,11 @@ func (m *WorldMode) prefetchItemSprite(manager *res.Manager, itemID uint16, iden
 	if m.itemIconPrefetch[key] == nil {
 		m.itemIconPrefetch[key] = manager.Prefetch(res.ItemIconTextureCandidates(resourceName))
 	}
+	// Cards can pop their full illustration from the item info window;
+	// warm that too while the player walks to the drop.
+	if cardResource, ok := manager.ItemCardIllustrationName(int(itemID)); ok {
+		manager.Prefetch(res.CardIllustrationTextureCandidates(cardResource))
+	}
 }
 
 func (m *WorldMode) applyFloorItemDisappear(ctx client.Context, disappear network.FloorItemDisappear) {

@@ -148,17 +148,19 @@ func TestConsoleBreakGuildCommandIsHandledLocally(t *testing.T) {
 	}
 }
 
-func TestConsoleTaekwonCommandWithoutNetwork(t *testing.T) {
-	console := &ChatConsole{input: "/taekwon", active: true}
+func TestConsoleFameRankingCommandsWithoutNetwork(t *testing.T) {
+	for _, command := range []string{"/blacksmith", "/alchemist", "/taekwon"} {
+		console := &ChatConsole{input: command, active: true}
 
-	if !console.SubmitCommand(client.Context{}, "/taekwon") {
-		t.Fatal("taekwon command was not handled")
-	}
-	if console.active || console.input != "" {
-		t.Fatalf("console active=%t input=%q, want closed empty input", console.active, console.input)
-	}
-	if len(console.messages) != 1 || console.messages[0].Text != "send failed: not connected" {
-		t.Fatalf("console messages = %+v", console.messages)
+		if !console.SubmitCommand(client.Context{}, command) {
+			t.Fatalf("%s command was not handled", command)
+		}
+		if console.active || console.input != "" {
+			t.Fatalf("%s console active=%t input=%q, want closed empty input", command, console.active, console.input)
+		}
+		if len(console.messages) != 1 || console.messages[0].Text != "send failed: not connected" {
+			t.Fatalf("%s console messages=%+v", command, console.messages)
+		}
 	}
 }
 
@@ -399,6 +401,26 @@ func TestConsoleTypingAndRefocusScrollToBottom(t *testing.T) {
 	console.setActive(true)
 	if got := console.ensureScrollSignal().Get(); got != bottom {
 		t.Fatalf("refocus scroll = %f, want %f", got, bottom)
+	}
+}
+
+func TestConsoleScrollToBottomDoesNotNotifyWhenAlreadyThere(t *testing.T) {
+	console := &ChatConsole{}
+	for i := 0; i < 20; i++ {
+		console.AddMessage("line %d", i)
+	}
+	console.widgetTree(480, 176)
+	scrollY := console.ensureScrollSignal()
+	notifications := 0
+	unsubscribe := scrollY.SubscribeForever(func(float32) {
+		notifications++
+	})
+	defer unsubscribe()
+
+	console.scrollToBottom()
+
+	if notifications != 0 {
+		t.Fatalf("unchanged bottom scroll sent %d notifications, want 0", notifications)
 	}
 }
 

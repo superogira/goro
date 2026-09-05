@@ -1016,11 +1016,16 @@ func (w *Window) drawFullRepaint(canvas widget.Canvas) {
 // Follows the Qt QBackingStore partial-paint pattern.
 //
 // The algorithm:
-//  1. Compute the union of all dirty regions for a single clip rect.
-//  2. Clear each dirty region with the theme background.
-//  3. Clip to the dirty union and draw the full tree. Widgets outside
-//     the clip early-exit from visibility checks, so only widgets
-//     overlapping dirty regions actually render.
+//  1. Clear each dirty region with the theme background.
+//  2. Draw the full tree once per dirty region, clipped to that region.
+//
+// Drawing per-region (not per-union) matters: two distant dirty regions
+// (e.g. a minimap marker top-right and a button state change top-left)
+// united into one clip force every widget between them to re-raster the
+// whole band. Per-region passes keep raster work proportional to the
+// pixels that actually changed; widgets spanning several regions simply
+// paint clipped several times, which is idempotent because Draw is pure
+// rendering.
 func (w *Window) drawDirtyRegions(canvas widget.Canvas) {
 	bg := w.ThemeBackground()
 	regions := w.dirtyTracker.DirtyRegions()
@@ -1028,26 +1033,27 @@ func (w *Window) drawDirtyRegions(canvas widget.Canvas) {
 		return
 	}
 
-	// Compute union of all dirty regions for a single clip.
-	union := regions[0].Bounds
-	for i := 1; i < len(regions); i++ {
-		union = union.Union(regions[i].Bounds)
-	}
-
 	// Clear dirty regions with theme background using CPU-only fill.
 	// DrawRect would trigger the GPU SDF accelerator, queuing SDF shapes
 	// on the compositor canvas and blocking the non-MSAA blit-only fast
 	// path (ADR-016). FillRectDirect writes directly to the CPU pixmap.
+	// All regions are cleared before any draw pass so a widget spanning
+	// two regions never paints into a region that is cleared afterward.
 	for _, region := range regions {
 		canvas.FillRectDirect(region.Bounds, bg)
 	}
 
-	// Clip to dirty union and draw tree.
-	// Widgets outside the clip early-exit from isVisible checks,
-	// so only widgets overlapping dirty regions actually render.
-	canvas.PushClip(union)
-	w.lastDrawStats = widget.DrawTree(w.root, w.ctx, canvas)
-	canvas.PopClip()
+	union := regions[0].Bounds
+
+	// Draw the tree clipped to each dirty region in turn. Widgets outside
+	// the clip early-exit from isVisible checks, so only widgets
+	// overlapping a region render into it.
+	for _, region := range regions {
+		canvas.PushClip(region.Bounds)
+		w.lastDrawStats = widget.DrawTree(w.root, w.ctx, canvas)
+		canvas.PopClip()
+		union = union.Union(region.Bounds)
+	}
 
 	w.lastDirtyUnion = union
 }

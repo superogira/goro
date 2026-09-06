@@ -82,7 +82,7 @@ type WorldMode struct {
 	petAccessoryMiss  map[petAccessorySpriteKey]struct{}
 	rsmMeshCache      map[int][]retainedWorldMesh
 	rsmNodeMatrices   map[*res.RSM]map[string]mat4
-	rsmAnimNodes      map[animatedRSMNodeKey]map[string]mat4
+	rsmAnimNodes      map[*res.RSM]animatedRSMNodeCache
 	rsmBoundsCache    map[rsmBoundsCacheKey]rsmBounds
 	rsmFaceMetaCache  map[*res.RSM]map[*res.RSMNode][]rsmFaceMeta
 	rsmAnimScratch    animatedRSMScratch
@@ -443,7 +443,7 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	m.petAccessoryMiss = make(map[petAccessorySpriteKey]struct{})
 	m.rsmMeshCache = make(map[int][]retainedWorldMesh)
 	m.rsmNodeMatrices = make(map[*res.RSM]map[string]mat4)
-	m.rsmAnimNodes = make(map[animatedRSMNodeKey]map[string]mat4)
+	m.rsmAnimNodes = make(map[*res.RSM]animatedRSMNodeCache)
 	m.rsmBoundsCache = make(map[rsmBoundsCacheKey]rsmBounds)
 	m.rsmFaceMetaCache = make(map[*res.RSM]map[*res.RSMNode][]rsmFaceMeta)
 	m.rsmAnimScratch.reset()

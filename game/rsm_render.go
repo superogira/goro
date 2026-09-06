@@ -88,9 +88,9 @@ type rsmPlacementGridCell struct {
 	y int
 }
 
-type animatedRSMNodeKey struct {
-	rsm   *res.RSM
-	frame int
+type animatedRSMNodeCache struct {
+	frame    int
+	matrices map[string]mat4
 }
 
 func (m *WorldMode) visibleRSMPlacements(rsw *res.RSW, gnd *res.GND, projection sceneProjection) []visibleRSMPlacement {
@@ -444,14 +444,15 @@ func (m *WorldMode) animatedRSMNodeMatrices(rsm *res.RSM, frame int) map[string]
 		return nil
 	}
 	if m.rsmAnimNodes == nil {
-		m.rsmAnimNodes = make(map[animatedRSMNodeKey]map[string]mat4)
+		m.rsmAnimNodes = make(map[*res.RSM]animatedRSMNodeCache)
 	}
-	key := animatedRSMNodeKey{rsm: rsm, frame: frame}
-	if matrices, ok := m.rsmAnimNodes[key]; ok {
-		return matrices
+	if cached, ok := m.rsmAnimNodes[rsm]; ok && cached.frame == frame {
+		return cached.matrices
 	}
+	// Frame values are milliseconds, so retaining every sampled pose makes an
+	// otherwise idle map grow continuously. Only the current pose is reusable.
 	matrices := buildRSMNodeMatrices(rsm, frame)
-	m.rsmAnimNodes[key] = matrices
+	m.rsmAnimNodes[rsm] = animatedRSMNodeCache{frame: frame, matrices: matrices}
 	return matrices
 }
 

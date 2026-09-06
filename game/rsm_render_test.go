@@ -376,6 +376,27 @@ func TestRSMAnimationFrameAnimatesKeyframedModelsWithoutRSWAnimType(t *testing.T
 	}
 }
 
+func TestAnimatedRSMNodeMatricesRetainsOnlyLatestFramePerModel(t *testing.T) {
+	rsm := &res.RSM{Nodes: []res.RSMNode{{Name: "root"}}}
+	mode := &WorldMode{}
+
+	first := mode.animatedRSMNodeMatrices(rsm, 1)
+	first["cache-marker"] = mat4Identity()
+	if _, ok := mode.animatedRSMNodeMatrices(rsm, 1)["cache-marker"]; !ok {
+		t.Fatal("same animation frame did not reuse cached node matrices")
+	}
+
+	for frame := 2; frame <= 1000; frame++ {
+		mode.animatedRSMNodeMatrices(rsm, frame)
+	}
+	if got := len(mode.rsmAnimNodes); got != 1 {
+		t.Fatalf("animation cache contains %d entries for one model, want 1", got)
+	}
+	if cached := mode.rsmAnimNodes[rsm]; cached.frame != 1000 {
+		t.Fatalf("cached animation frame = %d, want 1000", cached.frame)
+	}
+}
+
 func TestRSMFaceColorUsesModelAlpha(t *testing.T) {
 	got := rsmFaceColor(&res.RSM{ShadeType: 0, Alpha: 0.5}, "model.bmp",
 		modelPoint3{x: 0, y: 0, z: 0},

@@ -228,33 +228,40 @@ func TestWindowDragReusesPublishedOverlay(t *testing.T) {
 	if !window.Update(ctx) {
 		t.Fatal("drag release was not consumed")
 	}
+	if overlay.hidden {
+		t.Fatal("drag release did not restore the overlay")
+	}
+	if overlay.NeedsRedraw() {
+		t.Fatal("banded restore dirtied the whole overlay")
+	}
+	if content.NeedsRedraw() {
+		t.Fatal("banded restore kept content dirty; bands repaint everything")
+	}
+	// Drain the banded restore (one band per update) until the drag layer
+	// hands off to the renderer's release-pending path.
+	for window.dragLayer {
+		inputState.EndFrame()
+		if !window.Update(ctx) {
+			t.Fatal("restore band update was not consumed")
+		}
+	}
 	if app.endToken != root {
-		t.Fatal("drag release did not begin the drag-layer handoff")
+		t.Fatal("restore did not begin the drag-layer handoff after the last band")
 	}
 	if app.cancelToken != nil {
 		t.Fatal("ordinary drag release cancelled the drag layer")
 	}
-	if overlay.hidden {
-		t.Fatal("drag release did not restore the overlay")
-	}
-	if !overlay.NeedsRedraw() {
-		t.Fatal("drag release did not redraw the window at its final position")
-	}
-	if !content.NeedsRedraw() {
-		t.Fatal("drag release discarded content dirty state")
-	}
 	if len(app.rects) != 1 {
-		t.Fatalf("drag release invalidates = %d, want 1", len(app.rects))
+		t.Fatalf("restore invalidates = %d, want 1 band", len(app.rects))
 	}
 	if last := app.rects[0]; last != geometry.NewRect(38, 53, 104, 84) {
-		t.Fatalf("drag release dirty rect = %v, want x=38 y=53 w=104 h=84", last)
+		t.Fatalf("restore band rect = %v, want x=38 y=53 w=104 h=84 (single band for an 80px window)", last)
 	}
-	if children := overlay.Children(); len(children) != 0 {
-		t.Fatalf("damaged overlay exposed %d dirty children before repaint", len(children))
-	}
+	// Banded restores never mark the overlay damaged; the child stays
+	// attached so each band clip draws straight through it.
 	overlay.clearDamage()
 	if children := overlay.Children(); len(children) != 1 {
-		t.Fatalf("clean overlay children = %d, want 1", len(children))
+		t.Fatalf("overlay children = %d, want 1", len(children))
 	}
 }
 
@@ -324,8 +331,15 @@ func TestWindowDragContinuesAcrossEarlierUpdatedWindow(t *testing.T) {
 
 	inputState.EndFrame()
 	inputState.SetMouseButton(input.MouseButtonLeft, false)
-	if !dragged.Update(ctx) || app.WindowDragActive() {
-		t.Fatal("drag release did not relinquish shared drag capture")
+	if !dragged.Update(ctx) {
+		t.Fatal("drag release was not consumed")
+	}
+	for dragged.dragLayer {
+		inputState.EndFrame()
+		dragged.Update(ctx)
+	}
+	if app.WindowDragActive() {
+		t.Fatal("banded restore did not relinquish shared drag capture")
 	}
 }
 

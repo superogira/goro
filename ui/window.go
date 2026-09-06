@@ -233,6 +233,7 @@ type Window struct {
 	userMoved    bool
 	dragging     bool
 	dragLayer    bool
+	restoreBands []geometry.Rect
 	dragDX       int
 	dragDY       int
 	dragBottom   int
@@ -403,6 +404,10 @@ func (w *Window) Update(ctx client.Context) bool {
 	if !w.open || ctx.Input == nil {
 		return false
 	}
+	// Drain one drag-release restore band per frame, before the yield gate:
+	// the still-active drag layer covers this window, so the generic
+	// drag-active check below would otherwise starve the restore.
+	w.drainRestoreBand(ctx)
 	// The world updates windows in a stable order, not z-order. While another
 	// window owns the renderer's drag capture, yielding here prevents an
 	// overlapped window from consuming the frame before the owner is updated.
@@ -560,6 +565,10 @@ func (w *Window) beginDragLayer(ctx client.Context) {
 	if w.dragLayer {
 		return
 	}
+	// A new drag supersedes any restore bands still amortizing the previous
+	// release — the render side reuses the still-active drag layer instead
+	// of capturing the partially re-rastered canvas.
+	w.restoreBands = nil
 	overlay := w.positionedOverlay()
 	if overlay == nil {
 		if root := w.Widget(); root != nil {
@@ -587,6 +596,12 @@ func (w *Window) cancelDragLayer(ctx client.Context) {
 	w.finishDragLayer(ctx, true)
 }
 
+// restoreBandHeight is the slice height used to amortize a drag release.
+// Rastering a whole window in one frame froze the game for tens of ms
+// (text-heavy windows are the worst); the drag layer keeps showing the
+// window's captured pixels while bands repaint one per frame.
+const restoreBandHeight = 96
+
 func (w *Window) finishDragLayer(ctx client.Context, cancel bool) {
 	if !w.dragLayer {
 		return
@@ -594,19 +609,72 @@ func (w *Window) finishDragLayer(ctx client.Context, cancel bool) {
 	overlay := w.positionedOverlay()
 	if overlay == nil {
 		w.dragLayer = false
+		w.restoreBands = nil
 		return
 	}
-	if app, ok := ctx.UIApp.(windowDragLayerUIApp); ok {
-		if cancel {
+	if cancel {
+		if app, ok := ctx.UIApp.(windowDragLayerUIApp); ok {
 			app.CancelWindowDragLayer(overlay)
-		} else {
+		}
+		w.dragLayer = false
+		w.restoreBands = nil
+		overlay.hidden = false
+		damage := overlay.markFrameDirty()
+		invalidateWindowRect(ctx, damage)
+		return
+	}
+	// Restore in bands. The drag layer stays active (composited over the
+	// window's new frame) until the last band has been rastered; only then
+	// do we hand off to the renderer's release-pending mechanism.
+	overlay.hidden = false
+	frame := overlay.frameRect()
+	if frame.IsEmpty() {
+		w.dragLayer = false
+		if app, ok := ctx.UIApp.(windowDragLayerUIApp); ok {
+			app.EndWindowDragLayer(overlay)
+		}
+		damage := overlay.markFrameDirty()
+		invalidateWindowRect(ctx, damage)
+		return
+	}
+	bands := make([]geometry.Rect, 0, int(frame.Height())/restoreBandHeight+1)
+	for y := frame.Min.Y; y < frame.Max.Y; y += restoreBandHeight {
+		bottom := y + restoreBandHeight
+		if bottom > frame.Max.Y {
+			bottom = frame.Max.Y
+		}
+		// Pad each band like markDamage does: the window chrome strokes
+		// ~1px past its frame, and unpadded bands would leave seam lines.
+		bands = append(bands, geometry.NewRect(frame.Min.X, y, frame.Width(), bottom-y).Expand(windowDirtyPadding))
+	}
+	// The subtree's pixels are being repainted by the bands; drop any
+	// pending redraw marks so the collector does not add the whole frame
+	// (or stale-positioned children) as extra dirty regions.
+	overlay.clearDamage()
+	overlay.ClearRedraw()
+	widget.ClearRedrawInTree(overlay)
+	w.restoreBands = bands
+}
+
+// drainRestoreBand republishes one band of a drag-release restore per frame.
+// It runs before the drag-yield gate: while bands are pending the drag layer
+// is still active, which would otherwise make this window yield its update.
+func (w *Window) drainRestoreBand(ctx client.Context) {
+	if len(w.restoreBands) == 0 || !w.dragLayer {
+		return
+	}
+	band := w.restoreBands[0]
+	w.restoreBands = w.restoreBands[1:]
+	invalidateWindowRect(ctx, band)
+	if len(w.restoreBands) > 0 {
+		return
+	}
+	w.dragLayer = false
+	if overlay := w.positionedOverlay(); overlay != nil {
+		if app, ok := ctx.UIApp.(windowDragLayerUIApp); ok {
 			app.EndWindowDragLayer(overlay)
 		}
 	}
-	w.dragLayer = false
-	overlay.hidden = false
-	damage := overlay.markFrameDirty()
-	invalidateWindowRect(ctx, damage)
 }
 
 type rectInvalidatingUIApp interface {

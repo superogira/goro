@@ -106,8 +106,12 @@ func TestMinimapDragsFromTitleBar(t *testing.T) {
 	if !m.Update(ctx) {
 		t.Fatal("minimap drag release was not consumed")
 	}
+	for m.window.dragLayer {
+		inputState.EndFrame()
+		m.Update(ctx)
+	}
 	if app.endToken != root {
-		t.Fatal("minimap drag release did not clear the shared drag layer")
+		t.Fatal("minimap banded restore did not clear the shared drag layer")
 	}
 
 	inputState.EndFrame()

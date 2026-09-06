@@ -233,8 +233,14 @@ func TestCharacterDragKeepsAttachedBasicMenuOnScreen(t *testing.T) {
 		t.Fatal("character window drag release was not consumed")
 	}
 	menu.FollowCharacterWindow(ctx, &character)
+	for character.dragLayer {
+		inputState.EndFrame()
+		character.Update(ctx)
+	}
+	// The next frame's follow (dragLayer now false) unhides the menu.
+	menu.FollowCharacterWindow(ctx, &character)
 	if app.endToken != character.positionedOverlay() {
-		t.Fatal("group drag layer was not released")
+		t.Fatal("group drag layer was not released after the banded restore")
 	}
 	if character.positionedOverlay().hidden || menu.positionedOverlay().hidden {
 		t.Fatal("group drag release did not restore both source overlays")

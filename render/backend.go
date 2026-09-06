@@ -21,8 +21,8 @@ import (
 	"github.com/gogpu/ui/geometry"
 	uirender "github.com/gogpu/ui/render"
 	"github.com/gogpu/ui/widget"
-	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/buildinfo"
+	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
@@ -819,23 +819,23 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 			r.lastSlowFrameLog = time.Now()
 			glog.Infof(
 				"slow frame frame=%d total_ms=%.2f threshold_ms=16.00 update_ms=%.2f game_update_ms=%.2f ui_frame_ms=%.2f draw_ms=%.2f split_game_draw_ms=%.2f split_screen_ui_ms=%.2f split_gpu_ms=%.2f ui_work=%t ui_redraw=%t ui_draw_ms=%.2f ui_canvas_ms=%.2f ui_flush_ms=%.2f ui_image_ms=%.2f ui_dirty_regions=%d ui_full_repaint=%t ui_union=%.0f,%.0f %.0fx%.0f",
-			r.frames,
-			durationMS(totalDur),
-			durationMS(r.lastUpdateDuration),
-			durationMS(r.lastGameUpdateDur),
-			durationMS(r.lastUIFrameDur),
-			durationMS(drawDur),
-			durationMS(r.lastGameDrawDur),
-			durationMS(r.lastScreenUIDur),
-			durationMS(r.lastGPUDrawDur),
-			r.lastUIWork,
-			r.lastUIRedraw,
-			durationMS(r.lastUIDrawDur),
-			durationMS(r.lastUICanvasDrawDur),
-			durationMS(r.lastUIFlushDur),
-			durationMS(r.lastUIImageDur),
-			r.lastUIDirtyRegions,
-			r.lastUIFullRepaint,
+				r.frames,
+				durationMS(totalDur),
+				durationMS(r.lastUpdateDuration),
+				durationMS(r.lastGameUpdateDur),
+				durationMS(r.lastUIFrameDur),
+				durationMS(drawDur),
+				durationMS(r.lastGameDrawDur),
+				durationMS(r.lastScreenUIDur),
+				durationMS(r.lastGPUDrawDur),
+				r.lastUIWork,
+				r.lastUIRedraw,
+				durationMS(r.lastUIDrawDur),
+				durationMS(r.lastUICanvasDrawDur),
+				durationMS(r.lastUIFlushDur),
+				durationMS(r.lastUIImageDur),
+				r.lastUIDirtyRegions,
+				r.lastUIFullRepaint,
 				r.lastUIDirtyUnion.Min.X,
 				r.lastUIDirtyUnion.Min.Y,
 				r.lastUIDirtyUnion.Width(),
@@ -1397,7 +1397,18 @@ func (r *runner) stopAsyncUIRasterizer() {
 }
 
 func (r *runner) beginUIDragLayer(token any, rect geometry.Rect) bool {
-	if r == nil || token == nil || rect.IsEmpty() || r.uiDrag.active {
+	if r == nil || token == nil || rect.IsEmpty() {
+		return false
+	}
+	// Re-drag of a window whose banded restore is still amortizing: the
+	// captured image is still the window's exact pixels, and the canvas
+	// under it is only partially re-rastered — reuse the layer instead of
+	// capturing the partial canvas.
+	if r.uiDrag.active {
+		if r.uiDrag.token == token {
+			r.uiDrag.releasePending = false
+			return true
+		}
 		return false
 	}
 	capture := r.captureUIImageRect(rect)

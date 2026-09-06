@@ -548,11 +548,13 @@ func (c *ContextImpl) Invalidate() {
 // InvalidateRect marks a specific rectangular area as needing a redraw.
 func (c *ContextImpl) InvalidateRect(r geometry.Rect) {
 	c.mu.Lock()
-	if c.invalidated {
-		// Already doing a full invalidation, no need for partial
-		c.mu.Unlock()
-		return
-	}
+	// NOTE: rects are recorded even when a full invalidation is pending.
+	// Invalidate() only sets needsLayout/needsRedraw — in the retained
+	// dirty-region pipeline that does NOT escalate to a full repaint, so
+	// dropping the rect here left freshly published overlays unpainted
+	// (windows that appeared only sometimes, depending on timing).
+	// If a real full repaint does happen, the pending rect is simply
+	// redundant and costs nothing.
 	if c.invalidateRect.IsEmpty() {
 		c.invalidateRect = r
 	} else {

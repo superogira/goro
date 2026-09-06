@@ -164,11 +164,14 @@ func (m *Manager) apply() {
 			}
 		}
 		widget.MarkRedrawInTree(overlay)
-		if layoutApp, ok := m.app.(layoutInvalidatingUIApp); ok {
-			layoutApp.InvalidateLayout()
-		}
+		// Record the pixel region BEFORE the layout invalidation: a pending
+		// full invalidation used to make InvalidateRect a no-op, and the
+		// rect is what actually guarantees the overlay's area repaints.
 		if bounds := overlayBounds(overlay); !bounds.IsEmpty() {
 			invalidateAppRect(m.app, bounds)
+		}
+		if layoutApp, ok := m.app.(layoutInvalidatingUIApp); ok {
+			layoutApp.InvalidateLayout()
 		}
 	}
 }

@@ -646,13 +646,20 @@ func (w *Window) Frame() {
 	// Preserve partial invalidations for the next DrawTo before clearing
 	// the context state — hosts that draw via DrawTo (after Frame) still
 	// need those regions folded into the dirty tracker.
-	if !w.ctx.IsInvalidated() {
-		if r := w.ctx.InvalidatedRect(); !r.IsEmpty() {
-			if w.pendingInvalidateRect.IsEmpty() {
-				w.pendingInvalidateRect = r
-			} else {
-				w.pendingInvalidateRect = w.pendingInvalidateRect.Union(r)
-			}
+	// NOTE: unconditional. ctx.Invalidate() only sets needsLayout/needsRedraw
+	// (see SetOnInvalidate above) — in the retained dirty-region pipeline it
+	// does NOT escalate to a full repaint, so gating on !IsInvalidated()
+	// silently discarded the rect on any frame where an animation also
+	// invalidated (char-select sprites, world actors, timers). Those rects are
+	// the only correct-position regions for freshly added overlays (their
+	// widgets are not screen-stamped yet), so losing them left windows
+	// unpainted until the next hover/touch. When a real full repaint does
+	// happen, the preserved rect is merely redundant.
+	if r := w.ctx.InvalidatedRect(); !r.IsEmpty() {
+		if w.pendingInvalidateRect.IsEmpty() {
+			w.pendingInvalidateRect = r
+		} else {
+			w.pendingInvalidateRect = w.pendingInvalidateRect.Union(r)
 		}
 	}
 

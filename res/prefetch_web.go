@@ -154,7 +154,10 @@ func prefetchStep(job *prefetchJob) bool {
 			if satisfied {
 				job.groupIndex++
 				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-				return job.groupIndex >= len(job.groups)
+				// Packed groups cost no fetch, so keep advancing within
+				// this tick instead of spreading one group per frame —
+				// sprite views became Done() the same tick they spawn.
+				continue
 			}
 			job.urls = job.manager.candidatePaths(normalizePath(group[job.nameIndex]))
 			job.urlIndex = 0
@@ -169,14 +172,14 @@ func prefetchStep(job *prefetchJob) bool {
 				// Already cached: the group resolves without a fetch.
 				job.groupIndex++
 				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-				return job.groupIndex >= len(job.groups)
+				continue
 			}
 			if job.manager.archiveHasCandidate(url) {
 				// Packed in data_web.grf: the real read will come from
 				// memory — no network fetch to warm.
 				job.groupIndex++
 				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-				return job.groupIndex >= len(job.groups)
+				continue
 			}
 			prefetchLaunch(url)
 			job.inFlight = url

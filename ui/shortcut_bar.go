@@ -598,11 +598,12 @@ func (b *ShortcutBar) invalidate(ctx Context) {
 	if ctx.UIApp == nil {
 		return
 	}
-	// Scope to the bar's frame. UIApp.Invalidate() maps to the root bounds
-	// (full canvas) — with cooldowns and icon swaps ticking the bar, that
-	// re-rastered every open window on the hot path.
+	// Scope to the bar's frame (padded: chrome strokes past the frame).
+	// UIApp.Invalidate() maps to the root bounds (full canvas) — with
+	// cooldowns and icon swaps ticking the bar, that re-rastered every open
+	// window on the hot path.
 	if b.root != nil && b.rootW > 0 && b.rootH > 0 {
-		invalidateWindowRect(ctx, windowFrameRect(b.rootX, b.rootY, b.rootW, b.rootH))
+		invalidateAppRect(ctx.UIApp, windowFrameRect(b.rootX, b.rootY, b.rootW, b.rootH))
 		return
 	}
 	ctx.UIApp.Invalidate()

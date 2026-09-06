@@ -133,12 +133,13 @@ func (m *Manager) apply() {
 		}
 		// Removed overlay: release its signal bindings and cached scenes,
 		// then invalidate the pixels it vacated so the dirty-region
-		// pipeline clears them.
+		// pipeline clears them. invalidateAppRect expands by the dirty
+		// padding — the window chrome strokes 1px past its bounds, and the
+		// raw rect left a gray border line behind after every close (it was
+		// previously masked by the full-canvas repaint).
 		widget.UnmountTree(child)
-		if m.app != nil {
-			if bounds := overlayBounds(child); !bounds.IsEmpty() {
-				m.app.InvalidateRect(bounds)
-			}
+		if bounds := overlayBounds(child); !bounds.IsEmpty() {
+			invalidateAppRect(m.app, bounds)
 		}
 	}
 

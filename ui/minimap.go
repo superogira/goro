@@ -418,12 +418,12 @@ func (m *Minimap) markRedraw(ctx Context) {
 	if m.widget != nil {
 		var ov originValidator = m.widget
 		if ov.IsScreenOriginValid() {
-			invalidateWindowRect(ctx, m.widget.ScreenBounds())
+			invalidateAppRect(ctx.UIApp, m.widget.ScreenBounds())
 			return
 		}
 	}
 	if m.window.IsOpen() {
-		invalidateWindowRect(ctx, windowFrameRect(m.window.x, m.window.y, m.window.width, m.window.height))
+		invalidateAppRect(ctx.UIApp, windowFrameRect(m.window.x, m.window.y, m.window.width, m.window.height))
 	}
 }
 

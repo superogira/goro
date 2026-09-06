@@ -112,6 +112,19 @@ func (w *Widget) kbInfo() kbFieldInfo {
 	return kbFieldInfo{text: w.Text(), hint: w.enterKeyHint()}
 }
 
+// notifyKeyboard raises/lowers the OS keyboard for this field, attaching
+// the field's window-space rect so the page can pan it above the keyboard.
+// Freshly built (never drawn) fields have no stamped position yet — send
+// an empty rect and let the page fall back to a center heuristic.
+func (w *Widget) notifyKeyboard(focused bool) {
+	info := w.kbInfo()
+	rect := w.ScreenBounds()
+	if !w.IsScreenOriginValid() {
+		rect = geometry.Rect{}
+	}
+	applyTextInputKeyboard(focused, info.text, info.hint, rect)
+}
+
 // SetFocused overrides WidgetBase.SetFocused so gaining focus also raises
 // the OS virtual keyboard on touch devices (web build; no-op elsewhere).
 // Only real transitions notify: widget trees routinely SetFocused(false)
@@ -130,7 +143,7 @@ func (w *Widget) SetFocused(focused bool) {
 		info := w.kbInfo()
 		kbFocusedFields[w] = info
 		kbLastFocusedField = w
-		applyTextInputKeyboard(true, info.text, info.hint)
+		w.notifyKeyboard(true)
 		return
 	}
 	delete(kbFocusedFields, w)
@@ -142,12 +155,11 @@ func (w *Widget) SetFocused(focused bool) {
 		}
 	}
 	if len(kbFocusedFields) == 0 {
-		applyTextInputKeyboard(false, "", "")
+		applyTextInputKeyboard(false, "", "", geometry.Rect{})
 		return
 	}
 	if kbLastFocusedField != nil {
-		info := kbFocusedFields[kbLastFocusedField]
-		applyTextInputKeyboard(true, info.text, info.hint)
+		kbLastFocusedField.notifyKeyboard(true)
 	}
 }
 

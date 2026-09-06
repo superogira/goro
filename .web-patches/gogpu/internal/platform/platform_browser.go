@@ -644,15 +644,33 @@ func (w *browserWindow) setupHiddenInput(p *browserPlatform) {
 		} else {
 			input.Set("enterKeyHint", "send")
 		}
+		// Optional args[2..5]: the focused field's window-space rect
+		// (x, y, w, h). The page pans the game canvas so the field stays
+		// visible above the overlaying on-screen keyboard.
+		if len(args) >= 6 {
+			rect := js.Global().Get("Object").New()
+			rect.Set("x", args[2].Float())
+			rect.Set("y", args[3].Float())
+			rect.Set("w", args[4].Float())
+			rect.Set("h", args[5].Float())
+			js.Global().Set("goroFocusRect", rect)
+		}
 		input.Set("value", seed)
 		w.hiddenLastValue = seed
 		input.Call("focus")
 		js.Global().Set("goroKeyboardVisible", true)
+		if fn := js.Global().Get("goroKeyboardPan"); fn.Type() == js.TypeFunction {
+			fn.Invoke()
+		}
 		return nil
 	})
 	hide := js.FuncOf(func(this js.Value, args []js.Value) any {
+		js.Global().Set("goroFocusRect", nil)
 		input.Call("blur")
 		js.Global().Set("goroKeyboardVisible", false)
+		if fn := js.Global().Get("goroKeyboardPan"); fn.Type() == js.TypeFunction {
+			fn.Invoke()
+		}
 		return nil
 	})
 	w.jsCallbacks = append(w.jsCallbacks, show, hide)

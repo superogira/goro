@@ -71,7 +71,7 @@ func handleMousePress(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 	info := w.kbInfo()
 	kbFocusedFields[w] = info
 	kbLastFocusedField = w
-	applyTextInputKeyboard(true, info.text, info.hint)
+	w.notifyKeyboard(true)
 
 	// ADR-028: visual only — cursor placement and focus ring.
 	w.SetNeedsRedraw(true)

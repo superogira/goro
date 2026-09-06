@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"image"
+
+	"github.com/kivutar/goro/render"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
@@ -714,6 +717,11 @@ type positionedOverlay struct {
 	hasDamage     bool
 	hidden        bool
 	raiseOnPress  bool
+	// snapshot caches the window's painted pixels (device resolution) so a
+	// repaint with no changes — most importantly reopening a closed window —
+	// blits the cached image instead of re-rastering every text and icon.
+	snapshot      image.Image
+	snapshotValid bool
 }
 
 func (w *positionedOverlay) setFrame(x, y, width, height int) geometry.Rect {
@@ -723,6 +731,7 @@ func (w *positionedOverlay) setFrame(x, y, width, height int) geometry.Rect {
 	oldFrame := w.frameRect()
 	w.x, w.y = x, y
 	w.width, w.height = width, height
+	w.snapshotValid = false
 	newFrame := w.frameRect()
 	w.SetBounds(newFrame)
 	w.SetScreenOrigin(newFrame.Min)
@@ -810,11 +819,44 @@ func (w *positionedOverlay) Draw(ctx widget.Context, canvas widget.Canvas) {
 	}
 	canvas.PushTransform(w.Bounds().Min)
 	widget.StampScreenOrigin(w.child, canvas)
-	if w.hasDamage {
+	// Snapshot fast path: the window's pixels were captured before (at its
+	// last paint) and nothing inside changed since. Any repaint request —
+	// reopening after close, uncovering, publish damage — blits the captured
+	// image instead of re-rastering every text and icon. Content changes
+	// mark the child tree (goro convention) and fall through to raster;
+	// moves/resizes drop the snapshot in setFrame.
+	if w.snapshotValid && w.snapshot != nil && !widget.NeedsRedrawInTree(w.child) {
+		if snapper, ok := canvas.(render.WindowSnapshotter); ok {
+			snapper.BlitSnapshot(w.snapshot, w.Bounds())
+			canvas.PopTransform()
+			return
+		}
+	}
+	if w.hasDamage || widget.NeedsRedrawInTree(w.child) {
 		widget.ClearRedrawInTree(w.child)
 	}
 	widget.DrawChild(w.child, ctx, canvas)
 	canvas.PopTransform()
+	w.captureSnapshot(canvas)
+}
+
+// captureSnapshot stores the freshly painted window pixels for the next
+// no-change repaint. The canvas buffer holds the full window (retained
+// pixels outside the active clip are equally valid), so the capture is
+// correct regardless of how small this frame's damaged region was.
+func (w *positionedOverlay) captureSnapshot(canvas widget.Canvas) {
+	snapper, ok := canvas.(render.WindowSnapshotter)
+	if !ok {
+		return
+	}
+	bounds := w.Bounds()
+	if bounds.IsEmpty() {
+		return
+	}
+	if snap := snapper.SnapshotRect(bounds); snap != nil {
+		w.snapshot = snap
+		w.snapshotValid = true
+	}
 }
 
 func (w *positionedOverlay) Event(ctx widget.Context, e event.Event) bool {

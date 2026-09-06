@@ -136,6 +136,26 @@ func prefetchStep(job *prefetchJob) bool {
 	for job.groupIndex < len(job.groups) {
 		group := job.groups[job.groupIndex]
 		if job.urls == nil && job.nameIndex < len(group) {
+			// Whole-group archive pre-scan: when any spelling of this
+			// sound/sprite lives in the web pack, the group is satisfied
+			// without probing the wrong spellings that would 404 first.
+			satisfied := false
+			for _, name := range group {
+				for _, u := range job.manager.candidatePaths(normalizePath(name)) {
+					if job.manager.archiveHasCandidate(u) {
+						satisfied = true
+						break
+					}
+				}
+				if satisfied {
+					break
+				}
+			}
+			if satisfied {
+				job.groupIndex++
+				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
+				return job.groupIndex >= len(job.groups)
+			}
 			job.urls = job.manager.candidatePaths(normalizePath(group[job.nameIndex]))
 			job.urlIndex = 0
 		}
@@ -147,6 +167,13 @@ func prefetchStep(job *prefetchJob) bool {
 			}
 			if _, ok := webCache.get(url); ok {
 				// Already cached: the group resolves without a fetch.
+				job.groupIndex++
+				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
+				return job.groupIndex >= len(job.groups)
+			}
+			if job.manager.archiveHasCandidate(url) {
+				// Packed in data_web.grf: the real read will come from
+				// memory — no network fetch to warm.
 				job.groupIndex++
 				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
 				return job.groupIndex >= len(job.groups)

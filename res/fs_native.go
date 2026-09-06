@@ -86,3 +86,7 @@ func sortStringsStable(values []string) {
 		return archivePriority(values[i]) < archivePriority(values[j])
 	})
 }
+
+// archiveHasCandidate is web-only (the in-memory resource pack); loose
+// files and on-disk GRF archives are handled by the candidate walk itself.
+func (m *Manager) archiveHasCandidate(string) bool { return false }

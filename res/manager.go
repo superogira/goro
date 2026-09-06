@@ -95,7 +95,16 @@ func NewManager(root string) (*Manager, error) {
 
 func (m *Manager) Find(name string) (string, bool) {
 	normalized := normalizePath(name)
-	for _, candidate := range m.candidatePaths(normalized) {
+	candidates := m.candidatePaths(normalized)
+	// In-memory archives (the web resource pack) answer before any network
+	// probing: a covered name resolves without the variant 404s the
+	// candidate search would otherwise issue first.
+	for _, candidate := range candidates {
+		if m.archiveHasCandidate(candidate) {
+			return candidate, true
+		}
+	}
+	for _, candidate := range candidates {
 		if m.candidateExists(candidate) {
 			return candidate, true
 		}

@@ -412,15 +412,43 @@ func (m *Manager) candidatePaths(normalized string) []string {
 	return out
 }
 
-// archiveCandidate reports whether one of the in-memory GRF packs holds
-// the candidate path, serving the bytes when it does. The web pack answers
-// before any HTTP probe so packed resources cost zero network round trips.
-func (m *Manager) archiveCandidate(candidate string) ([]byte, bool) {
+// archiveQueryPath maps a percent-encoded candidate URL back to the plain
+// resource path form the GRF keys use: decode the URL encoding (Korean
+// file names travel encoded) and drop the manager root prefix ("/webro"
+// on the web build) that every candidate carries.
+func (m *Manager) archiveQueryPath(candidate string) string {
+	if unescaped, err := url.PathUnescape(candidate); err == nil {
+		candidate = unescaped
+	}
+	if base := strings.TrimSuffix(m.Root, "/"); base != "" && base != "." &&
+		strings.HasPrefix(candidate, base+"/") {
+		candidate = candidate[len(base)+1:]
+	}
+	return candidate
+}
+
+// archiveHasCandidate reports whether one of the in-memory GRF packs holds
+// the candidate path.
+func (m *Manager) archiveHasCandidate(candidate string) bool {
+	query := m.archiveQueryPath(candidate)
 	for _, archive := range m.Archives {
-		if !archive.Has(candidate) {
+		if archive.Has(query) {
+			return true
+		}
+	}
+	return false
+}
+
+// archiveCandidate serves the bytes of a candidate path from the in-memory
+// GRF packs when one holds it. The web pack answers before any HTTP probe
+// so packed resources cost zero network round trips.
+func (m *Manager) archiveCandidate(candidate string) ([]byte, bool) {
+	query := m.archiveQueryPath(candidate)
+	for _, archive := range m.Archives {
+		if !archive.Has(query) {
 			continue
 		}
-		data, err := archive.ReadFile(candidate)
+		data, err := archive.ReadFile(query)
 		if err == nil {
 			return data, true
 		}

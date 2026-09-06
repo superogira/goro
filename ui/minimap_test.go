@@ -19,11 +19,17 @@ type minimapTestUIApp struct {
 	invalidates int
 }
 
-func (a *minimapTestUIApp) SetUIRoot(widget.Widget)      {}
-func (a *minimapTestUIApp) Frame()                       {}
-func (a *minimapTestUIApp) Invalidate()                  { a.invalidates++ }
-func (a *minimapTestUIApp) InvalidateRect(geometry.Rect) {}
-func (a *minimapTestUIApp) RequestFullRepaint()          {}
+func (a *minimapTestUIApp) SetUIRoot(widget.Widget) {}
+func (a *minimapTestUIApp) Frame()                  {}
+func (a *minimapTestUIApp) Invalidate()             { a.invalidates++ }
+func (a *minimapTestUIApp) InvalidateRect(r geometry.Rect) {
+	// Minimap redraws are scoped to the widget's own pixels now; count
+	// non-empty rects as invalidations like the old app-wide Invalidate().
+	if !r.IsEmpty() {
+		a.invalidates++
+	}
+}
+func (a *minimapTestUIApp) RequestFullRepaint()           {}
 func (a *minimapTestUIApp) WidgetContext() widget.Context { return nil }
 func (a *minimapTestUIApp) Cursor() widget.CursorType {
 	return widget.CursorDefault

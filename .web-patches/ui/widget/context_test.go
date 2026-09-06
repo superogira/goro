@@ -241,15 +241,20 @@ func TestContextImpl_InvalidateRect_WhenFullInvalidated(t *testing.T) {
 	// Full invalidation first
 	ctx.Invalidate()
 
-	// InvalidateRect should be no-op when already fully invalidated
+	// Rects are still recorded and reported while a full invalidation is
+	// pending: Invalidate() only flags layout/redraw, and the retained
+	// dirty-region pipeline needs the rect to repaint the exact region.
 	rectCalled := false
 	ctx.SetOnInvalidateRect(func(_ geometry.Rect) {
 		rectCalled = true
 	})
 
 	ctx.InvalidateRect(geometry.NewRect(0, 0, 100, 100))
-	if rectCalled {
-		t.Error("InvalidateRect callback should not be called when already fully invalidated")
+	if !rectCalled {
+		t.Error("InvalidateRect callback should fire even when fully invalidated")
+	}
+	if got := ctx.InvalidatedRect(); got.Width() != 100 || got.Height() != 100 {
+		t.Errorf("invalidated rect = %v, want 100x100", got)
 	}
 }
 

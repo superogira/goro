@@ -210,7 +210,17 @@ func (m *Manager) raiseOverlay(overlay widget.Widget) {
 		if m.root != nil {
 			// Keep the active root so pointer capture and keyboard focus survive.
 			m.root.children = append(m.root.children[:0], m.overlays...)
-			m.root.SetNeedsRedraw(true)
+		}
+		// Raising only changes pixels inside the raised overlay's rect: it
+		// now draws over the windows it jumped past, and nothing outside
+		// that rect reorders. Marking the root dirty instead reported a
+		// full-screen region whenever no child happened to be dirty too
+		// (e.g. right after closing a window), re-rastering every window —
+		// a 70-100ms hitch per press on the web build.
+		if m.app != nil {
+			if bounds := overlayBounds(overlay); !bounds.IsEmpty() {
+				invalidateAppRect(m.app, bounds)
+			}
 		}
 		return
 	}

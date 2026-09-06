@@ -2,6 +2,8 @@ package widget
 
 import (
 	"image"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -548,6 +550,9 @@ func (c *ContextImpl) Invalidate() {
 // InvalidateRect marks a specific rectangular area as needing a redraw.
 func (c *ContextImpl) InvalidateRect(r geometry.Rect) {
 	c.mu.Lock()
+	if r.Width() >= 1000 && r.Height() >= 700 {
+		slog.Default().Warn("[dirty] near-fullscreen InvalidateRect caller:\n" + string(debug.Stack()))
+	}
 	// NOTE: rects are recorded even when a full invalidation is pending.
 	// Invalidate() only sets needsLayout/needsRedraw — in the retained
 	// dirty-region pipeline that does NOT escalate to a full repaint, so

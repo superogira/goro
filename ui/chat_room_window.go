@@ -369,9 +369,8 @@ func (w *ChatRoomWindow) refresh(ctx Context) {
 	w.SetContent(w.widgetTree(ctx))
 	w.focusInput()
 	w.Publish(ctx)
-	if ctx.UIApp != nil {
-		ctx.UIApp.Invalidate()
-	}
+	// No app-wide Invalidate here: SetContent already invalidates the
+	// window's damage rect, and UIApp.Invalidate() maps to the full canvas.
 }
 
 func (w *ChatRoomWindow) focusInput() {

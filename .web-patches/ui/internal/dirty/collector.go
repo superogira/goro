@@ -3,6 +3,7 @@ package dirty
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 
 	"github.com/gogpu/ui/geometry"
@@ -217,6 +218,15 @@ func (c *Collector) isWidgetDirty(w widget.Widget) bool {
 // Follows Qt QWidgetRepaintManager::markDirty pattern: translate
 // widget-local rect to top-level window coordinates at collection time.
 func (c *Collector) markWidgetDirty(w widget.Widget) {
+	// A widget whose screen origin was never stamped has not drawn yet —
+	// it owns no pixels on the persistent canvas, so reporting its local
+	// bounds produced phantom top-left regions on every freshly opened
+	// window (their subtrees are unstamped until the first draw pass).
+	// First paint is guaranteed by the host's pending invalidation rect.
+	type originValidator interface{ IsScreenOriginValid() bool }
+	if ov, ok := w.(originValidator); ok && !ov.IsScreenOriginValid() {
+		return
+	}
 	if collectorDebug {
 		type sb interface{ ScreenBounds() geometry.Rect }
 		if s, ok := w.(sb); ok {
@@ -231,6 +241,13 @@ func (c *Collector) markWidgetDirty(w widget.Widget) {
 	if sb, ok := w.(screenBounder); ok {
 		bounds := sb.ScreenBounds()
 		bounds = c.clipToParentViewport(w, bounds)
+		if bounds.Width() >= 1000 && bounds.Height() >= 700 {
+			// Breadcrumb: a near-full-canvas dirty region usually means a
+			// container widget got marked — re-rastering every window is a
+			// very visible hitch. Warn (not fix) so the culprit is visible
+			// in the console while keeping the draw path unchanged.
+			slog.Default().Warn(fmt.Sprintf("[dirty] near-fullscreen region %.0fx%.0f from %T", bounds.Width(), bounds.Height(), w))
+		}
 		c.tracker.MarkDirty(bounds)
 		return
 	}

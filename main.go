@@ -8,6 +8,9 @@ import (
 	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/render"
+
+	goui "github.com/gogpu/ui"
+	"log/slog"
 )
 
 func main() {
@@ -22,6 +25,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeLog()
+	// The UI toolkit logs frame-level detail at Info (layout triggers per
+	// window open); only warnings and above are worth the console on web.
+	goui.SetLogger(slog.New(slog.NewTextHandler(glog.Writer(), &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	})))
 
 	game, err := app.New(cfg)
 	if err != nil {

@@ -87,6 +87,7 @@ func TestTopOverlayBlocksLowerOverlayEvents(t *testing.T) {
 
 func TestClickingWindowRaisesItAboveOtherWindows(t *testing.T) {
 	manager := NewManager()
+	app := &raiseRecordingApp{}
 	ctx := client.Context{UIManager: manager}
 	lowerContent := newCountingOverlay()
 	topContent := newCountingOverlay()
@@ -96,6 +97,7 @@ func TestClickingWindowRaisesItAboveOtherWindows(t *testing.T) {
 	top.OpenAt(150, 100, topContent)
 	lower.Publish(ctx)
 	top.Publish(ctx)
+	manager.SetUIApp(app)
 	root := manager.root
 	root.Layout(widget.NewContext(), geometry.Tight(geometry.Sz(300, 240)))
 	widget.ClearRedrawInTree(root)
@@ -111,8 +113,14 @@ func TestClickingWindowRaisesItAboveOtherWindows(t *testing.T) {
 	if got := root.children[len(root.children)-1]; got != lower.published {
 		t.Fatal("clicked window was not raised in the active root")
 	}
-	if !root.NeedsRedraw() {
-		t.Fatal("raising a window did not invalidate the overlay root")
+	// Raising repaints through a rect scoped to the raised window's pixels,
+	// not by marking the full-canvas overlay root dirty.
+	if len(app.rects) == 0 {
+		t.Fatal("raising a window did not invalidate any rect")
+	}
+	raisedFrame := windowFrameRect(100, 100, 100, 80)
+	if !app.rects[0].Intersects(raisedFrame) {
+		t.Fatalf("raise invalidation rect = %v, want overlap with %v", app.rects[0], raisedFrame)
 	}
 
 	overlap := geometry.Pt(175, 125)
@@ -124,6 +132,27 @@ func TestClickingWindowRaisesItAboveOtherWindows(t *testing.T) {
 		t.Fatalf("covered window events = %d, want 0", topContent.events)
 	}
 }
+
+// raiseRecordingApp captures InvalidateRect traffic so tests can assert
+// scoped invalidations instead of full-canvas redraws.
+type raiseRecordingApp struct {
+	rects []geometry.Rect
+}
+
+func (a *raiseRecordingApp) SetUIRoot(widget.Widget) {}
+func (a *raiseRecordingApp) Frame()                  {}
+func (a *raiseRecordingApp) Invalidate()             {}
+func (a *raiseRecordingApp) InvalidateRect(r geometry.Rect) {
+	if !r.IsEmpty() {
+		a.rects = append(a.rects, r)
+	}
+}
+func (a *raiseRecordingApp) RequestFullRepaint()           {}
+func (a *raiseRecordingApp) WidgetContext() widget.Context { return nil }
+func (a *raiseRecordingApp) Cursor() widget.CursorType {
+	return widget.CursorDefault
+}
+func (a *raiseRecordingApp) HoveredWidget() widget.Widget { return nil }
 
 func TestClickingPlainOverlayDoesNotRaiseIt(t *testing.T) {
 	manager := NewManager()

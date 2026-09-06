@@ -14,6 +14,16 @@ import (
 
 var logger = charm.Default()
 
+// Writer returns the log output configured by [Configure]. Before Configure
+// runs (or when no file is set) this is os.Stderr; on wasm it is the browser
+// console bridge.
+func Writer() io.Writer {
+	if w := consoleLogWriter(); w != nil {
+		return w
+	}
+	return os.Stderr
+}
+
 func Configure(cfg config.LogConfig) (func() error, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
@@ -21,6 +31,9 @@ func Configure(cfg config.LogConfig) (func() error, error) {
 	}
 
 	output := io.Writer(os.Stderr)
+	if w := consoleLogWriter(); w != nil {
+		output = w
+	}
 	var file *os.File
 	if cfg.File != "" {
 		if dir := filepath.Dir(cfg.File); dir != "." {

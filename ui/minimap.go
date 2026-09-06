@@ -408,8 +408,22 @@ func (m *Minimap) markRedraw(ctx Context) {
 			redraw.SetNeedsRedraw(true)
 		}
 	}
-	if ctx.UIApp != nil {
-		ctx.UIApp.Invalidate()
+	if ctx.UIApp == nil {
+		return
+	}
+	// Scope to the minimap's own pixels. UIApp.Invalidate() maps to the
+	// root bounds (full canvas) and re-rastered every open window — a
+	// very visible hitch each time the compass/guild layer refreshed.
+	type originValidator interface{ IsScreenOriginValid() bool }
+	if m.widget != nil {
+		var ov originValidator = m.widget
+		if ov.IsScreenOriginValid() {
+			invalidateWindowRect(ctx, m.widget.ScreenBounds())
+			return
+		}
+	}
+	if m.window.IsOpen() {
+		invalidateWindowRect(ctx, windowFrameRect(m.window.x, m.window.y, m.window.width, m.window.height))
 	}
 }
 

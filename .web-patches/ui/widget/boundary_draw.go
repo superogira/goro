@@ -118,19 +118,22 @@ func drawBoundaryWidget(w Widget, ctx Context, canvas Canvas, stats *DrawStats) 
 		if stats != nil {
 			stats.CachedWidgets++
 		}
-		// Nothing of this boundary can land inside the active clip: skip
-		// the replay entirely. ReplayScene re-executes the recorded
-		// commands (text rasterization included) even when every pixel is
-		// clipped away, which cost several milliseconds per dirty-region
-		// pass for every clean boundary on screen.
-		if clip := canvas.ClipBounds(); clip.IsEmpty() || !clip.Intersects(bounds) {
-			StampScreenOrigin(w, canvas)
-			return
-		}
 		// Stamp screen origin even on cache hit so dirty.Collector gets
 		// correct screen positions. Draw is NOT called on cache hit,
 		// so StampScreenOrigin inside Draw never runs.
 		StampScreenOrigin(w, canvas)
+		// Nothing of this boundary can land inside the active clip: skip
+		// the replay entirely. ReplayScene re-executes the recorded
+		// commands (text rasterization included) even when every pixel is
+		// clipped away, which cost several milliseconds per dirty-region
+		// pass for every clean boundary on screen. The clip lives in
+		// window space while Bounds() is widget-local — compare against
+		// the stamped ScreenBounds, or boundaries nested under transforms
+		// (every button inside a window) get skipped wrongly and their
+		// pixels vanish from freshly cleared regions.
+		if clip := canvas.ClipBounds(); clip.IsEmpty() || !clip.Intersects(bw.ScreenBounds()) {
+			return
+		}
 		canvas.PushTransform(bounds.Min)
 		if dc, ok2 := canvas.(DamageController); ok2 {
 			dc.SetDamageTracking(false)

@@ -114,6 +114,16 @@ Useful options:
 
 ## Debugging and Profiling
 
+### Web build (wasm) — data_web.grf resource pack
+
+If a `data_web.grf` sits next to `index.html`, the web build downloads it once at
+boot and serves every file it contains from memory — no per-file HTTP round
+trips for those resources. Use it to pack the assets that stutter the most on
+slow networks (NPC/monster sprites, textures, sounds). Files not in the pack
+keep loading as loose files from `data/`, and loose files still work as
+overrides for anything you deliberately keep out of the pack. Inspect a pack's
+contents with `go run ./cmd/grflist <file.grf>`.
+
 ### Web build (wasm) — URL parameters
 
 Append these to the page URL, e.g. `webro/?stats=1&fps=1`. They can be combined.

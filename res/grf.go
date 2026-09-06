@@ -31,7 +31,7 @@ var (
 
 type GRF struct {
 	path    string
-	file    *os.File
+	file    io.ReaderAt
 	version uint32
 	entries map[string]GRFEntry
 }
@@ -51,13 +51,24 @@ func OpenGRF(path string) (*GRF, error) {
 		return nil, err
 	}
 
+	grf, err := OpenGRFReader(path, file)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return grf, nil
+}
+
+// OpenGRFReader parses a GRF from any random-access source. The web build
+// fetches a curated pack (data_web.grf) into memory and serves gameplay-time
+// resources from it, avoiding per-file HTTP round trips.
+func OpenGRFReader(path string, r io.ReaderAt) (*GRF, error) {
 	grf := &GRF{
 		path:    path,
-		file:    file,
+		file:    r,
 		entries: make(map[string]GRFEntry),
 	}
 	if err := grf.load(); err != nil {
-		_ = file.Close()
 		return nil, err
 	}
 	return grf, nil
@@ -67,7 +78,10 @@ func (g *GRF) Close() error {
 	if g.file == nil {
 		return nil
 	}
-	return g.file.Close()
+	if closer, ok := g.file.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 func (g *GRF) Path() string {
@@ -174,7 +188,7 @@ func shouldUseHeaderOnlyGRFDecrypt(name string) bool {
 
 func (g *GRF) load() error {
 	header := make([]byte, grfHeaderSize)
-	if _, err := io.ReadFull(g.file, header); err != nil {
+	if _, err := g.file.ReadAt(header, 0); err != nil {
 		return err
 	}
 	signature := strings.TrimRight(string(header[:15]), "\x00")

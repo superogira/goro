@@ -3,6 +3,7 @@
 package res
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -411,9 +412,29 @@ func (m *Manager) candidatePaths(normalized string) []string {
 	return out
 }
 
+// archiveCandidate reports whether one of the in-memory GRF packs holds
+// the candidate path, serving the bytes when it does. The web pack answers
+// before any HTTP probe so packed resources cost zero network round trips.
+func (m *Manager) archiveCandidate(candidate string) ([]byte, bool) {
+	for _, archive := range m.Archives {
+		if !archive.Has(candidate) {
+			continue
+		}
+		data, err := archive.ReadFile(candidate)
+		if err == nil {
+			return data, true
+		}
+		// Encrypted/unsupported entries fall through to the loose files.
+	}
+	return nil, false
+}
+
 // candidateExists reports whether a candidate URL downloads successfully.
 // The body is cached so the follow-up readCandidate does not refetch.
 func (m *Manager) candidateExists(candidate string) bool {
+	if _, ok := m.archiveCandidate(candidate); ok {
+		return true
+	}
 	if _, ok := webCache.get(candidate); ok {
 		return true
 	}
@@ -431,7 +452,11 @@ func (m *Manager) candidateExists(candidate string) bool {
 }
 
 // readCandidate returns the contents of a candidate URL returned by Find.
+// In-memory GRF packs take priority over the network.
 func (m *Manager) readCandidate(candidate string) ([]byte, error) {
+	if data, ok := m.archiveCandidate(candidate); ok {
+		return data, nil
+	}
 	if data, ok := webCache.get(candidate); ok {
 		return data, nil
 	}
@@ -447,14 +472,34 @@ func (m *Manager) readCandidate(candidate string) ([]byte, error) {
 	return data, nil
 }
 
-// scanArchives is a no-op on the web build: data is served as loose files.
-func (m *Manager) scanArchives() {}
+// scanArchives downloads the curated web pack (data_web.grf) served next
+// to the page and keeps it in memory as a GRF archive. Packing the
+// gameplay-time resources turns their per-file HTTP round trips into map
+// lookups; loose files under data/ still work as overrides because
+// archiveCandidate only answers paths the pack actually contains.
+func (m *Manager) scanArchives() {
+	data, err := webFetchTimeout("data_web.grf", 10*time.Minute)
+	if err != nil {
+		return // optional pack; plain loose-file serving keeps working
+	}
+	archive, err := OpenGRFReader("data_web.grf", bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	m.Archives = append(m.Archives, archive)
+}
 
 // webFetch downloads a same-origin URL with the Fetch API. The promise is
 // bridged onto a channel; instead of parking on the channel forever, the
 // caller polls with a timer sleep so the wasm runtime keeps servicing the
 // JS event loop that settles the fetch promise.
 func webFetch(path string) ([]byte, error) {
+	return webFetchTimeout(path, 60*time.Second)
+}
+
+// webFetchTimeout is webFetch with an explicit deadline — the boot-time
+// web pack download is far larger than a single resource.
+func webFetchTimeout(path string, timeout time.Duration) ([]byte, error) {
 	type result struct {
 		data []byte
 		err  error
@@ -494,7 +539,7 @@ func webFetch(path string) ([]byte, error) {
 	defer onFulfilled.Release()
 	defer onRejected.Release()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for {
 		select {
 		case out := <-done:

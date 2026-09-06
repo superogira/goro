@@ -2,7 +2,6 @@ package render
 
 import (
 	"image"
-	"image/draw"
 	stdcolor "image/color"
 	"math"
 	"sync"
@@ -395,23 +394,6 @@ func (c *Canvas) PopTransform() {
 	lastIdx := len(c.transformStack) - 1
 	c.currentOffset = c.transformStack[lastIdx]
 	c.transformStack = c.transformStack[:lastIdx]
-}
-
-// CopyRect returns a copy of the canvas pixels inside r, in the canvas's
-// own (already device-scaled) coordinate space. Used by hosts to snapshot
-// regions — e.g. caching whole UI windows as pixels.
-func (c *Canvas) CopyRect(r image.Rectangle) *image.RGBA {
-	img := c.dc.Image()
-	if img == nil {
-		return nil
-	}
-	r = r.Intersect(img.Bounds())
-	if r.Empty() {
-		return nil
-	}
-	out := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
-	draw.Draw(out, out.Bounds(), img, r.Min, draw.Src)
-	return out
 }
 
 // ClipBounds returns the current clip bounds.

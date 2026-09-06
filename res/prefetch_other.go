@@ -27,3 +27,8 @@ func (m *Manager) Prefetch(groups ...[]string) *PrefetchHandle {
 
 // PrefetchTick is a no-op on native builds.
 func PrefetchTick() {}
+
+// PrefetchBackground is a no-op on native, like Prefetch.
+func (m *Manager) PrefetchBackground(groups ...[]string) *PrefetchHandle {
+	return nil
+}

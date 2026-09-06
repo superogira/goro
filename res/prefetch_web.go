@@ -3,8 +3,8 @@
 package res
 
 import (
-	"syscall/js"
 	"sync"
+	"syscall/js"
 	"time"
 )
 
@@ -63,13 +63,20 @@ type prefetchJob struct {
 	nameIndex  int
 	urls       []string // URL candidates for groups[groupIndex][nameIndex]
 	urlIndex   int
-	inFlight   string
-	handle     *PrefetchHandle
+	// inFlightLaunched is the job-local clock for the in-flight URL; the
+	// shared entry can be deleted by another consumer at any time.
+	inFlightLaunched time.Time
+	inFlight         string
+	handle           *PrefetchHandle
 }
 
-// prefetchQueue is only touched from the game goroutine (Prefetch appends,
-// PrefetchTick advances).
-var prefetchQueue []*prefetchJob
+// prefetchQueue holds interactive jobs (sprites, sounds); backgroundQueue
+// holds bulk warming (map textures). Both are only touched from the game
+// goroutine (Prefetch appends, PrefetchTick advances).
+var (
+	prefetchQueue   []*prefetchJob
+	prefetchBgQueue []*prefetchJob
+)
 
 // Prefetch warms the web file cache for the first existing candidate of each
 // group, driven a step at a time from PrefetchTick instead of a goroutine:
@@ -77,13 +84,26 @@ var prefetchQueue []*prefetchJob
 // polling with sleeps can starve the frame loop. Groups mirror the candidate
 // lists the matching loader passes to readFirstResource; the loader remains
 // the source of truth, so a wrong or missing entry only costs one request.
+// Interactive callers get foreground scheduling: a large map-texture batch
+// must never delay a sprite the player is waiting to see.
 func (m *Manager) Prefetch(groups ...[]string) *PrefetchHandle {
+	return m.enqueuePrefetch(groups, &prefetchQueue)
+}
+
+// PrefetchBackground schedules bulk cache warming that yields to every
+// foreground job (map ground/model/water textures can be hundreds of
+// files; leaving them in the same FIFO starved sprite pop-in for seconds).
+func (m *Manager) PrefetchBackground(groups ...[]string) *PrefetchHandle {
+	return m.enqueuePrefetch(groups, &prefetchBgQueue)
+}
+
+func (m *Manager) enqueuePrefetch(groups [][]string, queue *[]*prefetchJob) *PrefetchHandle {
 	handle := &PrefetchHandle{started: time.Now()}
-	if len(prefetchQueue) >= 512 {
+	if len(prefetchQueue)+len(prefetchBgQueue) >= 512 {
 		handle.done = true
 		return handle
 	}
-	prefetchQueue = append(prefetchQueue, &prefetchJob{
+	*queue = append(*queue, &prefetchJob{
 		manager: m,
 		groups:  groups,
 		handle:  handle,
@@ -101,6 +121,23 @@ func PrefetchTick() {
 			i--
 		}
 	}
+	// Background jobs only advance when no foreground job is waiting.
+	if len(prefetchQueue) == 0 && len(prefetchBgQueue) > 0 {
+		for i := 0; i < len(prefetchBgQueue); i++ {
+			if prefetchStep(prefetchBgQueue[i]) {
+				prefetchBgQueue = append(prefetchBgQueue[:i], prefetchBgQueue[i+1:]...)
+				i--
+			}
+		}
+	}
+}
+
+// advanceGroup consumes the current group and reports whether the whole
+// job is finished.
+func (job *prefetchJob) advanceGroup() bool {
+	job.groupIndex++
+	job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
+	return job.groupIndex >= len(job.groups)
 }
 
 // prefetchStep advances one job; it reports true when the job is finished.
@@ -108,56 +145,61 @@ func prefetchStep(job *prefetchJob) bool {
 	if job.inFlight != "" {
 		settled, ok := prefetchSettled(job.inFlight)
 		if !ok {
-			if time.Since(prefetchLaunched(job.inFlight)) > prefetchFetchTimeout {
+			// Either genuinely pending, or the entry was consumed by
+			// another job waiting on the same URL (its result already
+			// landed in the web cache). Distinguish by existence; the
+			// timeout uses the job-local launch clock because a deleted
+			// entry has no durable one.
+			if _, exists := prefetchGet(job.inFlight); exists {
+				if time.Since(job.inFlightLaunched) <= prefetchFetchTimeout {
+					return false
+				}
 				prefetchForget(job.inFlight)
 				webCache.putMiss(job.inFlight)
-				job.inFlight = ""
 			}
-			return false
+			job.inFlight = ""
+		} else {
+			prefetchForget(job.inFlight)
+			url := job.inFlight
+			job.inFlight = ""
+			if settled.ok {
+				learnFromSuccess(url)
+				webCache.put(url, settled.data)
+				// First existing candidate is the one the loader uses;
+				// the group is satisfied (Find/readFirstResource semantics).
+				if job.advanceGroup() {
+					return true
+				}
+			} else {
+				webCache.putMiss(url)
+			}
+			// Fall through to try the next URL (or name, or group).
 		}
-		prefetchForget(job.inFlight)
-		url := job.inFlight
-		job.inFlight = ""
-		if settled.ok {
-			learnFromSuccess(url)
-			webCache.put(url, settled.data)
-			// First existing candidate is the one the loader uses; the
-			// group is satisfied (same semantics as Find/readFirstResource).
-			job.groupIndex++
-			job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-			return job.groupIndex >= len(job.groups)
-		}
-		webCache.putMiss(url)
-		// Fall through to try the next URL (or name, or group).
 	}
 	if prefetchInFlightCount() >= prefetchInFlightCap {
-		return false
+		// Self-heal: entries whose owning job is gone would hold the cap
+		// forever. Expire them by launch age.
+		prefetchPurgeOlderThan(prefetchFetchTimeout)
+		if prefetchInFlightCount() >= prefetchInFlightCap {
+			return false
+		}
 	}
+groups:
 	for job.groupIndex < len(job.groups) {
 		group := job.groups[job.groupIndex]
 		if job.urls == nil && job.nameIndex < len(group) {
 			// Whole-group archive pre-scan: when any spelling of this
 			// sound/sprite lives in the web pack, the group is satisfied
 			// without probing the wrong spellings that would 404 first.
-			satisfied := false
 			for _, name := range group {
 				for _, u := range job.manager.candidatePaths(normalizePath(name)) {
 					if job.manager.archiveHasCandidate(u) {
-						satisfied = true
-						break
+						if job.advanceGroup() {
+							return true
+						}
+						continue groups
 					}
 				}
-				if satisfied {
-					break
-				}
-			}
-			if satisfied {
-				job.groupIndex++
-				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-				// Packed groups cost no fetch, so keep advancing within
-				// this tick instead of spreading one group per frame —
-				// sprite views became Done() the same tick they spawn.
-				continue
 			}
 			job.urls = job.manager.candidatePaths(normalizePath(group[job.nameIndex]))
 			job.urlIndex = 0
@@ -170,17 +212,20 @@ func prefetchStep(job *prefetchJob) bool {
 			}
 			if _, ok := webCache.get(url); ok {
 				// Already cached: the group resolves without a fetch.
-				job.groupIndex++
-				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-				continue
+				if job.advanceGroup() {
+					return true
+				}
+				continue groups
 			}
 			if job.manager.archiveHasCandidate(url) {
 				// Packed in data_web.grf: the real read will come from
 				// memory — no network fetch to warm.
-				job.groupIndex++
-				job.nameIndex, job.urlIndex, job.urls = 0, 0, nil
-				continue
+				if job.advanceGroup() {
+					return true
+				}
+				continue groups
 			}
+			job.inFlightLaunched = time.Now()
 			prefetchLaunch(url)
 			job.inFlight = url
 			return false
@@ -207,6 +252,27 @@ func prefetchInFlightCount() int {
 		}
 	}
 	return n
+}
+
+func prefetchGet(url string) (*prefetchFetch, bool) {
+	prefetchFetches.Lock()
+	defer prefetchFetches.Unlock()
+	f, ok := prefetchFetches.m[url]
+	return f, ok
+}
+
+// prefetchPurgeOlderThan drops unsettled entries older than max. Entries
+// whose owning job finished through another path (a shared URL consumed by
+// a different job) would otherwise hold the in-flight cap forever.
+func prefetchPurgeOlderThan(max time.Duration) {
+	prefetchFetches.Lock()
+	defer prefetchFetches.Unlock()
+	now := time.Now()
+	for url, f := range prefetchFetches.m {
+		if f.result == nil && now.Sub(f.launched) > max {
+			delete(prefetchFetches.m, url)
+		}
+	}
 }
 
 func prefetchSettled(url string) (prefetchResult, bool) {

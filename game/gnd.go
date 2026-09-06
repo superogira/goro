@@ -465,7 +465,7 @@ func (m *WorldMode) prefetchMapTextures(manager *res.Manager, gnd *res.GND, rsw 
 		}
 	}
 	if len(groups) > 0 {
-		manager.Prefetch(groups...)
+		manager.PrefetchBackground(groups...)
 	}
 }
 

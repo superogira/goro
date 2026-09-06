@@ -151,17 +151,22 @@ func (m *Manager) apply() {
 		// Added overlay: mount so lifecycle bindings run — an unmounted
 		// subtree neither hit-tests nor paints (its boundaries serve an
 		// empty cached scene), even when the wrapper already carries
-		// pre-computed bounds. Marking the tree dirty makes the collector
-		// register the overlay's regions, and the scoped InvalidateRect
-		// clears exactly the covered pixels — the earlier full repaint
-		// here re-rastered every window on screen (~120ms sandbox /
-		// several hundred on tablets) each time any window opened.
+		// pre-computed bounds. A layout pass is required as well: the
+		// overlay's content starts with zero bounds, and only layout
+		// sizes it — the previous full repaint here set needsLayout as a
+		// side effect, which is why windows opened fine before. Without
+		// it, framework-laid-out windows painted at size zero and never
+		// appeared. Pixel invalidation stays scoped to the overlay bounds
+		// instead of re-rastering every window on screen.
 		if m.app != nil {
 			if ctx := m.app.WidgetContext(); ctx != nil {
 				widget.MountTree(overlay, ctx)
 			}
 		}
 		widget.MarkRedrawInTree(overlay)
+		if layoutApp, ok := m.app.(layoutInvalidatingUIApp); ok {
+			layoutApp.InvalidateLayout()
+		}
 		if bounds := overlayBounds(overlay); !bounds.IsEmpty() {
 			invalidateAppRect(m.app, bounds)
 		}

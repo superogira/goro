@@ -144,28 +144,27 @@ func (m *Manager) apply() {
 
 	m.root.children = append(m.root.children[:0], m.overlays...)
 
-	added := false
 	for _, overlay := range m.overlays {
 		if wasChild(overlay) {
 			continue
 		}
-		// Added overlay: mount so lifecycle bindings run, then escalate to a
-		// full repaint. SetRoot normally does both; attaching in place
-		// skips them, and an unmounted subtree neither hit-tests nor paints
-		// (its boundaries serve an empty cached scene), even when the
-		// wrapper already carries pre-computed bounds. The full repaint
-		// keeps the shared image cache, so unaffected windows re-blit from
-		// cache instead of re-rastering.
+		// Added overlay: mount so lifecycle bindings run — an unmounted
+		// subtree neither hit-tests nor paints (its boundaries serve an
+		// empty cached scene), even when the wrapper already carries
+		// pre-computed bounds. Marking the tree dirty makes the collector
+		// register the overlay's regions, and the scoped InvalidateRect
+		// clears exactly the covered pixels — the earlier full repaint
+		// here re-rastered every window on screen (~120ms sandbox /
+		// several hundred on tablets) each time any window opened.
 		if m.app != nil {
 			if ctx := m.app.WidgetContext(); ctx != nil {
 				widget.MountTree(overlay, ctx)
 			}
 		}
 		widget.MarkRedrawInTree(overlay)
-		added = true
-	}
-	if added && m.app != nil {
-		m.app.RequestFullRepaint()
+		if bounds := overlayBounds(overlay); !bounds.IsEmpty() {
+			invalidateAppRect(m.app, bounds)
+		}
 	}
 }
 
@@ -361,4 +360,17 @@ func (r *overlayRoot) Children() []widget.Widget {
 	children := make([]widget.Widget, len(r.children))
 	copy(children, r.children)
 	return children
+}
+
+// invalidateAppRect scopes an app-level invalidation to rect, falling back
+// to a full invalidation when the app lacks rect support.
+func invalidateAppRect(app client.UIApp, rect geometry.Rect) {
+	if app == nil || rect.IsEmpty() {
+		return
+	}
+	if ra, ok := app.(rectInvalidatingUIApp); ok {
+		ra.InvalidateRect(rect.Expand(windowDirtyPadding))
+		return
+	}
+	app.Invalidate()
 }

@@ -23,21 +23,34 @@ func handleEvent(w *Widget, ctx widget.Context, e event.Event) bool {
 	}
 }
 
+// requestStateRepaint marks the button for repaint after a visual state
+// transition. On the web build this is a no-op: each transition re-rasters
+// the button on the CPU, and a tap walks hover→press→release in quick
+// succession — three rasters per tap read as a stutter on tablets. The
+// state machine still runs; only the visual feedback is dropped.
+func requestStateRepaint(w *Widget, ctx widget.Context) {
+	if !visualStateTransitionsEnabled {
+		return
+	}
+	w.SetNeedsRedraw(true)
+	// ScreenBounds: the invalidation rect is consumed in window space —
+	// local bounds (origin 0,0) repainted a phantom top-left corner.
+	ctx.InvalidateRect(w.ScreenBounds())
+}
+
 // handleMouseEvent processes mouse events for hover, press, and click.
 func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 	switch e.MouseType {
 	case event.MouseEnter:
 		w.state = stateHover
 		ctx.SetCursor(widget.CursorPointer)
-		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.ScreenBounds())
+		requestStateRepaint(w, ctx)
 		return true
 
 	case event.MouseLeave:
 		w.state = stateNormal
 		ctx.SetCursor(widget.CursorDefault)
-		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.ScreenBounds())
+		requestStateRepaint(w, ctx)
 		return true
 
 	case event.MousePress:
@@ -46,10 +59,7 @@ func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 		}
 		w.state = statePressed
 		ctx.RequestFocus(w)
-		w.SetNeedsRedraw(true)
-		// ScreenBounds: the invalidation rect is consumed in window space —
-		// local bounds (origin 0,0) repainted a phantom top-left corner.
-		ctx.InvalidateRect(w.ScreenBounds())
+		requestStateRepaint(w, ctx)
 		return true
 
 	case event.MouseRelease:
@@ -63,8 +73,7 @@ func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 		} else {
 			w.state = stateNormal
 		}
-		w.SetNeedsRedraw(true)
-		ctx.InvalidateRect(w.ScreenBounds())
+		requestStateRepaint(w, ctx)
 		if wasPressed && w.Bounds().Contains(e.Position) {
 			fireOnClick(w)
 		}

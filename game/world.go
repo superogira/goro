@@ -397,6 +397,13 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	now := time.Now()
 	m.bindNPCDialogLifecycle()
 	m.startMapPrewarm()
+	// Parse the item tables while the map streams: the first drop's sprite
+	// cannot resolve its resource name until these are loaded, and the lazy
+	// first-query load lands mid-combat otherwise. Cheap when the login
+	// screen already prefetched the files.
+	if ctx.Resources != nil {
+		ctx.Resources.WarmItemMetadata()
+	}
 	m.camera.ResetTracking()
 	ctx.World.GAT = nil
 	ctx.World.GND = nil

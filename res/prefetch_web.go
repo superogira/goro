@@ -117,6 +117,10 @@ func (m *Manager) enqueuePrefetch(groups [][]string, queue *[]*prefetchJob) *Pre
 func PrefetchTick() {
 	for i := 0; i < len(prefetchQueue); i++ {
 		if prefetchStep(prefetchQueue[i]) {
+			// The handle's Done() gates render-time fallbacks; without this
+			// every view waited out the full stall grace even though its
+			// files were already warm.
+			prefetchQueue[i].handle.done = true
 			prefetchQueue = append(prefetchQueue[:i], prefetchQueue[i+1:]...)
 			i--
 		}
@@ -125,6 +129,7 @@ func PrefetchTick() {
 	if len(prefetchQueue) == 0 && len(prefetchBgQueue) > 0 {
 		for i := 0; i < len(prefetchBgQueue); i++ {
 			if prefetchStep(prefetchBgQueue[i]) {
+				prefetchBgQueue[i].handle.done = true
 				prefetchBgQueue = append(prefetchBgQueue[:i], prefetchBgQueue[i+1:]...)
 				i--
 			}

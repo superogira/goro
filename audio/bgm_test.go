@@ -56,6 +56,17 @@ func TestSFXPathCandidatesUseWavDataDirectories(t *testing.T) {
 	}
 }
 
+func TestSFXPathCandidatesLeadWithWavDataDirectory(t *testing.T) {
+	got := sfxPathCandidates("lunatic_die.wav")
+	if len(got) < 2 || got[0] != `data\wav\lunatic_die.wav` || got[1] != "data/wav/lunatic_die.wav" {
+		t.Fatalf("candidates %v must lead with data\\wav\\ spellings", got)
+	}
+	got = sfxPathCandidates(`wav\se_prtbird_02.wav`)
+	if len(got) < 2 || got[0] != `data\wav\se_prtbird_02.wav` || got[1] != "data/wav/se_prtbird_02.wav" {
+		t.Fatalf("candidates %v must lead with data\\wav\\ spellings", got)
+	}
+}
+
 func TestSFXPathCandidatesAppendWavExtension(t *testing.T) {
 	got := sfxPathCandidates("effect\\attack")
 	for _, want := range []string{"effect\\attack.wav", "wav\\effect\\attack.wav", "data\\wav\\effect\\attack.wav"} {

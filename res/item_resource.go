@@ -297,7 +297,69 @@ func (m *Manager) loadItemMetadata() {
 			m.itemMetadata[id] = metadata
 		}
 	}
-	m.loadItemInfoLuaMetadata()
+	// The lub metadata fully overlaps the txt tables. When the txt tables
+	// resolved (kRO-style data tree), skip the lub candidate walk — on
+	// deployments without a lub those probes are ~13 guaranteed 404s paid
+	// between the drop packet and the first sprite frame.
+	if !m.itemMetadataHasResourceNames() {
+		m.loadItemInfoLuaMetadata()
+	}
+}
+
+// itemMetadataHasResourceNames reports whether the txt tables produced any
+// item resource names.
+func (m *Manager) itemMetadataHasResourceNames() bool {
+	for _, metadata := range m.itemMetadata {
+		if metadata.IdentifiedResource != "" || metadata.UnidentifiedResource != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ItemMetadataPrefetchGroups returns the candidate groups for every item
+// metadata table. The tables are tiny, but loadItemMetadata reads them
+// lazily at the first query — without warming, that first query (usually
+// the first monster drop) pays a serial candidate walk over the network
+// before the item's resource name is even known.
+func ItemMetadataPrefetchGroups() [][]string {
+	groups := make([][]string, 0, 12)
+	add := func(name string) {
+		groups = append(groups, itemTableCandidates(name))
+	}
+	for _, table := range itemDisplayTableFiles {
+		add(table.name)
+	}
+	for _, table := range itemResourceTableFiles {
+		add(table.name)
+	}
+	for _, table := range itemDescriptionTableFiles {
+		add(table.name)
+	}
+	for _, table := range itemSlotCountTableFiles {
+		add(table)
+	}
+	for _, table := range itemCardPrefixTableFiles {
+		add(table)
+	}
+	for _, table := range itemCardIllustrationTableFiles {
+		add(table)
+	}
+	for _, table := range itemCardPostfixTableFiles {
+		add(table)
+	}
+	groups = append(groups, itemInfoLuaCandidates)
+	return groups
+}
+
+// WarmItemMetadata parses the item tables eagerly. With the table files
+// already prefetched this is a few milliseconds of parsing; call it when
+// the world loads so the first drop does not pay for it.
+func (m *Manager) WarmItemMetadata() {
+	if m == nil {
+		return
+	}
+	m.loadItemMetadata()
 }
 
 func (m *Manager) loadItemInfoLuaMetadata() {
@@ -391,10 +453,13 @@ func (m *Manager) readItemIDSetTable(fileName string) map[int]struct{} {
 }
 
 func itemTableCandidates(fileName string) []string {
+	// Lead with data\ — the canonical location on both kRO data trees and
+	// web deployments — so the first probe hits instead of 404ing at the
+	// web root first.
 	return []string{
-		fileName,
 		"data\\" + fileName,
 		"data/" + fileName,
+		fileName,
 	}
 }
 

@@ -253,19 +253,25 @@ func sfxPathCandidates(path string) []string {
 		return nil
 	}
 	slash := strings.ReplaceAll(normalized, "\\", "/")
-	candidates := []string{normalized, slash}
 	lower := strings.ToLower(normalized)
+	// Lead with data\wav\ — the canonical kRO location and where the web pack
+	// stores sounds — so lookups hit the archive before any HTTP probe.
+	var candidates []string
 	if strings.HasPrefix(lower, "wav\\") {
 		candidates = append(candidates,
 			"data\\"+normalized,
 			"data/"+slash,
+			normalized,
+			slash,
 		)
 	} else {
 		candidates = append(candidates,
-			"wav\\"+normalized,
-			"wav/"+slash,
 			"data\\wav\\"+normalized,
 			"data/wav/"+slash,
+			normalized,
+			slash,
+			"wav\\"+normalized,
+			"wav/"+slash,
 		)
 	}
 	return uniqueStrings(candidates)

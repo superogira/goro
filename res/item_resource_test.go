@@ -2,6 +2,7 @@ package res
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,66 @@ func TestItemSpriteResourceCandidates(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("missing bare fallback in %#v", got)
+	}
+}
+
+func TestItemTableCandidatesLeadWithDataDirectory(t *testing.T) {
+	got := itemTableCandidates("idnum2itemresnametable.txt")
+	want := []string{
+		"data\\idnum2itemresnametable.txt",
+		"data/idnum2itemresnametable.txt",
+		"idnum2itemresnametable.txt",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("candidate count = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidate[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestItemMetadataHasResourceNames(t *testing.T) {
+	m := &Manager{itemMetadata: map[int]ItemMetadata{}}
+	if m.itemMetadataHasResourceNames() {
+		t.Fatal("empty metadata must report no resource names")
+	}
+	m.itemMetadata[909] = ItemMetadata{IdentifiedDisplayName: "Jellopy"}
+	if m.itemMetadataHasResourceNames() {
+		t.Fatal("display name alone must not count as a resource name")
+	}
+	m.itemMetadata[909] = ItemMetadata{IdentifiedDisplayName: "Jellopy", UnidentifiedResource: "젤로피"}
+	if !m.itemMetadataHasResourceNames() {
+		t.Fatal("resource name present must be detected")
+	}
+}
+
+func TestItemMetadataPrefetchGroupsCoverTables(t *testing.T) {
+	groups := ItemMetadataPrefetchGroups()
+	joined := ""
+	for _, group := range groups {
+		joined += strings.Join(group, "|") + "\n"
+	}
+	for _, name := range []string{
+		"num2itemresnametable.txt",
+		"idnum2itemresnametable.txt",
+		"num2itemdisplaynametable.txt",
+		"idnum2itemdisplaynametable.txt",
+		"itemslotcounttable.txt",
+		"num2cardillustnametable.txt",
+		"itemInfo.lub",
+	} {
+		if !strings.Contains(joined, name) {
+			t.Fatalf("prefetch groups missing %q", name)
+		}
+	}
+	for _, group := range groups {
+		if len(group) == 0 || !strings.HasPrefix(group[0], "data") {
+			if group[0] != "System\\itemInfo.lub" && group[0] != "System/itemInfo.lub" {
+				t.Fatalf("group %#v must lead with a data-rooted candidate", group)
+			}
+		}
 	}
 }
 

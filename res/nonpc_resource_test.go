@@ -25,11 +25,13 @@ func TestNonPCSpriteResourceCandidatesNPC(t *testing.T) {
 
 func TestNonPCSpriteResourceCandidatesMonster(t *testing.T) {
 	got := NonPCSpriteResourceCandidates(1002, "PORING", "spr")
+	// The kRO-canonical Korean folder leads so stock archives (and the web
+	// resource pack) resolve without the English-root probe misses.
 	want := []string{
-		"data\\sprite\\monster\\PORING.spr",
-		"data\\sprite\\monster\\poring.spr",
 		legacyMonsterSpriteRoot + "PORING.spr",
 		legacyMonsterSpriteRoot + "poring.spr",
+		"data\\sprite\\monster\\PORING.spr",
+		"data\\sprite\\monster\\poring.spr",
 		"data\\sprite\\PORING.spr",
 		"data\\sprite\\poring.spr",
 	}

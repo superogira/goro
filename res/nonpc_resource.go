@@ -93,8 +93,12 @@ func NonPCSpriteResourceCandidates(job int, resourceName string, extension strin
 		return out
 	}
 	if job >= 1000 {
-		addStem("data\\sprite\\monster\\")
+		// The kRO-canonical Korean folder leads: it is the spelling real
+		// archives (and the web resource pack) contain, so renamed-English
+		// data servers pay the probe misses instead of every stock-data
+		// player paying them on each monster's first appearance.
 		addStem(legacyMonsterSpriteRoot)
+		addStem("data\\sprite\\monster\\")
 		addStem("data\\sprite\\")
 		return out
 	}

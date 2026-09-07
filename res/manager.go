@@ -377,7 +377,12 @@ func parseFogColor(raw string) (color.RGBA, bool) {
 }
 
 func (m *Manager) scanKnownFiles() {
-	for _, name := range append(clientInfoCandidates, "data.grf", "rdata.grf", "fdata.grf", "event.grf") {
+	// Note: the .grf archive names are deliberately NOT probed here. On
+	// the web build a Find("fdata.grf") downloads the whole archive into
+	// the file cache (~8.7MB at every cold boot) just to record a path in
+	// FoundFiles that nothing reads; archive discovery happens in
+	// scanArchives on both builds.
+	for _, name := range clientInfoCandidates {
 		if path, ok := m.Find(name); ok {
 			m.FoundFiles = append(m.FoundFiles, path)
 		}

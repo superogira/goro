@@ -21,6 +21,9 @@ const (
 	statusIconSpacing        = 36
 	statusIconGap            = 8
 	statusIconRedrawInterval = 250 * time.Millisecond
+	// Status-icon descriptions were introduced after our 2008 target client.
+	// Keep the implementation available for now, but do not display it.
+	statusIconTooltipsEnabled = false
 )
 
 type StatusIcons struct {
@@ -219,11 +222,11 @@ func (w *statusIconsWidget) Draw(_ widget.Context, canvas widget.Canvas) {
 		y := startY + row*statusIconSpacing
 		effect := w.ctx.Session.Statuses.Active[id]
 		w.drawStatusIcon(canvas, id, effect, x, y)
-		if w.ctx.Input != nil && PointInRect(w.ctx.Input.MouseX, w.ctx.Input.MouseY, x, y, statusIconSize, statusIconSize) {
+		if statusIconTooltipsEnabled && w.ctx.Input != nil && PointInRect(w.ctx.Input.MouseX, w.ctx.Input.MouseY, x, y, statusIconSize, statusIconSize) {
 			hovered = int(id)
 		}
 	}
-	if hovered >= 0 && w.ctx.Input != nil && !TooltipsSuppressed(w.ctx) {
+	if statusIconTooltipsEnabled && hovered >= 0 && w.ctx.Input != nil && !TooltipsSuppressed(w.ctx) {
 		w.drawTooltip(canvas, uint16(hovered), w.ctx.Session.Statuses.Active[uint16(hovered)], w.ctx.Input.MouseX, w.ctx.Input.MouseY)
 	}
 }

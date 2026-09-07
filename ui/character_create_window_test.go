@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/session"
 	"github.com/kivutar/goro/ui/rotheme"
@@ -160,6 +162,28 @@ func TestCharacterCreateHairControlsFrameHead(t *testing.T) {
 	}
 }
 
+func TestCharacterCreateNameUsesLabelStyle(t *testing.T) {
+	tree := (&CharacterCreateWindow{}).widgetTree()
+	var name *primitives.TextWidget
+	var walk func(widget.Widget)
+	walk = func(current widget.Widget) {
+		if text, ok := current.(*primitives.TextWidget); ok && text.Content() == "Name" {
+			name = text
+		}
+		for _, child := range current.Children() {
+			walk(child)
+		}
+	}
+	walk(tree)
+	if name == nil {
+		t.Fatal("character creation Name label is missing")
+	}
+	style := name.Style()
+	if style.Color != rotheme.Default.Colors.LabelText || style.FontFamily != rotheme.Default.Typography.FontFamily || !style.Bold {
+		t.Fatalf("Name style = color %+v, bold %t, family %q; want semantic label style", style.Color, style.Bold, style.FontFamily)
+	}
+}
+
 func TestCharacterCreateStatButtonsSitOutsideHexagon(t *testing.T) {
 	tree := (&CharacterCreateWindow{}).widgetTree()
 	tree.Layout(
@@ -204,6 +228,29 @@ func TestCharacterCreateStatButtonsSitOutsideHexagon(t *testing.T) {
 		if buttonDistance <= hexagonDistance {
 			t.Fatalf("stat %d button distance = %.1f, want greater than hexagon radius %.1f", stat, buttonDistance, hexagonDistance)
 		}
+	}
+}
+
+func TestCharacterCreateStatButtonsUseLabelStyle(t *testing.T) {
+	graph := newCharacterCreateStatGraph([CharacterCreateStatCount]uint8{}, nil)
+	graph.Layout(widget.NewContext(), geometry.Tight(geometry.Sz(characterCreateGraphW, characterCreateGraphH)))
+	canvas := &uitest.MockCanvas{}
+	graph.Draw(widget.NewContext(), canvas)
+
+	if len(canvas.StyledTexts) != CharacterCreateStatCount {
+		t.Fatalf("stat button label draws = %d, want %d", len(canvas.StyledTexts), CharacterCreateStatCount)
+	}
+	labels := CharacterCreateStatLabels()
+	for stat, draw := range canvas.StyledTexts {
+		if draw.Text != labels[stat] {
+			t.Fatalf("stat button %d label = %q, want %q", stat, draw.Text, labels[stat])
+		}
+		if draw.Style.Color != rotheme.Default.Colors.LabelText || draw.Style.FontFamily != rotheme.Default.Typography.FontFamily || !draw.Style.Bold || draw.Style.Align != widget.TextAlignCenter {
+			t.Fatalf("stat button %s style = color %+v, family %q, align %v", draw.Text, draw.Style.Color, draw.Style.FontFamily, draw.Style.Align)
+		}
+	}
+	if len(canvas.Texts) != 0 {
+		t.Fatal("stat button labels unexpectedly used the built-in font family")
 	}
 }
 

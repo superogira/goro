@@ -6,6 +6,7 @@ import (
 	"github.com/gogpu/ui/animation"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -34,6 +35,9 @@ type Widget struct {
 	cfg     config
 	istate  interactionState
 	painter Painter
+
+	// Gesture recognizer for header click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
 
 	// Animation state.
 	progress float32 // 0.0 = collapsed, 1.0 = expanded
@@ -100,6 +104,38 @@ func New(opts ...Option) *Widget {
 		}
 	}
 
+	// Create ClickRecognizer for header click handling (ADR-049).
+	// The callback checks if the click was within the header bounds.
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClickDown: func(details gesture.ClickDownDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			if !headerBounds(w).Contains(details.LocalPosition) {
+				return
+			}
+			w.istate = statePressed
+			w.SetNeedsRedraw(true)
+		},
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			if !headerBounds(w).Contains(details.LocalPosition) {
+				return
+			}
+			w.istate = stateNormal
+			w.SetNeedsRedraw(true)
+			w.Toggle()
+			w.MarkNeedsLayout()
+		},
+		OnClickCancel: func() {
+			w.istate = stateNormal
+			w.SetNeedsRedraw(true)
+		},
+	})
+
 	return w
 }
 
@@ -146,9 +182,6 @@ func (w *Widget) IsAnimating() bool {
 //   - Expanded: headerHeight + content height
 //   - Animating: headerHeight + content height * progress
 func (w *Widget) Layout(ctx widget.Context, constraints geometry.Constraints) geometry.Size {
-	// Tick animation if active.
-	w.tickAnimation(ctx)
-
 	headerH := w.cfg.headerHeight
 
 	// Layout content to determine its natural height.
@@ -162,7 +195,7 @@ func (w *Widget) Layout(ctx widget.Context, constraints geometry.Constraints) ge
 			constraints.MinWidth, constraints.MaxWidth,
 			0, maxContentH,
 		)
-		w.contentSize = w.cfg.content.Layout(ctx, contentConstraints)
+		w.contentSize = widget.LayoutChild(w.cfg.content, ctx, contentConstraints)
 		contentH = w.contentSize.Height
 	}
 
@@ -299,10 +332,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 		w.AddBinding(b)
 	}
 	if w.cfg.readonlyExpandedSignal != nil {
-		b := state.BindToScheduler(w.cfg.readonlyExpandedSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyExpandedSignal, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.expandedSignal != nil {
-		b := state.BindToScheduler(w.cfg.expandedSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.expandedSignal, w, sched)
 		w.AddBinding(b)
 	}
 }
@@ -310,14 +343,39 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the widget is removed from the tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.clickRec != nil {
+		w.clickRec.Dispose()
+	}
 	// Cancel any running animation.
 	if w.animCtrl != nil {
 		w.animCtrl.CancelAll()
 	}
 }
 
+// GestureHitTest returns the gesture recognizers for a pointer event at pos
+// (widget-local coordinates).
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+//
+// Collapsible is a container widget — returns recognizers ONLY when pos is
+// within the header area. Content-area clicks return nil so child widgets'
+// recognizers are the sole participants in the gesture arena.
+func (w *Widget) GestureHitTest(pos geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	// Header occupies the top headerHeight pixels in local coordinates.
+	b := w.Bounds()
+	localHeader := geometry.NewRect(0, 0, b.Width(), w.cfg.headerHeight)
+	if !localHeader.Contains(pos) {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
+}
+
 // setExpandedState updates the expanded state and starts animation if needed.
 func (w *Widget) setExpandedState(expanded bool) {
+	widget.PlaySound(widget.SoundClick)
+
 	// Update state source.
 	if w.cfg.expandedSignal != nil {
 		w.cfg.expandedSignal.Set(expanded)
@@ -359,8 +417,10 @@ func (w *Widget) startAnimation(expanding bool) {
 		Start(w.animCtrl)
 }
 
-// tickAnimation advances animation by delta time from context.
-func (w *Widget) tickAnimation(ctx widget.Context) {
+// TickAnimation advances the expand/collapse animation by delta time.
+// Called by the framework BEFORE layout (ADR-032 GAP-3, Flutter pattern).
+// Layout reads w.progress without mutation.
+func (w *Widget) TickAnimation(ctx widget.Context) {
 	if w.animCtrl == nil || !w.animCtrl.HasActive() {
 		return
 	}
@@ -372,13 +432,12 @@ func (w *Widget) tickAnimation(ctx widget.Context) {
 	if dt > 32*time.Millisecond {
 		dt = 32 * time.Millisecond
 	}
+	wasActive := w.animCtrl.HasActive()
 	w.animCtrl.Tick(dt)
 
-	// Keep requesting redraws while animating.
-	// ADR-028: layout change — animation changes widget height each frame.
-	if w.animCtrl.HasActive() {
+	if w.animCtrl.HasActive() || wasActive {
+		w.MarkNeedsLayout()
 		w.SetNeedsRedraw(true)
-		ctx.Invalidate()
 	}
 }
 
@@ -405,7 +464,8 @@ func (a *progressAdapter) Set(v float32) {
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

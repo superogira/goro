@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/gogpu/naga/ir"
 	"github.com/gogpu/naga/msl"
 	"github.com/gogpu/wgpu/hal"
+	"github.com/gogpu/wgpu/hal/metal/mslmap"
 )
 
 // Vertex buffer indices are assigned from the end of the range and count down.
@@ -38,6 +40,14 @@ type Device struct {
 	// and direct CPU writes without a staging blit, which eliminates the main source
 	// of resize-induced memory growth.
 	hasUnifiedMemory bool
+	// isAppleGPU is true when the device belongs to MTLGPUFamilyApple1 or higher
+	// (Apple-designed GPU: A-series, M-series). Intel/AMD GPUs on Mac report
+	// hasUnifiedMemory=true but are NOT Apple GPU family and do not support
+	// MTLStorageModeShared for multisample textures. This field drives texture
+	// storage mode selection instead of hasUnifiedMemory.
+	isAppleGPU      bool
+	icbTranslatorMu sync.Mutex
+	icbTranslators  map[gputypes.IndexFormat]indexedICBTranslator
 }
 
 // newDevice creates a new Device from a Metal device.
@@ -51,14 +61,22 @@ func newDevice(adapter *Adapter) (*Device, error) {
 		return nil, fmt.Errorf("metal: failed to create command queue")
 	}
 
-	// Detect Apple Silicon (UMA): hasUnifiedMemory returns YES on M-series chips.
-	// On UMA, MTLStorageModeShared == Private physically, so we use Shared for all
-	// user textures to enable setPurgeableState(empty) and direct CPU writes.
+	// Detect UMA: hasUnifiedMemory returns YES on Apple Silicon (M-series) and
+	// some Intel integrated GPUs (e.g. Iris Plus 655). Used for DeviceType
+	// classification and buffer storage decisions.
 	hasUMA := MsgSend(adapter.raw, Sel("hasUnifiedMemory")) != 0
+
+	// Detect Apple-designed GPU (A-series, M-series) via MTLGPUFamilyApple1.
+	// This is the correct predicate for texture storage mode: Intel/AMD GPUs
+	// may report hasUnifiedMemory=true but crash on MTLStorageModeShared for
+	// multisample textures. Only Apple GPU family supports Shared for all
+	// single-sample texture types.
+	isApple := DeviceSupportsFamily(adapter.raw, MTLGPUFamilyApple1)
 
 	hal.Logger().Info("metal: device created",
 		"name", DeviceName(adapter.raw),
 		"hasUnifiedMemory", hasUMA,
+		"isAppleGPU", isApple,
 	)
 
 	return &Device{
@@ -66,6 +84,7 @@ func newDevice(adapter *Adapter) (*Device, error) {
 		commandQueue:     queue,
 		adapter:          adapter,
 		hasUnifiedMemory: hasUMA,
+		isAppleGPU:       isApple,
 	}, nil
 }
 
@@ -190,11 +209,11 @@ func (d *Device) CreateTexture(desc *hal.TextureDescriptor) (hal.Texture, error)
 	_ = MsgSend(texDesc, Sel("setWidth:"), uintptr(desc.Size.Width))
 	_ = MsgSend(texDesc, Sel("setHeight:"), uintptr(desc.Size.Height))
 
-	depth := desc.Size.DepthOrArrayLayers
-	if depth == 0 {
-		depth = 1
+	shape := metalTextureDescriptorShape(desc.Dimension, desc.Size.DepthOrArrayLayers)
+	_ = MsgSend(texDesc, Sel("setDepth:"), uintptr(shape.depth))
+	if texType == MTLTextureType1DArray || texType == MTLTextureType2DArray {
+		_ = MsgSend(texDesc, Sel("setArrayLength:"), uintptr(shape.arrayLength))
 	}
-	_ = MsgSend(texDesc, Sel("setDepth:"), uintptr(depth))
 
 	mipLevels := desc.MipLevelCount
 	if mipLevels == 0 {
@@ -211,18 +230,11 @@ func (d *Device) CreateTexture(desc *hal.TextureDescriptor) (hal.Texture, error)
 	usage := textureUsageToMTL(desc.Usage)
 	_ = MsgSend(texDesc, Sel("setUsage:"), uintptr(usage))
 
-	// On Apple Silicon (UMA), use Shared storage instead of Private.
-	// Physical memory is identical on UMA — the only differences are:
-	//   (a) Shared supports direct CPU writes via replaceRegion: (no staging copy)
-	//   (b) Shared honours setPurgeableState(empty) which immediately returns
-	//       physical pages to the OS; Private silently ignores this call.
-	// On discrete-GPU Macs, keep Private (VRAM-resident, no CPU penalty per frame).
-	storageMode := MTLStorageModePrivate
-	isShared := false
-	if d.hasUnifiedMemory {
-		storageMode = MTLStorageModeShared
-		isShared = true
-	}
+	// Select storage mode based on GPU family and sample count.
+	// Apple GPU + single-sample → Shared (zero-copy CPU writes, setPurgeableState).
+	// Apple GPU + multisample → Private (MSAA has no Shared benefit).
+	// Non-Apple GPU (Intel/AMD) → Private always (spec requirement for MSAA).
+	storageMode, isShared := textureStorageMode(d.isAppleGPU, sampleCount)
 	_ = MsgSend(texDesc, Sel("setStorageMode:"), uintptr(storageMode))
 
 	raw := MsgSend(d.raw, Sel("newTextureWithDescriptor:"), uintptr(texDesc))
@@ -241,7 +253,7 @@ func (d *Device) CreateTexture(desc *hal.TextureDescriptor) (hal.Texture, error)
 		format:     desc.Format,
 		width:      desc.Size.Width,
 		height:     desc.Size.Height,
-		depth:      depth,
+		depth:      max(desc.Size.DepthOrArrayLayers, 1),
 		mipLevels:  mipLevels,
 		samples:    sampleCount,
 		dimension:  desc.Dimension,
@@ -486,7 +498,12 @@ func (d *Device) CreatePipelineLayout(desc *hal.PipelineLayoutDescriptor) (hal.P
 			samAccum += bgl.samplerCount
 		}
 	}
-	return &PipelineLayout{layouts: desc.BindGroupLayouts, device: d, groupOffsets: offsets}, nil
+	return &PipelineLayout{
+		layouts:      desc.BindGroupLayouts,
+		device:       d,
+		groupOffsets: offsets,
+		totalBuffers: bufAccum,
+	}, nil
 }
 
 // DestroyPipelineLayout destroys a pipeline layout.
@@ -499,73 +516,140 @@ func (d *Device) DestroyPipelineLayout(layout hal.PipelineLayout) {
 }
 
 // CreateShaderModule creates a shader module.
+//
+// This function parses WGSL and lowers it to naga IR. It does not write MSL,
+// because the buffer slot for naga's `_buffer_sizes` argument comes from the
+// pipeline layout, which is not known yet. The pipeline writes the MSL later.
+// WGSL syntax and validation errors are still reported here.
+//
+// Reference: Rust wgpu-hal metal/device.rs:138-145 (load_shader takes the
+// pipeline layout and is called from create_*_pipeline).
 func (d *Device) CreateShaderModule(desc *hal.ShaderModuleDescriptor) (hal.ShaderModule, error) {
-	// If WGSL source is provided, compile to MSL
-	if desc.Source.WGSL != "" { //nolint:nestif // WGSL→MSL pipeline is sequential; splitting would scatter coupled logic
-		start := time.Now()
-
-		// Parse WGSL to AST
-		ast, err := naga.Parse(desc.Source.WGSL)
-		if err != nil {
-			return nil, fmt.Errorf("metal: failed to parse WGSL: %w", err)
-		}
-
-		// Lower AST to IR
-		irModule, err := naga.LowerWithSource(ast, desc.Source.WGSL)
-		if err != nil {
-			return nil, fmt.Errorf("metal: failed to lower WGSL to IR: %w", err)
-		}
-
-		// Extract workgroup sizes from entry points for compute shaders
-		workgroupSizes := extractWorkgroupSizes(irModule)
-
-		// Compile IR to MSL
-		mslSource, info, err := msl.Compile(irModule, msl.DefaultOptions())
-		if err != nil {
-			return nil, fmt.Errorf("metal: failed to compile to MSL: %w", err)
-		}
-
-		hal.Logger().Debug("metal: WGSL→MSL compilation",
-			"elapsed", time.Since(start),
-			"mslBytes", len(mslSource),
-		)
-
-		// Create NSString from MSL source
-		mslString := NSString(mslSource)
-		defer Release(mslString)
-
-		// Create MTLLibrary from source
-		// MTLLibrary* newLibraryWithSource:options:error:
-		var errorPtr ID
-		library := MsgSend(d.raw, Sel("newLibraryWithSource:options:error:"),
-			uintptr(mslString), 0, uintptr(unsafe.Pointer(&errorPtr)))
-
-		if library == 0 {
-			errMsg := unknownError
-			if errorPtr != 0 {
-				if details := formatNSError(errorPtr); details != "" {
-					errMsg = details
-				}
-				// Object is autoreleased
-			}
-			return nil, fmt.Errorf("metal: failed to compile MSL: %s\nMSL:\n%s", errMsg, mslSource)
-		}
-
-		hal.Logger().Info("metal: shader module compiled",
-			"entryPoints", len(workgroupSizes),
-		)
-
-		return &ShaderModule{
-			source:          desc.Source,
-			library:         library,
-			device:          d,
-			workgroupSizes:  workgroupSizes,
-			entrypointNames: info.EntryPointNames,
-		}, nil
+	if desc.Source.WGSL == "" {
+		// No WGSL source - just store the descriptor for later
+		return &ShaderModule{source: desc.Source, device: d}, nil
 	}
 
-	// No WGSL source - just store the descriptor for later
-	return &ShaderModule{source: desc.Source, device: d}, nil
+	start := time.Now()
+
+	// Parse WGSL to AST
+	ast, err := naga.Parse(desc.Source.WGSL)
+	if err != nil {
+		return nil, fmt.Errorf("metal: failed to parse WGSL: %w", err)
+	}
+
+	// Lower AST to IR
+	irModule, err := naga.LowerWithSource(ast, desc.Source.WGSL)
+	if err != nil {
+		return nil, fmt.Errorf("metal: failed to lower WGSL to IR: %w", err)
+	}
+
+	// Extract workgroup sizes from entry points for compute shaders
+	workgroupSizes := extractWorkgroupSizes(irModule)
+
+	hal.Logger().Debug("metal: WGSL→IR lowering",
+		"elapsed", time.Since(start),
+		"entryPoints", len(irModule.EntryPoints),
+	)
+
+	return &ShaderModule{
+		source:         desc.Source,
+		irModule:       irModule,
+		device:         d,
+		workgroupSizes: workgroupSizes,
+	}, nil
+}
+
+// compiledLibrary holds one MSL translation of a shader module and the data
+// that the caller needs in order to bind it.
+type compiledLibrary struct {
+	library         ID // id<MTLLibrary>; the caller must release it
+	entrypointNames map[string]string
+	// sizesBindings lists the bindings whose byte size the kernel needs, in
+	// the field order that naga uses. It is empty if the shader has no
+	// runtime-sized array.
+	sizesBindings []ir.ResourceBinding
+	// sizesSlot is the buffer slot that the `_buffer_sizes` argument was
+	// compiled with. It has a meaning only if sizesBindings is not empty.
+	sizesSlot int
+}
+
+// compileLibrary writes MSL for the shader module and builds an MTLLibrary
+// from it.
+//
+// If bindSizes is true, the MSL binds naga's `_buffer_sizes` argument to the
+// first free buffer slot from the pipeline layout. If it is false, naga assigns
+// the bindings on its own, and the MSL is the same as in earlier releases.
+//
+// Reference: Rust wgpu-hal metal/device.rs:138-145.
+func (d *Device) compileLibrary(module *ShaderModule, layout *PipelineLayout, bindSizes bool) (*compiledLibrary, error) {
+	if module == nil || module.irModule == nil {
+		return nil, fmt.Errorf("metal: shader module has no WGSL source")
+	}
+
+	start := time.Now()
+
+	out := &compiledLibrary{}
+	options := msl.DefaultOptions()
+	if bindSizes {
+		bindings, err := mslmap.RuntimeArrayBindings(module.irModule)
+		if err != nil {
+			return nil, fmt.Errorf("metal: %w", err)
+		}
+		if len(bindings) > 0 {
+			if layout == nil {
+				// Without a slot, the `_buffer_sizes` argument
+				// stays unbound and arrayLength() reads
+				// whatever the slot happens to hold.
+				return nil, fmt.Errorf("metal: shader uses runtime-sized arrays but has no pipeline layout")
+			}
+			options, err = mslmap.Options(module.irModule, layout.totalBuffers)
+			if err != nil {
+				return nil, fmt.Errorf("metal: %w", err)
+			}
+			out.sizesBindings = bindings
+			out.sizesSlot = layout.totalBuffers
+		}
+	}
+
+	mslSource, info, err := msl.Compile(module.irModule, options)
+	if err != nil {
+		return nil, fmt.Errorf("metal: failed to compile to MSL: %w", err)
+	}
+	if info.RequiresSizesBuffer && len(out.sizesBindings) == 0 && bindSizes {
+		return nil, fmt.Errorf("metal: shader requires a buffer sizes argument but no runtime-sized array binding was found")
+	}
+	out.entrypointNames = info.EntryPointNames
+
+	hal.Logger().Debug("metal: IR→MSL compilation",
+		"elapsed", time.Since(start),
+		"mslBytes", len(mslSource),
+		"sizesBuffer", len(out.sizesBindings) > 0,
+	)
+
+	// Create NSString from MSL source
+	mslString := NSString(mslSource)
+	defer Release(mslString)
+
+	// Create MTLLibrary from source
+	// MTLLibrary* newLibraryWithSource:options:error:
+	var errorPtr ID
+	library := MsgSend(d.raw, Sel("newLibraryWithSource:options:error:"),
+		uintptr(mslString), 0, uintptr(unsafe.Pointer(&errorPtr)))
+
+	if library == 0 {
+		errMsg := unknownError
+		if errorPtr != 0 {
+			if details := formatNSError(errorPtr); details != "" {
+				errMsg = details
+			}
+			// Object is autoreleased
+		}
+		return nil, fmt.Errorf("metal: failed to compile MSL: %s\nMSL:\n%s", errMsg, mslSource)
+	}
+	out.library = library
+
+	return out, nil
 }
 
 func formatNSError(errObj ID) string {
@@ -596,10 +680,7 @@ func (d *Device) DestroyShaderModule(module hal.ShaderModule) {
 	if !ok || mtlModule == nil {
 		return
 	}
-	if mtlModule.library != 0 {
-		Release(mtlModule.library)
-		mtlModule.library = 0
-	}
+	mtlModule.irModule = nil
 	mtlModule.device = nil
 }
 
@@ -608,17 +689,38 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 	pool := NewAutoreleasePool()
 	defer pool.Drain()
 
-	// Get shader modules
-	vertexModule, ok := desc.Vertex.Module.(*ShaderModule)
-	if !ok || vertexModule == nil || vertexModule.library == 0 {
-		return nil, fmt.Errorf("metal: invalid vertex shader module")
+	var pipeLayout *PipelineLayout
+	if pl, ok := desc.Layout.(*PipelineLayout); ok {
+		pipeLayout = pl
 	}
 
+	// Get shader modules
+	//
+	// The render path does not bind naga's `_buffer_sizes` argument, so this
+	// MSL does not change.
+	vertexModule, ok := desc.Vertex.Module.(*ShaderModule)
+	if !ok || vertexModule == nil {
+		return nil, fmt.Errorf("metal: invalid vertex shader module")
+	}
+	vertexLib, err := d.compileLibrary(vertexModule, pipeLayout, false)
+	if err != nil {
+		return nil, err
+	}
+	defer Release(vertexLib.library)
+
 	var fragmentModule *ShaderModule
+	fragmentLib := vertexLib
 	if desc.Fragment != nil {
 		fragmentModule, ok = desc.Fragment.Module.(*ShaderModule)
-		if !ok || fragmentModule == nil || fragmentModule.library == 0 {
+		if !ok || fragmentModule == nil {
 			return nil, fmt.Errorf("metal: invalid fragment shader module")
+		}
+		if fragmentModule != vertexModule {
+			fragmentLib, err = d.compileLibrary(fragmentModule, pipeLayout, false)
+			if err != nil {
+				return nil, err
+			}
+			defer Release(fragmentLib.library)
 		}
 	}
 
@@ -638,13 +740,13 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 
 	// Resolve translated entrypoint name
 	entrypointName := desc.Vertex.EntryPoint
-	if translated, ok := vertexModule.entrypointNames[entrypointName]; ok {
+	if translated, ok := vertexLib.entrypointNames[entrypointName]; ok {
 		entrypointName = translated
 	}
 
 	// Get vertex function from library
 	vertexFuncName := NSString(entrypointName)
-	vertexFunc := MsgSend(vertexModule.library, Sel("newFunctionWithName:"), uintptr(vertexFuncName))
+	vertexFunc := MsgSend(vertexLib.library, Sel("newFunctionWithName:"), uintptr(vertexFuncName))
 	Release(vertexFuncName)
 	if vertexFunc == 0 {
 		return nil, fmt.Errorf("metal: vertex function '%s' not found", entrypointName)
@@ -664,15 +766,15 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 	}
 
 	// Get and set fragment function if present
-	if fragmentModule != nil && desc.Fragment != nil { //nolint:nestif // sequential Metal pipeline setup
+	if fragmentModule != nil && desc.Fragment != nil {
 		// Resolve translated entrypoint name
 		entrypointName := desc.Fragment.EntryPoint
-		if translated, ok := fragmentModule.entrypointNames[entrypointName]; ok {
+		if translated, ok := fragmentLib.entrypointNames[entrypointName]; ok {
 			entrypointName = translated
 		}
 
 		fragmentFuncName := NSString(entrypointName)
-		fragmentFunc := MsgSend(fragmentModule.library, Sel("newFunctionWithName:"), uintptr(fragmentFuncName))
+		fragmentFunc := MsgSend(fragmentLib.library, Sel("newFunctionWithName:"), uintptr(fragmentFuncName))
 		Release(fragmentFuncName)
 		if fragmentFunc == 0 {
 			return nil, fmt.Errorf("metal: fragment function '%s' not found", entrypointName)
@@ -755,10 +857,23 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 	}
 	_ = MsgSend(pipelineDesc, Sel("setSampleCount:"), uintptr(sampleCount))
 
-	// Create pipeline state
+	// Create pipeline state. ICB support stays entirely private: eligible
+	// pipelines get one flagged attempt and transparently retry ordinary
+	// creation if Metal rejects the stricter descriptor.
 	var errorPtr ID
-	pipelineState := MsgSend(d.raw, Sel("newRenderPipelineStateWithDescriptor:error:"),
-		uintptr(pipelineDesc), uintptr(unsafe.Pointer(&errorPtr)))
+	icbCandidate := d.canCreateICBPipeline(desc, pipelineDesc)
+	pipelineState, icbCompatible := createRenderPipelineState(icbCandidate, func(icb bool) ID {
+		errorPtr = 0
+		if icbCandidate {
+			var enabled uintptr
+			if icb {
+				enabled = 1
+			}
+			_ = MsgSend(pipelineDesc, Sel("setSupportIndirectCommandBuffers:"), enabled)
+		}
+		return MsgSend(d.raw, Sel("newRenderPipelineStateWithDescriptor:error:"),
+			uintptr(pipelineDesc), uintptr(unsafe.Pointer(&errorPtr)))
+	})
 
 	if pipelineState == 0 {
 		errMsg := unknownError
@@ -778,16 +893,13 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 		"sampleCount", sampleCount,
 	)
 
-	var pipeLayout *PipelineLayout
-	if pl, ok := desc.Layout.(*PipelineLayout); ok {
-		pipeLayout = pl
-	}
 	return &RenderPipeline{
-		raw:       pipelineState,
-		device:    d,
-		layout:    pipeLayout,
-		cullMode:  cullModeToMTL(desc.Primitive.CullMode),
-		frontFace: frontFaceToMTL(desc.Primitive.FrontFace),
+		raw:           pipelineState,
+		device:        d,
+		layout:        pipeLayout,
+		cullMode:      cullModeToMTL(desc.Primitive.CullMode),
+		frontFace:     frontFaceToMTL(desc.Primitive.FrontFace),
+		icbCompatible: icbCompatible,
 
 		depthStencil:    depthStencilState,
 		depthBias:       depthBias,
@@ -872,21 +984,33 @@ func (d *Device) CreateComputePipeline(desc *hal.ComputePipelineDescriptor) (hal
 	pool := NewAutoreleasePool()
 	defer pool.Drain()
 
+	var pipeLayout *PipelineLayout
+	if pl, ok := desc.Layout.(*PipelineLayout); ok {
+		pipeLayout = pl
+	}
+
 	// Get shader module
 	computeModule, ok := desc.Compute.Module.(*ShaderModule)
-	if !ok || computeModule == nil || computeModule.library == 0 {
+	if !ok || computeModule == nil {
 		return nil, fmt.Errorf("metal: invalid compute shader module")
 	}
 
+	// Write the MSL now, because the pipeline layout gives the sizes slot.
+	lib, err := d.compileLibrary(computeModule, pipeLayout, true)
+	if err != nil {
+		return nil, err
+	}
+	defer Release(lib.library)
+
 	// Resolve translated entrypoint name
 	entrypointName := desc.Compute.EntryPoint
-	if translated, ok := computeModule.entrypointNames[entrypointName]; ok {
+	if translated, ok := lib.entrypointNames[entrypointName]; ok {
 		entrypointName = translated
 	}
 
 	// Get compute function from library
 	funcName := NSString(entrypointName)
-	computeFunc := MsgSend(computeModule.library, Sel("newFunctionWithName:"), uintptr(funcName))
+	computeFunc := MsgSend(lib.library, Sel("newFunctionWithName:"), uintptr(funcName))
 	Release(funcName)
 	if computeFunc == 0 {
 		return nil, fmt.Errorf("metal: compute function '%s' not found", entrypointName)
@@ -918,15 +1042,13 @@ func (d *Device) CreateComputePipeline(desc *hal.ComputePipelineDescriptor) (hal
 		"workgroupSize", fmt.Sprintf("%dx%dx%d", workgroupSize.Width, workgroupSize.Height, workgroupSize.Depth),
 	)
 
-	var pipeLayout *PipelineLayout
-	if pl, ok := desc.Layout.(*PipelineLayout); ok {
-		pipeLayout = pl
-	}
 	return &ComputePipeline{
 		raw:           pipelineState,
 		device:        d,
 		layout:        pipeLayout,
 		workgroupSize: workgroupSize,
+		sizesBindings: lib.sizesBindings,
+		sizesSlot:     lib.sizesSlot,
 	}, nil
 }
 
@@ -1168,10 +1290,7 @@ func (d *Device) FreeCommandBuffer(cmdBuffer hal.CommandBuffer) {
 	if !ok || cb == nil {
 		return
 	}
-	if cb.raw != 0 {
-		Release(cb.raw)
-		cb.raw = 0
-	}
+	cb.Destroy()
 }
 
 // CreateRenderBundleEncoder is not supported in Metal backend.
@@ -1189,6 +1308,88 @@ func (d *Device) DestroyRenderBundle(bundle hal.RenderBundle) {}
 // command buffers execute in order on the same queue, this guarantees all
 // previously submitted work has finished.
 //
+// CreateAccelerationStructure creates an acceleration structure (BLAS or TLAS).
+//
+// Allocates a Metal acceleration structure with the requested size via
+// [MTLDevice newAccelerationStructureWithSize:].
+//
+// Reference: Rust wgpu-hal metal/device.rs:2100-2114.
+func (d *Device) CreateAccelerationStructure(desc *hal.AccelerationStructureDescriptor) (hal.AccelerationStructure, error) {
+	if desc == nil {
+		return nil, fmt.Errorf("metal: acceleration structure descriptor is nil")
+	}
+
+	pool := NewAutoreleasePool()
+	defer pool.Drain()
+
+	raw := MsgSend(d.raw, Sel("newAccelerationStructureWithSize:"), uintptr(desc.Size))
+	if raw == 0 {
+		return nil, fmt.Errorf("metal: failed to create acceleration structure (size=%d)", desc.Size)
+	}
+
+	if desc.Label != "" {
+		label := NSString(desc.Label)
+		_ = MsgSend(raw, Sel("setLabel:"), uintptr(label))
+		Release(label)
+	}
+
+	hal.Logger().Debug("metal: acceleration structure created",
+		"label", desc.Label,
+		"size", desc.Size,
+		"format", desc.Format,
+	)
+
+	return &AccelerationStructure{raw: raw, device: d}, nil
+}
+
+// DestroyAccelerationStructure destroys an acceleration structure.
+//
+// Reference: Rust wgpu-hal metal/device.rs:2116-2121.
+func (d *Device) DestroyAccelerationStructure(accelStruct hal.AccelerationStructure) {
+	mtlAS, ok := accelStruct.(*AccelerationStructure)
+	if !ok || mtlAS == nil {
+		return
+	}
+	if mtlAS.raw != 0 {
+		Release(mtlAS.raw)
+		mtlAS.raw = 0
+	}
+	mtlAS.device = nil
+}
+
+// GetAccelerationStructureBuildSizes returns the sizes needed for building an AS.
+//
+// Delegates to getAccelerationStructureBuildSizes in raytracing.go which creates
+// a transient descriptor and queries Metal for the sizes.
+//
+// Reference: Rust wgpu-hal metal/device.rs:2076-2091.
+func (d *Device) GetAccelerationStructureBuildSizes(desc *hal.GetAccelerationStructureBuildSizesDescriptor) hal.AccelerationStructureBuildSizes {
+	return d.getAccelerationStructureBuildSizes(desc)
+}
+
+// GetAccelerationStructureDeviceAddress returns the GPU resource ID of an AS.
+//
+// Uses Metal 3+ gpuResourceID property. Returns 0 if the AS is nil or the
+// property is unavailable on older GPU families.
+//
+// Reference: Rust wgpu-hal metal/device.rs:2093-2098.
+func (d *Device) GetAccelerationStructureDeviceAddress(accelStruct hal.AccelerationStructure) uint64 {
+	mtlAS, ok := accelStruct.(*AccelerationStructure)
+	if !ok || mtlAS == nil || mtlAS.raw == 0 {
+		return 0
+	}
+	// gpuResourceID returns MTLResourceID (a uint64 on Metal 3+).
+	// On older devices without Metal 3, this returns 0.
+	return uint64(MsgSend(mtlAS.raw, Sel("gpuResourceID")))
+}
+
+// TlasInstanceToBytes converts a TlasInstance to Metal's 64-byte packed format.
+//
+// Reference: Rust wgpu-hal metal/device.rs:2123-2159.
+func (d *Device) TlasInstanceToBytes(instance hal.TlasInstance) []byte {
+	return tlasInstanceToBytes(instance)
+}
+
 // After the GPU is idle, we drain and refill the frame semaphore to ensure
 // all in-flight slots are reclaimed. This prevents deadlocks when the caller
 // wants to submit new work after WaitIdle returns.
@@ -1254,6 +1455,7 @@ func (d *Device) WaitIdle() error {
 // Destroy releases the device and associated resources.
 func (d *Device) Destroy() {
 	hal.Logger().Debug("metal: device destroyed")
+	d.releaseIndexedICBTranslators()
 	if d.eventListener != 0 {
 		Release(d.eventListener)
 		d.eventListener = 0

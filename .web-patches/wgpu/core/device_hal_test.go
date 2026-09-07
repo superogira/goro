@@ -77,6 +77,13 @@ func (mockCommandEncoder) ResolveQuerySet(_ hal.QuerySet, _, _ uint32, _ hal.Buf
 func (mockCommandEncoder) BeginRenderPass(_ *hal.RenderPassDescriptor) hal.RenderPassEncoder {
 	return mockRenderPassEncoder{}
 }
+func (mockCommandEncoder) BuildAccelerationStructures(_ []hal.BuildAccelerationStructureDescriptor) {
+}
+func (mockCommandEncoder) PlaceAccelerationStructureBarrier(_ hal.AccelerationStructureBarrier) {}
+func (mockCommandEncoder) CopyAccelerationStructure(_, _ hal.AccelerationStructure, _ gputypes.AccelerationStructureCopyMode) {
+}
+func (mockCommandEncoder) ReadAccelerationStructureCompactSize(_ hal.AccelerationStructure, _ hal.Buffer, _ uint64) {
+}
 func (mockCommandEncoder) BeginComputePass(_ *hal.ComputePassDescriptor) hal.ComputePassEncoder {
 	return mockComputePassEncoder{}
 }
@@ -87,15 +94,19 @@ func (mockRenderPassEncoder) SetPipeline(_ hal.RenderPipeline)                  
 func (mockRenderPassEncoder) SetBindGroup(_ uint32, _ hal.BindGroup, _ []uint32)            {}
 func (mockRenderPassEncoder) SetVertexBuffer(_ uint32, _ hal.Buffer, _ uint64)              {}
 func (mockRenderPassEncoder) SetIndexBuffer(_ hal.Buffer, _ gputypes.IndexFormat, _ uint64) {}
-func (mockRenderPassEncoder) SetViewport(_, _, _, _, _, _ float32)                          {}
-func (mockRenderPassEncoder) SetScissorRect(_, _, _, _ uint32)                              {}
+func (mockRenderPassEncoder) SetViewport(_ gputypes.Viewport)                               {}
+func (mockRenderPassEncoder) SetScissorRect(_ gputypes.ScissorRect)                         {}
 func (mockRenderPassEncoder) SetBlendConstant(_ *gputypes.Color)                            {}
 func (mockRenderPassEncoder) SetStencilReference(_ uint32)                                  {}
-func (mockRenderPassEncoder) Draw(_, _, _, _ uint32)                                        {}
-func (mockRenderPassEncoder) DrawIndexed(_, _, _ uint32, _ int32, _ uint32)                 {}
-func (mockRenderPassEncoder) DrawIndirect(_ hal.Buffer, _ uint64)                           {}
-func (mockRenderPassEncoder) DrawIndexedIndirect(_ hal.Buffer, _ uint64)                    {}
-func (mockRenderPassEncoder) ExecuteBundle(_ hal.RenderBundle)                              {}
+func (mockRenderPassEncoder) Draw(_ gputypes.DrawArgs)                                      {}
+func (mockRenderPassEncoder) DrawIndexed(_ gputypes.DrawIndexedArgs)                        {}
+func (mockRenderPassEncoder) DrawIndirect(_ hal.Buffer, _ uint64, _ uint32)                 {}
+func (mockRenderPassEncoder) DrawIndexedIndirect(_ hal.Buffer, _ uint64, _ uint32)          {}
+func (mockRenderPassEncoder) DrawIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
+func (mockRenderPassEncoder) DrawIndexedIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
+func (mockRenderPassEncoder) ExecuteBundle(_ hal.RenderBundle) {}
 
 // mockComputePassEncoder implements hal.ComputePassEncoder (minimal)
 func (mockComputePassEncoder) End()                                               {}
@@ -174,8 +185,19 @@ func (m *mockHALDevice) CreateRenderBundleEncoder(_ *hal.RenderBundleEncoderDesc
 	return nil, fmt.Errorf("mock: render bundles not supported")
 }
 func (m *mockHALDevice) DestroyRenderBundle(_ hal.RenderBundle) {}
-func (m *mockHALDevice) WaitIdle() error                        { return nil }
-func (m *mockHALDevice) Destroy()                               { m.destroyed = true }
+func (m *mockHALDevice) CreateAccelerationStructure(_ *hal.AccelerationStructureDescriptor) (hal.AccelerationStructure, error) {
+	return nil, fmt.Errorf("mock: ray tracing not supported")
+}
+func (m *mockHALDevice) DestroyAccelerationStructure(_ hal.AccelerationStructure) {}
+func (m *mockHALDevice) GetAccelerationStructureBuildSizes(_ *hal.GetAccelerationStructureBuildSizesDescriptor) hal.AccelerationStructureBuildSizes {
+	return hal.AccelerationStructureBuildSizes{}
+}
+func (m *mockHALDevice) GetAccelerationStructureDeviceAddress(_ hal.AccelerationStructure) uint64 {
+	return 0
+}
+func (m *mockHALDevice) TlasInstanceToBytes(_ hal.TlasInstance) []byte { return nil }
+func (m *mockHALDevice) WaitIdle() error                               { return nil }
+func (m *mockHALDevice) Destroy()                                      { m.destroyed = true }
 
 func TestDevice_NewDevice(t *testing.T) {
 	adapter := &Adapter{Info: gputypes.AdapterInfo{Name: "Test"}}

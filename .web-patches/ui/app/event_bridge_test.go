@@ -9,14 +9,32 @@ import (
 	"github.com/gogpu/ui/widget"
 )
 
+func newBoundedEventBridgeRoot(es gpucontext.EventSource) *mockWidget {
+	wp := &mockWindowProvider{width: 400, height: 300, scale: 1}
+	a := New(WithWindowProvider(wp), WithEventSource(es))
+	root := newMockWidget()
+	a.SetRoot(root)
+	return root
+}
+
+func resetEventBridgeRoot(root *mockWidget) {
+	root.eventCalled = false
+	root.lastEvent = nil
+}
+
 func TestEventBridge_MouseMove(t *testing.T) {
 	es := &mockEventSource{}
 	a := New(WithEventSource(es))
 	root := newMockWidget()
 	a.SetRoot(root)
 
-	// Simulate mouse move.
-	es.onMouseMove(100.0, 200.0)
+	// Unified pipeline: PointerMove through OnPointer derives MouseMove.
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerMove,
+		X:           100.0,
+		Y:           200.0,
+		PointerType: gpucontext.PointerTypeMouse,
+	})
 
 	if !root.eventCalled {
 		t.Fatal("event not dispatched")
@@ -33,13 +51,106 @@ func TestEventBridge_MouseMove(t *testing.T) {
 	}
 }
 
+func TestEventBridge_MouseMoveOutsideWindow(t *testing.T) {
+	es := &mockEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	es.onMouseMove(450, 100)
+
+	if root.eventCalled {
+		t.Errorf("outside move dispatched %T, want no event", root.lastEvent)
+	}
+}
+
+func TestEventBridge_PointerLeaveDispatchesMouseLeave(t *testing.T) {
+	es := &mockEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	// Enter via PointerEnter, then leave via PointerLeave.
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerEnter,
+		PointerType: gpucontext.PointerTypeMouse,
+		X:           100,
+		Y:           100,
+	})
+	resetEventBridgeRoot(root)
+
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerLeave,
+		PointerType: gpucontext.PointerTypeMouse,
+		X:           460,
+		Y:           100,
+	})
+
+	leave, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok || leave.MouseType != event.MouseLeave {
+		t.Fatalf("PointerLeave event = %T %#v, want MouseLeave", root.lastEvent, root.lastEvent)
+	}
+}
+
+func TestEventBridge_DragOutsideViaPointerEvents(t *testing.T) {
+	es := &mockEventSource{}
+	a := New(WithEventSource(es))
+	root := newMockWidget()
+	a.SetRoot(root)
+
+	// Drag via PointerDown -> PointerMove -> PointerUp dispatches correctly.
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerDown,
+		X:           100,
+		Y:           100,
+		PointerType: gpucontext.PointerTypeMouse,
+		Button:      gpucontext.ButtonLeft,
+		Buttons:     gpucontext.ButtonsLeft,
+	})
+	resetEventBridgeRoot(root)
+
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerMove,
+		X:           450,
+		Y:           100,
+		PointerType: gpucontext.PointerTypeMouse,
+		Buttons:     gpucontext.ButtonsLeft,
+	})
+
+	move, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok || move.MouseType != event.MouseMove {
+		t.Fatalf("drag move event = %T %#v, want MouseMove", root.lastEvent, root.lastEvent)
+	}
+	if !move.Buttons.IsLeftPressed() {
+		t.Error("drag move should carry left button state")
+	}
+
+	resetEventBridgeRoot(root)
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerUp,
+		X:           450,
+		Y:           100,
+		PointerType: gpucontext.PointerTypeMouse,
+		Button:      gpucontext.ButtonLeft,
+		Buttons:     0,
+	})
+	release, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok || release.MouseType != event.MouseRelease {
+		t.Fatalf("release event = %T %#v, want MouseRelease", root.lastEvent, root.lastEvent)
+	}
+}
+
 func TestEventBridge_MousePress(t *testing.T) {
 	es := &mockEventSource{}
 	a := New(WithEventSource(es))
 	root := newMockWidget()
 	a.SetRoot(root)
 
-	es.onMousePress(gpucontext.MouseButtonLeft, 50.0, 75.0)
+	// Unified pipeline: PointerDown through OnPointer derives MousePress.
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerDown,
+		X:           50.0,
+		Y:           75.0,
+		PointerType: gpucontext.PointerTypeMouse,
+		Button:      gpucontext.ButtonLeft,
+		Buttons:     gpucontext.ButtonsLeft,
+	})
 
 	if !root.eventCalled {
 		t.Fatal("event not dispatched")
@@ -65,7 +176,15 @@ func TestEventBridge_MouseRelease(t *testing.T) {
 	root := newMockWidget()
 	a.SetRoot(root)
 
-	es.onMouseRelease(gpucontext.MouseButtonRight, 30.0, 40.0)
+	// Unified pipeline: PointerUp through OnPointer derives MouseRelease.
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerUp,
+		X:           30.0,
+		Y:           40.0,
+		PointerType: gpucontext.PointerTypeMouse,
+		Button:      gpucontext.ButtonRight,
+		Buttons:     0,
+	})
 
 	if !root.eventCalled {
 		t.Fatal("event not dispatched")
@@ -140,6 +259,10 @@ func TestEventBridge_Scroll(t *testing.T) {
 	root := newMockWidget()
 	a.SetRoot(root)
 
+	// The basic EventSource scroll callback has no position. Establish the
+	// pointer as in-bounds before scrolling.
+	es.onMouseMove(100, 100)
+	resetEventBridgeRoot(root)
 	es.onScroll(0.0, -3.0)
 
 	if !root.eventCalled {
@@ -154,6 +277,363 @@ func TestEventBridge_Scroll(t *testing.T) {
 	}
 	if we.Delta.Y != -3.0 {
 		t.Errorf("delta Y = %v, want -3", we.Delta.Y)
+	}
+}
+
+func TestEventBridge_ScrollOutsideWindow_Fallback(t *testing.T) {
+	es := &mockEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	// Enter the window, then leave. Scrolls after leave should be suppressed.
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerEnter, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+	})
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerLeave, PointerType: gpucontext.PointerTypeMouse,
+		X: 450, Y: 100,
+	})
+	resetEventBridgeRoot(root)
+	es.onScroll(0, -3)
+
+	if root.eventCalled {
+		t.Errorf("outside scroll dispatched %T, want no event", root.lastEvent)
+	}
+
+	// Re-enter the window. Scrolls should be dispatched again.
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerEnter, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+	})
+	resetEventBridgeRoot(root)
+	es.onScroll(0, -3)
+	if _, ok := root.lastEvent.(*event.WheelEvent); !ok {
+		t.Fatalf("scroll after re-entry = %T, want WheelEvent", root.lastEvent)
+	}
+}
+
+func TestEventBridge_DetailedScrollUsesEventPositionAndBounds(t *testing.T) {
+	es := &mockScrollEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	if es.onScrollEvent == nil {
+		t.Fatal("OnScrollEvent callback was not registered")
+	}
+	if es.onScroll != nil {
+		t.Fatal("legacy OnScroll callback registered with detailed source; wheels would dispatch twice")
+	}
+
+	// Scroll at a position inside the window bounds (400x300).
+	es.onScrollEvent(gpucontext.ScrollEvent{
+		X: 120, Y: 130,
+		DeltaX: 2, DeltaY: -4,
+		Modifiers: gpucontext.ModShift,
+	})
+	wheel, ok := root.lastEvent.(*event.WheelEvent)
+	if !ok {
+		t.Fatalf("detailed scroll event = %T, want WheelEvent", root.lastEvent)
+	}
+	if wheel.Position != geometry.Pt(120, 130) {
+		t.Errorf("wheel position = %v, want (120, 130)", wheel.Position)
+	}
+	if wheel.Delta != geometry.Pt(2, -4) {
+		t.Errorf("wheel delta = %v, want (2, -4)", wheel.Delta)
+	}
+	if !wheel.Modifiers().IsShift() {
+		t.Error("detailed wheel lost its Shift modifier")
+	}
+
+	// Scroll at a position outside the window bounds should be suppressed
+	// when the cursor is not tracked inside.
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{X: 450, Y: 130, DeltaY: -4})
+	if root.eventCalled {
+		t.Errorf("outside detailed scroll dispatched %T, want no event", root.lastEvent)
+	}
+}
+
+func TestEventBridge_DetailedScrollFallsBackForUntrustedPosition(t *testing.T) {
+	es := &mockScrollEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	// Establish the pointer as inside the window via PointerEnter +
+	// legacy move tracking (which updates lastMousePos).
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerEnter, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+	})
+	es.onMouseMove(100, 100)
+	resetEventBridgeRoot(root)
+
+	// A scroll event with an out-of-bounds reported position should fall
+	// back to lastMousePos when the cursor is known to be inside.
+	es.onScrollEvent(gpucontext.ScrollEvent{X: 1000, Y: 700, DeltaY: -2})
+	wheel, ok := root.lastEvent.(*event.WheelEvent)
+	if !ok {
+		t.Fatalf("out-of-bounds reported position event = %T, want WheelEvent", root.lastEvent)
+	}
+	if wheel.Position != geometry.Pt(100, 100) {
+		t.Errorf("fallback position = %v, want last trusted position (100, 100)", wheel.Position)
+	}
+
+	// A scroll event with zero position should also use fallback.
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{DeltaY: -2})
+	wheel, ok = root.lastEvent.(*event.WheelEvent)
+	if !ok {
+		t.Fatalf("zero reported position event = %T, want WheelEvent", root.lastEvent)
+	}
+	if wheel.Position != geometry.Pt(100, 100) {
+		t.Errorf("zero-position fallback = %v, want last trusted position (100, 100)", wheel.Position)
+	}
+
+	// After the cursor leaves, an untrusted zero-position scroll should
+	// NOT revive a stale in-window position (e.g. macOS momentum scroll).
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerLeave, PointerType: gpucontext.PointerTypeMouse,
+		X: 450, Y: 100,
+	})
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{DeltaY: -2, IsMomentum: true})
+	if root.eventCalled {
+		t.Errorf("zero-position momentum after exit dispatched %T, want no event", root.lastEvent)
+	}
+}
+
+func TestEventBridge_DetailedZeroPositionRequiresInsideState(t *testing.T) {
+	es := &mockScrollEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	// (0,0) is a real in-window corner, so keep it when PointerEnter has
+	// independently established that the cursor is there.
+	es.onPointer(gpucontext.PointerEvent{Type: gpucontext.PointerEnter})
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{DeltaY: -2})
+	wheel, ok := root.lastEvent.(*event.WheelEvent)
+	if !ok {
+		t.Fatalf("trusted origin scroll = %T, want WheelEvent", root.lastEvent)
+	}
+	if !wheel.Position.IsZero() {
+		t.Errorf("trusted origin position = %v, want (0,0)", wheel.Position)
+	}
+
+	// Once the cursor leaves, the same all-zero event is an untrusted
+	// no-position report and must not revive scrolling outside the window.
+	es.onPointer(gpucontext.PointerEvent{Type: gpucontext.PointerLeave})
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{DeltaY: -2})
+	if root.eventCalled {
+		t.Errorf("zero-position scroll after leave dispatched %T, want no event", root.lastEvent)
+	}
+}
+
+func TestEventBridge_DetailedScrollDuringDragOutside(t *testing.T) {
+	es := &mockScrollEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	es.onMousePress(gpucontext.MouseButtonLeft, 100, 100)
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{X: 450, Y: 100, DeltaY: -2})
+
+	if _, ok := root.lastEvent.(*event.WheelEvent); !ok {
+		t.Fatalf("drag scroll event = %T, want WheelEvent", root.lastEvent)
+	}
+}
+
+func TestEventBridge_FocusLossInvalidatesFallbackScrollPosition(t *testing.T) {
+	es := &mockEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	// Establish the cursor as inside via PointerEnter.
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerEnter, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+	})
+	es.onFocus(false)
+	resetEventBridgeRoot(root)
+	es.onScroll(0, -2)
+
+	if root.eventCalled {
+		t.Errorf("scroll after focus loss dispatched %T, want no event", root.lastEvent)
+	}
+}
+
+func TestEventBridge_FocusLossCancelsHeldButtons(t *testing.T) {
+	es := &mockScrollEventSource{}
+	root := newBoundedEventBridgeRoot(es)
+
+	// Press left button via PointerDown (the unified pipeline dispatch path).
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerDown, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+		Button: gpucontext.ButtonLeft, Buttons: gpucontext.ButtonsLeft,
+	})
+	es.onFocus(false)
+	resetEventBridgeRoot(root)
+
+	// After focus loss, outside scroll should be suppressed
+	// (mouseInsideWindow=false, pressedButtons=0).
+	es.onScrollEvent(gpucontext.ScrollEvent{X: 450, Y: 100, DeltaY: -2})
+	if root.eventCalled {
+		t.Errorf("outside scroll after focus loss dispatched %T, want no event", root.lastEvent)
+	}
+
+	// A new gesture starts from a clean button state rather than inheriting
+	// the lost left-button release. Use PointerDown for dispatch.
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerDown, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+		Button: gpucontext.ButtonRight, Buttons: gpucontext.ButtonsRight,
+	})
+	press, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok {
+		t.Fatalf("new press event = %T, want MouseEvent", root.lastEvent)
+	}
+	if press.Buttons != event.ButtonStateRight {
+		t.Errorf("new press buttons = %v, want right only", press.Buttons)
+	}
+}
+
+func TestEventBridge_PointerCancelCancelsHeldButtonsAndCapture(t *testing.T) {
+	es := &mockScrollEventSource{}
+	wp := &mockWindowProvider{width: 400, height: 300, scale: 1}
+	a := New(WithWindowProvider(wp), WithEventSource(es))
+	root := newMockWidget()
+	a.SetRoot(root)
+	w := a.Window()
+
+	// Use PointerDown so HandleEvent updates mouseButtonsHeld.
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerDown, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+		Button: gpucontext.ButtonLeft, Buttons: gpucontext.ButtonsLeft,
+	})
+	w.ctx.CapturePointer(root)
+	if w.capturedWidget != root {
+		t.Fatal("precondition: root should hold pointer capture")
+	}
+
+	// Mouse PointerCancel should clear capture and held buttons.
+	es.onPointer(gpucontext.PointerEvent{
+		Type:        gpucontext.PointerCancel,
+		PointerType: gpucontext.PointerTypeMouse,
+	})
+	if w.capturedWidget != nil {
+		t.Error("capturedWidget should be nil after PointerCancel")
+	}
+	if w.mouseButtonsHeld != 0 {
+		t.Errorf("mouseButtonsHeld = %v after PointerCancel, want none", w.mouseButtonsHeld)
+	}
+	release, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok || release.MouseType != event.MouseRelease || release.Buttons != 0 {
+		t.Fatalf("captured widget cancellation event = %T %#v, want final MouseRelease", root.lastEvent, root.lastEvent)
+	}
+
+	// After cancel, outside scroll should be suppressed.
+	resetEventBridgeRoot(root)
+	es.onScrollEvent(gpucontext.ScrollEvent{X: 450, Y: 100, DeltaY: -2})
+	if root.eventCalled {
+		t.Errorf("outside scroll after PointerCancel dispatched %T, want no event", root.lastEvent)
+	}
+}
+
+func TestEventBridge_NonMousePointerEventsPreserveMouseState(t *testing.T) {
+	es := &mockEventSource{}
+	wp := &mockWindowProvider{width: 400, height: 300, scale: 1}
+	a := New(WithWindowProvider(wp), WithEventSource(es))
+	root := newMockWidget()
+	a.SetRoot(root)
+	w := a.Window()
+
+	// Touch/pen PointerEnter should NOT dispatch mouse events or arm scroll.
+	for _, pointerType := range []gpucontext.PointerType{
+		gpucontext.PointerTypeTouch,
+		gpucontext.PointerTypePen,
+	} {
+		resetEventBridgeRoot(root)
+		es.onPointer(gpucontext.PointerEvent{
+			Type:        gpucontext.PointerEnter,
+			PointerType: pointerType,
+			PointerID:   2,
+		})
+		if root.eventCalled {
+			t.Errorf("%v PointerEnter dispatched %T, want no event", pointerType, root.lastEvent)
+		}
+		es.onScroll(0, -2)
+		if root.eventCalled {
+			t.Errorf("%v PointerEnter armed mouse scroll fallback", pointerType)
+		}
+	}
+
+	// Establish mouse as inside via PointerEnter (mouse).
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerEnter, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+	})
+	resetEventBridgeRoot(root)
+
+	// Touch/pen PointerLeave should NOT dispatch mouse events.
+	for _, pointerType := range []gpucontext.PointerType{
+		gpucontext.PointerTypeTouch,
+		gpucontext.PointerTypePen,
+	} {
+		es.onPointer(gpucontext.PointerEvent{
+			Type:        gpucontext.PointerLeave,
+			PointerType: pointerType,
+			PointerID:   2,
+		})
+	}
+	if root.eventCalled {
+		t.Errorf("non-mouse enter/leave dispatched %T, want no event", root.lastEvent)
+	}
+
+	// The touch/pen leaves must not invalidate the independently tracked
+	// in-window mouse position.
+	es.onScroll(0, -2)
+	if _, ok := root.lastEvent.(*event.WheelEvent); !ok {
+		t.Fatalf("mouse scroll after non-mouse leave = %T, want WheelEvent", root.lastEvent)
+	}
+
+	// Press mouse button via PointerDown (updates w.mouseButtonsHeld).
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerDown, PointerType: gpucontext.PointerTypeMouse,
+		X: 100, Y: 100,
+		Button: gpucontext.ButtonLeft, Buttons: gpucontext.ButtonsLeft,
+	})
+	w.ctx.CapturePointer(root)
+
+	// Touch/pen PointerCancel should NOT clear mouse capture.
+	for _, pointerType := range []gpucontext.PointerType{
+		gpucontext.PointerTypeTouch,
+		gpucontext.PointerTypePen,
+	} {
+		es.onPointer(gpucontext.PointerEvent{
+			Type:        gpucontext.PointerCancel,
+			PointerType: pointerType,
+			PointerID:   2,
+		})
+	}
+
+	if w.capturedWidget != root {
+		t.Error("touch PointerCancel cleared unrelated mouse capture")
+	}
+	if w.mouseButtonsHeld != event.ButtonStateLeft {
+		t.Errorf("mouseButtonsHeld = %v after touch PointerCancel, want left", w.mouseButtonsHeld)
+	}
+
+	// Mouse drag via PointerMove should work normally after touch cancel.
+	resetEventBridgeRoot(root)
+	es.onPointer(gpucontext.PointerEvent{
+		Type: gpucontext.PointerMove, PointerType: gpucontext.PointerTypeMouse,
+		X: 450, Y: 100,
+		Buttons: gpucontext.ButtonsLeft,
+	})
+	move, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok || move.MouseType != event.MouseMove {
+		t.Fatalf("mouse drag after touch PointerCancel = %T, want MouseMove", root.lastEvent)
+	}
+	if !move.Buttons.IsLeftPressed() {
+		t.Error("mouse drag lost left-button state after touch PointerCancel")
 	}
 }
 
@@ -460,13 +940,13 @@ func TestWidgetCursorToPlatform(t *testing.T) {
 
 func TestEventBridge_MouseButton_AllVariants(t *testing.T) {
 	buttons := []struct {
-		name string
-		btn  gpucontext.MouseButton
-		want event.Button
+		name    string
+		platBtn gpucontext.Button
+		want    event.Button
 	}{
-		{"Left", gpucontext.MouseButtonLeft, event.ButtonLeft},
-		{"Right", gpucontext.MouseButtonRight, event.ButtonRight},
-		{"Middle", gpucontext.MouseButtonMiddle, event.ButtonMiddle},
+		{"Left", gpucontext.ButtonLeft, event.ButtonLeft},
+		{"Right", gpucontext.ButtonRight, event.ButtonRight},
+		{"Middle", gpucontext.ButtonMiddle, event.ButtonMiddle},
 	}
 
 	for _, tt := range buttons {
@@ -476,7 +956,14 @@ func TestEventBridge_MouseButton_AllVariants(t *testing.T) {
 			root := newMockWidget()
 			a.SetRoot(root)
 
-			es.onMousePress(tt.btn, 10.0, 20.0)
+			// Unified pipeline: PointerDown with different buttons.
+			es.onPointer(gpucontext.PointerEvent{
+				Type:        gpucontext.PointerDown,
+				X:           10.0,
+				Y:           20.0,
+				PointerType: gpucontext.PointerTypeMouse,
+				Button:      tt.platBtn,
+			})
 
 			me, ok := root.lastEvent.(*event.MouseEvent)
 			if !ok {
@@ -534,6 +1021,8 @@ var (
 	_ gpucontext.PlatformProvider   = (*mockPlatformProvider)(nil)
 	_ gpucontext.EventSource        = (*mockEventSource)(nil)
 	_ gpucontext.PointerEventSource = (*mockEventSource)(nil)
+	_ gpucontext.EventSource        = (*mockScrollEventSource)(nil)
+	_ gpucontext.ScrollEventSource  = (*mockScrollEventSource)(nil)
 	_ widget.Canvas                 = (*mockCanvas)(nil)
 	_ widget.Widget                 = (*mockWidget)(nil)
 	_ widget.Widget                 = (*cursorSettingWidget)(nil)
@@ -605,21 +1094,30 @@ func TestEventBridge_PointerLeave(t *testing.T) {
 	}
 }
 
-func TestEventBridge_PointerMove_Ignored(t *testing.T) {
+func TestEventBridge_PointerMove_DispatchesMouseEvent(t *testing.T) {
 	es := &mockEventSource{}
 	a := New(WithEventSource(es))
 	root := newMockWidget()
 	a.SetRoot(root)
 
-	// PointerMove should be ignored (already handled by OnMouseMove).
+	// In the unified pipeline, PointerMove through OnPointer derives a
+	// MouseMove event and dispatches it via HandleEvent.
 	es.onPointer(gpucontext.PointerEvent{
-		Type: gpucontext.PointerMove,
-		X:    50.0,
-		Y:    50.0,
+		Type:        gpucontext.PointerMove,
+		X:           50.0,
+		Y:           50.0,
+		PointerType: gpucontext.PointerTypeMouse,
 	})
 
-	if root.eventCalled {
-		t.Error("PointerMove should not dispatch via OnPointer (handled by OnMouseMove)")
+	if !root.eventCalled {
+		t.Error("PointerMove should dispatch via unified pipeline as derived MouseMove")
+	}
+	me, ok := root.lastEvent.(*event.MouseEvent)
+	if !ok {
+		t.Fatal("expected MouseEvent")
+	}
+	if me.MouseType != event.MouseMove {
+		t.Errorf("mouse type = %v, want Move", me.MouseType)
 	}
 }
 

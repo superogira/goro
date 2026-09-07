@@ -4,6 +4,7 @@ package software
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/gogpu/gputypes"
@@ -11,14 +12,14 @@ import (
 )
 
 func TestBackendRegistration(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	if backend.Variant() != gputypes.BackendEmpty {
 		t.Errorf("Expected BackendEmpty, got %v", backend.Variant())
 	}
 }
 
 func TestInstanceCreation(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, err := backend.CreateInstance(&hal.InstanceDescriptor{})
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
@@ -29,8 +30,53 @@ func TestInstanceCreation(t *testing.T) {
 	instance.Destroy()
 }
 
+func TestSurfaceTargetSupportMatchesHostPlatform(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		kind hal.SurfaceTargetKind
+		want bool
+	}{
+		{name: "headless is portable", goos: "android", kind: hal.SurfaceTargetHeadless, want: true},
+		{name: "Windows accepts HWND", goos: goosWindows, kind: hal.SurfaceTargetWindowsHWND, want: true},
+		{name: "Windows rejects Xlib", goos: goosWindows, kind: hal.SurfaceTargetXlibWindow, want: false},
+		{name: "Linux accepts Xlib", goos: goosLinux, kind: hal.SurfaceTargetXlibWindow, want: true},
+		{name: "Linux accepts Wayland", goos: goosLinux, kind: hal.SurfaceTargetWaylandSurface, want: true},
+		{name: "Linux rejects Android", goos: goosLinux, kind: hal.SurfaceTargetAndroidNativeWindow, want: false},
+		{name: "Android rejects Linux", goos: "android", kind: hal.SurfaceTargetXlibWindow, want: false},
+		{name: "Android rejects native window", goos: "android", kind: hal.SurfaceTargetAndroidNativeWindow, want: false},
+		{name: "Darwin accepts Metal", goos: goosDarwin, kind: hal.SurfaceTargetMetalLayer, want: true},
+		{name: "Darwin rejects HWND", goos: goosDarwin, kind: hal.SurfaceTargetWindowsHWND, want: false},
+		{name: "unknown OS is headless only", goos: "plan9", kind: hal.SurfaceTargetMetalLayer, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := supportsSurfaceTarget(test.goos, test.kind); got != test.want {
+				t.Fatalf("supportsSurfaceTarget(%q, %v) = %v, want %v", test.goos, test.kind, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCreateSurfaceRejectsForeignTargetBeforeStoringHandles(t *testing.T) {
+	instance := &Instance{}
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{
+		Kind:          hal.SurfaceTargetAndroidNativeWindow,
+		DisplayHandle: 0x1111,
+		WindowHandle:  0x2222,
+	})
+	if surface != nil {
+		surface.Destroy()
+		t.Fatal("CreateSurface returned a surface for a foreign target")
+	}
+	if !errors.Is(err, hal.ErrUnsupportedSurfaceTarget) {
+		t.Fatalf("CreateSurface error = %v, want ErrUnsupportedSurfaceTarget", err)
+	}
+}
+
 func TestAdapterEnumeration(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -49,7 +95,7 @@ func TestAdapterEnumeration(t *testing.T) {
 }
 
 func TestDeviceCreation(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -71,7 +117,7 @@ func TestDeviceCreation(t *testing.T) {
 }
 
 func TestBufferCreation(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -106,7 +152,7 @@ func TestBufferCreation(t *testing.T) {
 }
 
 func TestBufferWriteRead(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -140,7 +186,7 @@ func TestBufferWriteRead(t *testing.T) {
 }
 
 func TestTextureCreation(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -183,7 +229,7 @@ func TestTextureCreation(t *testing.T) {
 }
 
 func TestTextureClear(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -220,11 +266,11 @@ func TestTextureClear(t *testing.T) {
 }
 
 func TestSurfaceConfiguration(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
-	surface, err := instance.CreateSurface(0, 0)
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("Failed to create surface: %v", err)
 	}
@@ -261,11 +307,11 @@ func TestSurfaceConfiguration(t *testing.T) {
 }
 
 func TestSurfaceFramebufferReadback(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	adapters := instance.EnumerateAdapters(nil)
@@ -327,8 +373,8 @@ func TestComputePipelineNoSPIRV(t *testing.T) {
 	}
 }
 
-func TestAdapterDownlevelHasCompute(t *testing.T) {
-	backend := API{}
+func TestAdapterDownlevelCapabilities(t *testing.T) {
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -337,9 +383,48 @@ func TestAdapterDownlevelHasCompute(t *testing.T) {
 		t.Fatal("no adapters found")
 	}
 
-	caps := adapters[0].Capabilities
-	if caps.DownlevelCapabilities.Flags&hal.DownlevelFlagsComputeShaders == 0 {
-		t.Error("software backend should report compute shader support")
+	dc := adapters[0].Capabilities.DownlevelCapabilities
+
+	if dc.ShaderModel != gputypes.ShaderModelSm5 {
+		t.Errorf("ShaderModel = %v, want Sm5", dc.ShaderModel)
+	}
+
+	requiredFlags := []struct {
+		flag gputypes.DownlevelFlags
+		name string
+	}{
+		{gputypes.DownlevelFlagsComputeShaders, "ComputeShaders"},
+		{gputypes.DownlevelFlagsFragmentWritableStorage, "FragmentWritableStorage"},
+		{gputypes.DownlevelFlagsBaseVertex, "BaseVertex"},
+		{gputypes.DownlevelFlagsNonPowerOfTwoMipmappedTextures, "NonPowerOfTwoMipmappedTextures"},
+		{gputypes.DownlevelFlagsIndependentBlend, "IndependentBlend"},
+		{gputypes.DownlevelFlagsVertexStorage, "VertexStorage"},
+		{gputypes.DownlevelFlagsFragmentStorage, "FragmentStorage"},
+		{gputypes.DownlevelFlagsDepthTextureAndBufferCopies, "DepthTextureAndBufferCopies"},
+		{gputypes.DownlevelFlagsBufferBindingsNot16ByteAligned, "BufferBindingsNot16ByteAligned"},
+		{gputypes.DownlevelFlagsUnrestrictedIndexBuffer, "UnrestrictedIndexBuffer"},
+		{gputypes.DownlevelFlagsFullDrawIndexUint32, "FullDrawIndexUint32"},
+		{gputypes.DownlevelFlagsUnrestrictedExternalTextureCopies, "UnrestrictedExternalTextureCopies"},
+		{gputypes.DownlevelFlagsLinearInterpolation, "LinearInterpolation"},
+	}
+	for _, rf := range requiredFlags {
+		if !dc.Flags.Contains(rf.flag) {
+			t.Errorf("software backend should report %s", rf.name)
+		}
+	}
+
+	absentFlags := []struct {
+		flag gputypes.DownlevelFlags
+		name string
+	}{
+		{gputypes.DownlevelFlagsIndirectExecution, "IndirectExecution"},
+		{gputypes.DownlevelFlagsAnisotropicFiltering, "AnisotropicFiltering"},
+		{gputypes.DownlevelFlagsMultisampledShading, "MultisampledShading"},
+	}
+	for _, af := range absentFlags {
+		if dc.Flags.Contains(af.flag) {
+			t.Errorf("software backend should NOT report %s", af.name)
+		}
 	}
 }
 
@@ -349,7 +434,7 @@ func TestAdapterDownlevelHasCompute(t *testing.T) {
 
 func createSoftwareDevice(t *testing.T) (*Device, hal.Queue, func()) {
 	t.Helper()
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	adapters := instance.EnumerateAdapters(nil)
 	openDev, _ := adapters[0].Adapter.Open(0, gputypes.DefaultLimits())
@@ -966,14 +1051,14 @@ func TestRenderPassEncoderAllNoOps(t *testing.T) {
 	pass.SetBindGroup(0, nil, nil)
 	pass.SetVertexBuffer(0, buf, 0)
 	pass.SetIndexBuffer(buf, gputypes.IndexFormatUint16, 0)
-	pass.SetViewport(0, 0, 800, 600, 0, 1)
-	pass.SetScissorRect(0, 0, 800, 600)
+	pass.SetViewport(gputypes.Viewport{X: 0, Y: 0, Width: 800, Height: 600, MinDepth: 0, MaxDepth: 1})
+	pass.SetScissorRect(gputypes.ScissorRect{X: 0, Y: 0, Width: 800, Height: 600})
 	pass.SetBlendConstant(&gputypes.Color{R: 1, G: 1, B: 1, A: 1})
 	pass.SetStencilReference(0xFF)
-	pass.Draw(3, 1, 0, 0)
-	pass.DrawIndexed(6, 1, 0, 0, 0)
-	pass.DrawIndirect(buf, 0)
-	pass.DrawIndexedIndirect(buf, 0)
+	pass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
+	pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: 6, InstanceCount: 1})
+	pass.DrawIndirect(buf, 0, 1)
+	pass.DrawIndexedIndirect(buf, 0, 1)
 	pass.ExecuteBundle(nil)
 	pass.End()
 }
@@ -1002,11 +1087,11 @@ func TestComputePassEncoderNoPipeline(t *testing.T) {
 // =============================================================================
 
 func TestSurfaceZeroArea(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	adapters := instance.EnumerateAdapters(nil)
@@ -1033,11 +1118,11 @@ func TestSurfaceZeroArea(t *testing.T) {
 }
 
 func TestSurfaceAcquireTexture(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	adapters := instance.EnumerateAdapters(nil)
@@ -1072,11 +1157,27 @@ func TestSurfaceAcquireTexture(t *testing.T) {
 }
 
 func TestSurfaceStoresDisplayHandle(t *testing.T) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
-	surface, err := instance.CreateSurface(0xDEAD, 0xBEEF)
+	var kind hal.SurfaceTargetKind
+	switch runtime.GOOS {
+	case goosWindows:
+		kind = hal.SurfaceTargetWindowsHWND
+	case goosLinux:
+		kind = hal.SurfaceTargetXlibWindow
+	case goosDarwin:
+		kind = hal.SurfaceTargetMetalLayer
+	default:
+		t.Skipf("software backend has no window target on %s", runtime.GOOS)
+	}
+
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{
+		Kind:          kind,
+		DisplayHandle: 0xDEAD,
+		WindowHandle:  0xBEEF,
+	})
 	if err != nil {
 		t.Fatalf("CreateSurface failed: %v", err)
 	}
@@ -1088,6 +1189,9 @@ func TestSurfaceStoresDisplayHandle(t *testing.T) {
 	}
 	if s.hwnd != 0xBEEF {
 		t.Errorf("hwnd = %#x, want 0xBEEF", s.hwnd)
+	}
+	if s.targetKind != kind {
+		t.Errorf("targetKind = %v, want %v", s.targetKind, kind)
 	}
 }
 

@@ -75,7 +75,15 @@ func (p DialogPainter) paintActions(canvas widget.Canvas, ps dialog.PaintState, 
 		return
 	}
 
-	// Layout actions from right to left.
+	// Use pre-computed ActionRects when available (ADR-034 Phase 4).
+	if len(ps.ActionRects) == len(ps.Actions) {
+		for i, action := range ps.Actions {
+			canvas.DrawText(action.Label, ps.ActionRects[i], m3DialogActionFontSize, colors.ActionFg, false, m3DialogTextAlignCenter)
+		}
+		return
+	}
+
+	// Legacy fallback.
 	x := ps.Bounds.Max.X - m3DialogPadding
 	y := ps.Bounds.Max.Y - m3DialogPadding - m3DialogActionHeight
 
@@ -109,6 +117,7 @@ const (
 	m3DialogFocusRingOffset float32 = 2
 	m3DialogFocusRingStroke float32 = 2
 	m3DialogFocusRingAlpha  float32 = 0.7
+	m3DialogMaxWidth        float32 = 560
 )
 
 // m3DefaultDialogColors holds the default M3 purple color scheme for dialogs.
@@ -124,5 +133,17 @@ var m3DefaultDialogColors = dialog.DialogColorScheme{
 	ActionBg: widget.Hex(0x6750A4), // M3 primary
 }
 
-// Compile-time check that DialogPainter implements Painter.
-var _ dialog.Painter = DialogPainter{}
+// DialogPadding returns the M3 dialog padding.
+func (DialogPainter) DialogPadding() float32 { return m3DialogPadding }
+
+// DialogTitleHeight returns the M3 dialog title height.
+func (DialogPainter) DialogTitleHeight() float32 { return m3DialogTitleHeight }
+
+// DialogMaxWidth returns the M3 default maximum dialog width.
+func (DialogPainter) DialogMaxWidth() float32 { return m3DialogMaxWidth }
+
+// Compile-time checks.
+var (
+	_ dialog.Painter       = DialogPainter{}
+	_ dialog.LayoutMetrics = DialogPainter{}
+)

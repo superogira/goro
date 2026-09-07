@@ -3,21 +3,33 @@
 package software
 
 import (
+	"fmt"
+	"runtime"
+
 	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/hal"
 )
 
+const (
+	goosWindows = "windows"
+	goosLinux   = "linux"
+	goosDarwin  = "darwin"
+)
+
 // API implements hal.Backend for the software backend.
-type API struct{}
+type Backend struct{}
+
+// NewBackend returns a software backend instance.
+func NewBackend() Backend { return Backend{} }
 
 // Variant returns the backend type identifier.
-func (API) Variant() gputypes.Backend {
+func (Backend) Variant() gputypes.Backend {
 	return gputypes.BackendEmpty
 }
 
 // CreateInstance creates a new software rendering instance.
 // Always succeeds and returns a CPU-based rendering instance.
-func (API) CreateInstance(_ *hal.InstanceDescriptor) (hal.Instance, error) {
+func (Backend) CreateInstance(_ *hal.InstanceDescriptor) (hal.Instance, error) {
 	return &Instance{}, nil
 }
 
@@ -30,10 +42,33 @@ type Instance struct{}
 // XPutImage on Linux X11).
 // If window is 0 (headless mode), Present() is a no-op.
 //
-// displayHandle is platform-specific: X11 Display* on Linux, 0 elsewhere.
-// windowHandle is the native window: HWND on Windows, X11 Window on Linux.
-func (i *Instance) CreateSurface(displayHandle, window uintptr) (hal.Surface, error) {
-	return &Surface{displayHandle: displayHandle, hwnd: window}, nil
+// The target kind remains attached to the Surface so deferred platform setup
+// never has to infer the window system from process-global state.
+func (i *Instance) CreateSurface(target hal.SurfaceTarget) (hal.Surface, error) {
+	if !supportsSurfaceTarget(runtime.GOOS, target.Kind) {
+		return nil, fmt.Errorf("software: %w: got %s on %s", hal.ErrUnsupportedSurfaceTarget, target.Kind, runtime.GOOS)
+	}
+	return &Surface{
+		targetKind:    target.Kind,
+		displayHandle: target.DisplayHandle,
+		hwnd:          target.WindowHandle,
+	}, nil
+}
+
+func supportsSurfaceTarget(goos string, kind hal.SurfaceTargetKind) bool {
+	if kind == hal.SurfaceTargetHeadless {
+		return true
+	}
+	switch goos {
+	case goosWindows:
+		return kind == hal.SurfaceTargetWindowsHWND
+	case goosLinux:
+		return kind == hal.SurfaceTargetXlibWindow || kind == hal.SurfaceTargetWaylandSurface
+	case goosDarwin:
+		return kind == hal.SurfaceTargetMetalLayer
+	default:
+		return false
+	}
 }
 
 // EnumerateAdapters returns a single default software adapter.
@@ -52,20 +87,43 @@ func (i *Instance) EnumerateAdapters(_ hal.Surface) []hal.ExposedAdapter {
 				DriverInfo: "CPU-based software rendering backend",
 				Backend:    gputypes.BackendEmpty,
 			},
-			Features: 0, // No optional features supported
+			Features: gputypes.Features(gputypes.FeatureRayQuery),
 			Capabilities: hal.Capabilities{
-				Limits: gputypes.DefaultLimits(),
+				Limits: softwareLimits(),
 				AlignmentsMask: hal.Alignments{
 					BufferCopyOffset: 4,
 					BufferCopyPitch:  256,
 				},
-				DownlevelCapabilities: hal.DownlevelCapabilities{
-					ShaderModel: 0,
-					Flags:       hal.DownlevelFlagsComputeShaders,
+				DownlevelCapabilities: gputypes.DownlevelCapabilities{
+					ShaderModel: gputypes.ShaderModelSm5,
+					Limits:      gputypes.DownlevelLimits{},
+					Flags: gputypes.DownlevelFlagsComputeShaders |
+						gputypes.DownlevelFlagsFragmentWritableStorage |
+						gputypes.DownlevelFlagsBaseVertex |
+						gputypes.DownlevelFlagsNonPowerOfTwoMipmappedTextures |
+						gputypes.DownlevelFlagsIndependentBlend |
+						gputypes.DownlevelFlagsVertexStorage |
+						gputypes.DownlevelFlagsFragmentStorage |
+						gputypes.DownlevelFlagsDepthTextureAndBufferCopies |
+						gputypes.DownlevelFlagsBufferBindingsNot16ByteAligned |
+						gputypes.DownlevelFlagsUnrestrictedIndexBuffer |
+						gputypes.DownlevelFlagsFullDrawIndexUint32 |
+						gputypes.DownlevelFlagsUnrestrictedExternalTextureCopies |
+						gputypes.DownlevelFlagsLinearInterpolation,
 				},
 			},
 		},
 	}
+}
+
+func softwareLimits() gputypes.Limits {
+	l := gputypes.DefaultLimits()
+	l.MaxBlasPrimitiveCount = 1 << 20
+	l.MaxBlasGeometryCount = 64
+	l.MaxTlasInstanceCount = 1 << 16
+	l.MaxAccelerationStructuresPerShaderStage = 16
+	l.MaxBuffersAndAccelerationStructuresPerShaderStage = 28
+	return l
 }
 
 // Destroy is a no-op for the software instance.

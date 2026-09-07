@@ -39,7 +39,7 @@ func (d *itemDecorator) Layout(ctx widget.Context, c geometry.Constraints) geome
 	if d.child == nil {
 		return geometry.Size{}
 	}
-	return d.child.Layout(ctx, c)
+	return widget.LayoutChild(d.child, ctx, c)
 }
 
 // Draw paints hover/selection background, then the child content.

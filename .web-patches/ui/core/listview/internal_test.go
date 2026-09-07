@@ -4,7 +4,6 @@ import (
 	"image"
 	"testing"
 
-	"github.com/gogpu/gg/scene"
 	"github.com/gogpu/ui/cdk"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
@@ -497,7 +496,7 @@ func TestWidgetCache_Update(t *testing.T) {
 		return nil // simple builder for testing
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	if !wc.valid {
 		t.Error("cache should be valid after update")
@@ -521,13 +520,13 @@ func TestWidgetCache_Reuse(t *testing.T) {
 		return nil
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	if callCount != 5 {
 		t.Errorf("callCount = %d, want 5", callCount)
 	}
 
 	// Second call with same range should be no-op.
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	if callCount != 5 {
 		t.Errorf("callCount after reuse = %d, want 5", callCount)
 	}
@@ -541,9 +540,9 @@ func TestWidgetCache_InvalidateForces_Rebuild(t *testing.T) {
 		return nil
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	wc.invalidate()
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	if callCount != 10 {
 		t.Errorf("callCount = %d, want 10 (5+5 after invalidate)", callCount)
@@ -556,7 +555,7 @@ func TestWidgetCache_Clear(t *testing.T) {
 		return nil
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	wc.clear()
 
 	if wc.valid {
@@ -573,7 +572,7 @@ func TestWidgetCache_EmptyRange(t *testing.T) {
 		return nil
 	}}
 
-	wc.update(0, 0, builder, -1)
+	wc.update(0, 0, builder, -1, nil)
 
 	if wc.valid {
 		t.Error("cache should not be valid for empty range")
@@ -594,7 +593,7 @@ func TestWidgetCache_WidgetAt(t *testing.T) {
 
 func TestWidgetCache_NilBuilder(t *testing.T) {
 	wc := newTestCache()
-	wc.update(0, 3, nil, -1)
+	wc.update(0, 3, nil, -1, nil)
 
 	for i := 0; i < 3; i++ {
 		if got := wc.widgetAt(i); got != nil {
@@ -611,7 +610,7 @@ func TestWidgetCache_ItemContextPropagation(t *testing.T) {
 		return nil
 	}}
 
-	wc.update(5, 8, builder, 6)
+	wc.update(5, 8, builder, 6, nil)
 
 	if len(received) != 3 {
 		t.Fatalf("received %d contexts, want 3", len(received))
@@ -888,7 +887,7 @@ func (m *mockCanvas) PopTransform()                                {}
 func (m *mockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (m *mockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (m *mockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (m *mockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (m *mockCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 // --- Decorator + RepaintBoundary integration tests ---
 
@@ -900,7 +899,7 @@ func TestWidgetCache_BoundariesCreated(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	if len(wc.widgets) != 3 {
 		t.Fatalf("len(widgets) = %d, want 3", len(wc.widgets))
@@ -931,7 +930,7 @@ func TestWidgetCache_WidgetAtWithBoundary(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	// Valid offsets — widget should exist and be a decorator (RepaintBoundary).
 	for i := 0; i < 3; i++ {
@@ -971,7 +970,7 @@ func TestWidgetCache_BoundaryNilForNilWidget(t *testing.T) {
 		return nil // builder returns nil widget
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	for i := 0; i < 3; i++ {
 		if w := wc.widgetAt(i); w != nil {
@@ -982,7 +981,7 @@ func TestWidgetCache_BoundaryNilForNilWidget(t *testing.T) {
 
 func TestWidgetCache_BoundaryNilBuilder(t *testing.T) {
 	wc := newTestCache()
-	wc.update(0, 3, nil, -1)
+	wc.update(0, 3, nil, -1, nil)
 
 	for i := 0; i < 3; i++ {
 		if w := wc.widgetAt(i); w != nil {
@@ -1001,7 +1000,7 @@ func TestWidgetCache_BoundaryWrapsCorrectChild(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	// widgetAt returns the decorator. childAt returns the user widget.
 	// Verify childAt returns the same widget the builder created.
@@ -1032,7 +1031,7 @@ func TestWidgetCache_ClearUnmountsBoundaries(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	// Verify decorators with boundary property exist before clear.
 	for i := 0; i < 3; i++ {
@@ -1066,7 +1065,7 @@ func TestWidgetCache_InvalidateRebuildsBoundaries(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 	w1 := wc.widgetAt(0)
 	if w1 == nil {
 		t.Fatal("widget[0] nil before invalidate")
@@ -1080,7 +1079,7 @@ func TestWidgetCache_InvalidateRebuildsBoundaries(t *testing.T) {
 	}
 
 	wc.invalidate()
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	w2 := wc.widgetAt(0)
 	if w2 == nil {
@@ -1113,10 +1112,10 @@ func TestWidgetCache_RangeShiftCreatesBoundaries(t *testing.T) {
 	}}
 
 	// Initial range [0, 3).
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	// Shift range to [5, 8).
-	wc.update(5, 8, builder, -1)
+	wc.update(5, 8, builder, -1, nil)
 
 	if len(wc.widgets) != 3 {
 		t.Fatalf("len(widgets) = %d, want 3", len(wc.widgets))
@@ -1149,7 +1148,7 @@ func TestMarkItemDirty_InRange(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	// Create a ListView with this cache.
 	lv := &Widget{
@@ -1198,7 +1197,7 @@ func TestMarkItemDirty_OutOfRange(t *testing.T) {
 		return w
 	}}
 
-	wc.update(5, 10, builder, -1)
+	wc.update(5, 10, builder, -1, nil)
 
 	lv := &Widget{
 		hoveredIndex: noHoveredIndex,
@@ -1222,7 +1221,7 @@ func TestHoverChange_NoInvalidate(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	// Clear initial dirty state (simulates first draw).
 	for i := range 5 {
@@ -1316,7 +1315,7 @@ func TestSelectionChangeDirtiesOnlyTwoItems(t *testing.T) {
 	}}
 
 	// Initial build: 10 items, item 3 selected.
-	wc.update(0, 10, builder, 3)
+	wc.update(0, 10, builder, 3, nil)
 	initialCount := callCount
 
 	if initialCount != 10 {
@@ -1330,7 +1329,7 @@ func TestSelectionChangeDirtiesOnlyTwoItems(t *testing.T) {
 	}
 
 	// Change selection from 3 to 5 — should only rebuild items 3 and 5.
-	wc.rebuildAffected(0, builder, 5)
+	wc.rebuildAffected(0, builder, 5, nil)
 
 	rebuiltCount := callCount - initialCount
 	if rebuiltCount != 2 {
@@ -1366,7 +1365,7 @@ func TestListViewNotDirtyOnItemClick(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 10, builder, -1)
+	wc.update(0, 10, builder, -1, nil)
 
 	lv := &Widget{
 		hoveredIndex: noHoveredIndex,
@@ -1416,7 +1415,7 @@ func TestVirtualContentExposesChildrenForDirtyCollector(t *testing.T) {
 		w.SetVisible(true)
 		return w
 	}}
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	lv.cache = wc
 
 	vc := &virtualContent{list: lv}
@@ -1447,7 +1446,7 @@ func TestListView_ItemBoundaryDirtyPropagation(t *testing.T) {
 	}}
 
 	wc := newTestCache()
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	for i := 0; i < 5; i++ {
 		w := wc.widgetAt(i)
@@ -1515,7 +1514,7 @@ func TestListView_MarkItemDirtyStopsAtItemBoundary(t *testing.T) {
 	lv.SetVisible(true)
 	lv.SetEnabled(true)
 	lv.cache.list = lv
-	lv.cache.update(0, 5, builder, -1)
+	lv.cache.update(0, 5, builder, -1, nil)
 
 	// Create a parent boundary to verify propagation STOPS at decorator.
 	parent := &boundaryTracker{}
@@ -1587,7 +1586,7 @@ func TestListView_MarkItemDirtyIsolatedFromRoot(t *testing.T) {
 	lv.SetVisible(true)
 	lv.SetEnabled(true)
 	lv.cache.list = lv
-	lv.cache.update(0, 5, builder, -1)
+	lv.cache.update(0, 5, builder, -1, nil)
 
 	// Build 3-level chain: root(boundary) -> lv -> decorator(boundary)
 	root := &boundaryTracker{}
@@ -1662,7 +1661,7 @@ func TestListView_HoverChangesVisibleOnRedraw(t *testing.T) {
 
 	// Build cache so decorators exist.
 	lv.hoveredIndex = noHoveredIndex
-	lv.cache.update(0, 10, builder, -1)
+	lv.cache.update(0, 10, builder, -1, nil)
 
 	// Clear initial dirty state.
 	for i := range 10 {
@@ -1705,6 +1704,81 @@ func TestListView_HoverChangesVisibleOnRedraw(t *testing.T) {
 		if !dec.NeedsRedraw() {
 			t.Error("decorator[4] should be dirty after hover change")
 		}
+	}
+}
+
+func TestContentMouseMoveRejectsOutsideRowWidth(t *testing.T) {
+	lv := New(ItemCount(10), FixedItemHeight(20))
+	ctx := widget.NewContext()
+	lv.Layout(ctx, geometry.Tight(geometry.Sz(100, 100)))
+	rowWidth, ok := contentRowWidth(lv)
+	if !ok {
+		t.Fatal("row width unavailable after layout")
+	}
+
+	tests := []struct {
+		name string
+		x    float32
+		want int
+	}{
+		{name: "negative", x: -1, want: noHoveredIndex},
+		{name: "left edge", x: 0, want: 1},
+		{name: "right edge", x: rowWidth, want: 1},
+		{name: "past right edge", x: rowWidth + 1, want: noHoveredIndex},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lv.hoveredIndex = noHoveredIndex
+			handleContentMouseMove(lv, ctx, &event.MouseEvent{
+				MouseType: event.MouseMove,
+				Position:  geometry.Pt(tt.x, 25),
+			})
+			if lv.hoveredIndex != tt.want {
+				t.Errorf("hoveredIndex = %d, want %d", lv.hoveredIndex, tt.want)
+			}
+		})
+	}
+}
+
+func TestContentMousePressRejectsOutsideRowWidth(t *testing.T) {
+	clicked := make([]int, 0, 2)
+	lv := New(
+		ItemCount(10),
+		FixedItemHeight(20),
+		OnItemClick(func(index int) { clicked = append(clicked, index) }),
+	)
+	ctx := widget.NewContext()
+	lv.Layout(ctx, geometry.Tight(geometry.Sz(100, 100)))
+	rowWidth, ok := contentRowWidth(lv)
+	if !ok {
+		t.Fatal("row width unavailable after layout")
+	}
+
+	tests := []struct {
+		name         string
+		x            float32
+		wantConsumed bool
+		wantClicks   int
+	}{
+		{name: "negative", x: -1, wantClicks: 0},
+		{name: "left edge", x: 0, wantConsumed: true, wantClicks: 1},
+		{name: "right edge", x: rowWidth, wantConsumed: true, wantClicks: 2},
+		{name: "past right edge", x: rowWidth + 1, wantClicks: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			consumed := handleContentMousePress(lv, ctx, &event.MouseEvent{
+				MouseType: event.MousePress,
+				Button:    event.ButtonLeft,
+				Position:  geometry.Pt(tt.x, 25),
+			})
+			if consumed != tt.wantConsumed {
+				t.Errorf("consumed = %v, want %v", consumed, tt.wantConsumed)
+			}
+			if len(clicked) != tt.wantClicks {
+				t.Errorf("click count = %d, want %d", len(clicked), tt.wantClicks)
+			}
+		})
 	}
 }
 
@@ -1950,7 +2024,7 @@ func TestListView_BoundaryItemBoundsInContentSpace(t *testing.T) {
 	}}
 
 	wc := newTestCache()
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	for i := 0; i < 5; i++ {
 		w := wc.widgetAt(i)
@@ -1979,7 +2053,7 @@ func TestWidgetCache_ChildAt(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 3, builder, -1)
+	wc.update(0, 3, builder, -1, nil)
 
 	for i := 0; i < 3; i++ {
 		child := wc.childAt(i)
@@ -2044,7 +2118,7 @@ func TestScrollSameRange_NoRebuild(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	first := make([]widget.Widget, 5)
 	for i := range 5 {
 		first[i] = wc.widgetAt(i)
@@ -2053,7 +2127,7 @@ func TestScrollSameRange_NoRebuild(t *testing.T) {
 
 	// Simulate scroll that doesn't change visible range.
 	// Without cache.invalidate(), update sees same range → no-op.
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	if callCount != 0 {
 		t.Errorf("builder called %d times, want 0 (same range = no rebuild)", callCount)
@@ -2079,7 +2153,7 @@ func TestScrollShiftRange_ReusesOverlap(t *testing.T) {
 	}}
 
 	// Initial range [0, 8).
-	wc.update(0, 8, builder, -1)
+	wc.update(0, 8, builder, -1, nil)
 	origDec := make([]widget.Widget, 8)
 	for i := range 8 {
 		origDec[i] = wc.widgetAt(i)
@@ -2088,7 +2162,7 @@ func TestScrollShiftRange_ReusesOverlap(t *testing.T) {
 
 	// Scroll down by 2 items → new range [2, 10).
 	// Items 2-7 overlap → reuse. Items 8-9 are new.
-	wc.update(2, 10, builder, -1)
+	wc.update(2, 10, builder, -1, nil)
 
 	// Only 2 new items should be built (indices 8, 9).
 	if callCount != 2 {
@@ -2114,7 +2188,7 @@ func TestScrollShiftRange_NewEdgeDecoratorsAreDirty(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 8, builder, -1)
+	wc.update(0, 8, builder, -1, nil)
 
 	// Simulate first draw — clear dirty on all decorators.
 	for i := range 8 {
@@ -2124,7 +2198,7 @@ func TestScrollShiftRange_NewEdgeDecoratorsAreDirty(t *testing.T) {
 	}
 
 	// Scroll down by 2 → range [2, 10).
-	wc.update(2, 10, builder, -1)
+	wc.update(2, 10, builder, -1, nil)
 
 	// Reused decorators (offsets 0-5, indices 2-7) should be clean.
 	for i := 0; i < 6; i++ {
@@ -2161,11 +2235,11 @@ func TestScrollNoOverlap_FullRebuild(t *testing.T) {
 		return w
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	callCount = 0
 
 	// Jump to completely different range.
-	wc.update(100, 105, builder, -1)
+	wc.update(100, 105, builder, -1, nil)
 
 	if callCount != 5 {
 		t.Errorf("builder called %d times, want 5 (no overlap = full rebuild)", callCount)
@@ -2182,11 +2256,11 @@ func TestScrollInvalidateThenSameRange_Rebuilds(t *testing.T) {
 		return nil
 	}}
 
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 	callCount = 0
 
 	wc.invalidate()
-	wc.update(0, 5, builder, -1)
+	wc.update(0, 5, builder, -1, nil)
 
 	if callCount != 5 {
 		t.Errorf("callCount = %d, want 5 (invalidate forces rebuild)", callCount)

@@ -3,6 +3,7 @@ package checkbox
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -35,6 +36,9 @@ type Widget struct {
 	state   interactionState
 	painter Painter
 
+	// Gesture recognizer for click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
+
 	// Styling overrides set via fluent methods.
 	padding float32
 }
@@ -60,6 +64,30 @@ func New(opts ...Option) *Widget {
 		w.painter = w.cfg.painter
 	}
 
+	// Create ClickRecognizer for unified pointer pipeline (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClickDown: func(details gesture.ClickDownDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			w.state = statePressed
+			w.SetNeedsRedraw(true)
+		},
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			w.state = stateNormal
+			w.SetNeedsRedraw(true)
+			fireToggle(w)
+		},
+		OnClickCancel: func() {
+			w.state = stateNormal
+			w.SetNeedsRedraw(true)
+		},
+	})
+
 	return w
 }
 
@@ -74,14 +102,21 @@ func (w *Widget) IsFocusable() bool {
 
 // Layout calculates the checkbox's preferred size within the given constraints.
 func (w *Widget) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
+	// Query LayoutMetrics from painter (type assert with default fallback).
+	lm := resolveCheckboxLayoutMetrics(w.painter)
+
+	bs := lm.CheckboxBoxSize()
+	gap := lm.CheckboxLabelGap()
+	fontSize := lm.CheckboxFontSize()
+
 	// Box size + optional label width.
-	totalWidth := boxSize + w.padding*2
-	totalHeight := boxSize + w.padding*2
+	totalWidth := bs + w.padding*2
+	totalHeight := bs + w.padding*2
 
 	label := w.cfg.ResolvedLabel()
 	if label != "" {
-		textWidth := float32(len(label)) * defaultFontSize * charWidthRatio
-		totalWidth += labelGap + textWidth
+		textWidth := float32(len(label)) * fontSize * charWidthRatio
+		totalWidth += gap + textWidth
 	}
 
 	// Ensure minimum height.
@@ -137,10 +172,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 		w.AddBinding(b)
 	}
 	if w.cfg.readonlyLabelSig != nil {
-		b := state.BindToScheduler(w.cfg.readonlyLabelSig, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyLabelSig, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.labelSignal != nil {
-		b := state.BindToScheduler(w.cfg.labelSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.labelSignal, w, sched)
 		w.AddBinding(b)
 	}
 	if w.cfg.readonlyDisabledSig != nil {
@@ -155,12 +190,27 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the checkbox is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.clickRec != nil {
+		w.clickRec.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// Checkbox is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
 }
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

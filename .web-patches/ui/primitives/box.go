@@ -353,7 +353,7 @@ func (b *BoxWidget) layoutVerticalSimple(
 			remaining.MinWidth = 0
 		}
 
-		size := child.Layout(ctx, remaining)
+		size := widget.LayoutChild(child, ctx, remaining)
 
 		childX := pad.Left
 		childY := pad.Top + totalHeight
@@ -419,7 +419,7 @@ func (b *BoxWidget) layoutVerticalTwoPass(
 		}
 		remaining := childConstraints
 		remaining.MinHeight = 0
-		size := child.Layout(ctx, remaining)
+		size := widget.LayoutChild(child, ctx, remaining)
 		fixedSizes[i] = size
 		fixedHeight += size.Height
 		if size.Width > maxChildWidth {
@@ -448,7 +448,7 @@ func (b *BoxWidget) layoutVerticalTwoPass(
 				MinHeight: expandedHeight,
 				MaxHeight: expandedHeight,
 			}
-			size = child.Layout(ctx, ec)
+			size = widget.LayoutChild(child, ctx, ec)
 		} else {
 			size = fixedSizes[i]
 		}
@@ -527,7 +527,7 @@ func (b *BoxWidget) layoutHorizontalSimple(
 		}
 		remaining.MinWidth = 0
 
-		size := child.Layout(ctx, remaining)
+		size := widget.LayoutChild(child, ctx, remaining)
 
 		childX := pad.Left + totalWidth
 		childY := pad.Top
@@ -573,7 +573,7 @@ func (b *BoxWidget) layoutHorizontalTwoPass(
 		}
 		remaining := childConstraints
 		remaining.MinWidth = 0
-		size := child.Layout(ctx, remaining)
+		size := widget.LayoutChild(child, ctx, remaining)
 		fixedSizes[i] = size
 		fixedWidth += size.Width
 		if size.Height > maxChildHeight {
@@ -602,7 +602,7 @@ func (b *BoxWidget) layoutHorizontalTwoPass(
 				MinHeight: childConstraints.MinHeight,
 				MaxHeight: childConstraints.MaxHeight,
 			}
-			size = child.Layout(ctx, ec)
+			size = widget.LayoutChild(child, ctx, ec)
 		} else {
 			size = fixedSizes[i]
 		}

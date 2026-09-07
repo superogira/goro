@@ -3,9 +3,11 @@
 package wgpu
 
 import (
+	"fmt"
 	"syscall/js"
 	"time"
 
+	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/internal/browser"
 )
 
@@ -14,8 +16,8 @@ import (
 type Device struct {
 	browser  *browser.Device
 	queue    *Queue
-	features Features
-	limits   Limits
+	features gputypes.Features
+	limits   gputypes.Limits
 	released bool
 }
 
@@ -25,12 +27,12 @@ func (d *Device) Queue() *Queue {
 }
 
 // Features returns the device's enabled features.
-func (d *Device) Features() Features {
+func (d *Device) Features() gputypes.Features {
 	return d.features
 }
 
 // Limits returns the device's resource limits.
-func (d *Device) Limits() Limits {
+func (d *Device) Limits() gputypes.Limits {
 	return d.limits
 }
 
@@ -38,6 +40,9 @@ func (d *Device) Limits() Limits {
 func (d *Device) CreateBuffer(desc *BufferDescriptor) (*Buffer, error) {
 	if d.released {
 		return nil, ErrReleased
+	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: buffer descriptor is nil")
 	}
 	jsDesc := browser.BuildBufferDescriptor(
 		desc.Label,
@@ -70,6 +75,9 @@ func (d *Device) CreateTexture(desc *TextureDescriptor) (*Texture, error) {
 	if d.released {
 		return nil, ErrReleased
 	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: texture descriptor is nil")
+	}
 	jsDesc := browser.BuildTextureDescriptor(
 		desc.Label,
 		desc.Size.Width, desc.Size.Height, desc.Size.DepthOrArrayLayers,
@@ -92,6 +100,9 @@ func (d *Device) CreateTextureView(texture *Texture, desc *TextureViewDescriptor
 	}
 	if texture == nil || texture.browser == nil {
 		return nil, ErrReleased
+	}
+	if desc == nil {
+		desc = &TextureViewDescriptor{}
 	}
 	if desc == nil {
 		// A nil descriptor requests the default view, matching createView()
@@ -117,6 +128,9 @@ func (d *Device) CreateSampler(desc *SamplerDescriptor) (*Sampler, error) {
 	if d.released {
 		return nil, ErrReleased
 	}
+	if desc == nil {
+		desc = &SamplerDescriptor{}
+	}
 	jsDesc := browser.BuildSamplerDescriptor(
 		desc.Label,
 		desc.AddressModeU, desc.AddressModeV, desc.AddressModeW,
@@ -138,6 +152,9 @@ func (d *Device) CreateShaderModule(desc *ShaderModuleDescriptor) (*ShaderModule
 	if d.released {
 		return nil, ErrReleased
 	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: shader module descriptor is nil")
+	}
 	jsDesc := browser.BuildShaderModuleDescriptor(desc.Label, desc.WGSL)
 	bm := d.browser.CreateShaderModuleFromDesc(jsDesc)
 	return &ShaderModule{
@@ -150,6 +167,9 @@ func (d *Device) CreateShaderModule(desc *ShaderModuleDescriptor) (*ShaderModule
 func (d *Device) CreateBindGroupLayout(desc *BindGroupLayoutDescriptor) (*BindGroupLayout, error) {
 	if d.released {
 		return nil, ErrReleased
+	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: bind group layout descriptor is nil")
 	}
 	entries := convertBindGroupLayoutEntries(desc.Entries)
 	jsDesc := browser.BuildBindGroupLayoutDescriptor(desc.Label, entries)
@@ -164,6 +184,9 @@ func (d *Device) CreateBindGroupLayout(desc *BindGroupLayoutDescriptor) (*BindGr
 func (d *Device) CreatePipelineLayout(desc *PipelineLayoutDescriptor) (*PipelineLayout, error) {
 	if d.released {
 		return nil, ErrReleased
+	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: pipeline layout descriptor is nil")
 	}
 	refs := make([]js.Value, len(desc.BindGroupLayouts))
 	for i, bgl := range desc.BindGroupLayouts {
@@ -186,6 +209,9 @@ func (d *Device) CreateBindGroup(desc *BindGroupDescriptor) (*BindGroup, error) 
 	if d.released {
 		return nil, ErrReleased
 	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: bind group descriptor is nil")
+	}
 	var layoutRef js.Value
 	if desc.Layout != nil && desc.Layout.browser != nil {
 		layoutRef = desc.Layout.browser.Ref()
@@ -206,6 +232,9 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (*RenderPi
 	if d.released {
 		return nil, ErrReleased
 	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: render pipeline descriptor is nil")
+	}
 	jsDesc := convertRenderPipelineDescriptor(desc)
 	bp := d.browser.CreateRenderPipelineFromDesc(jsDesc)
 	return &RenderPipeline{
@@ -218,6 +247,9 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (*RenderPi
 func (d *Device) CreateComputePipeline(desc *ComputePipelineDescriptor) (*ComputePipeline, error) {
 	if d.released {
 		return nil, ErrReleased
+	}
+	if desc == nil {
+		return nil, fmt.Errorf("wgpu: compute pipeline descriptor is nil")
 	}
 	var layoutRef js.Value
 	if desc.Layout != nil && desc.Layout.browser != nil {
@@ -337,7 +369,7 @@ func (d *Device) Release() {
 
 // convertBindGroupLayoutEntries converts Go BindGroupLayoutEntry slice to
 // browser.BindGroupLayoutEntryJS slice for JS object construction.
-func convertBindGroupLayoutEntries(entries []BindGroupLayoutEntry) []browser.BindGroupLayoutEntryJS {
+func convertBindGroupLayoutEntries(entries []gputypes.BindGroupLayoutEntry) []browser.BindGroupLayoutEntryJS {
 	result := make([]browser.BindGroupLayoutEntryJS, len(entries))
 	for i, e := range entries {
 		entry := browser.BindGroupLayoutEntryJS{
@@ -461,7 +493,7 @@ func convertRenderPipelineDescriptor(desc *RenderPipelineDescriptor) js.Value {
 }
 
 // convertVertexBufferLayouts converts Go VertexBufferLayout slice to JS types.
-func convertVertexBufferLayouts(layouts []VertexBufferLayout) []browser.VertexBufferLayoutJS {
+func convertVertexBufferLayouts(layouts []gputypes.VertexBufferLayout) []browser.VertexBufferLayoutJS {
 	result := make([]browser.VertexBufferLayoutJS, len(layouts))
 	for i, l := range layouts {
 		jsLayout := browser.VertexBufferLayoutJS{
@@ -509,7 +541,7 @@ func convertStencilFaceState(s *StencilFaceState) *browser.StencilFaceStateJS {
 }
 
 // stencilOpToJS converts StencilOperation (gputypes, webgpu.h spec values) to WebGPU JS string.
-func stencilOpToJS(op StencilOperation) string {
+func stencilOpToJS(op gputypes.StencilOperation) string {
 	switch op {
 	case StencilOperationKeep:
 		return "keep"

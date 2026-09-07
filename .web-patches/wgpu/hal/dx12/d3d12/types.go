@@ -597,7 +597,11 @@ type D3D12_COMMAND_SIGNATURE_DESC struct {
 type D3D12_INDIRECT_ARGUMENT_DESC struct {
 	Type D3D12_INDIRECT_ARGUMENT_TYPE
 	// Union for different argument types
-	Union [8]byte
+	// The largest member (D3D12_INDIRECT_ARGUMENT_DESC_CONSTANT) is three
+	// uint32 values, so the C union occupies 12 bytes and the full descriptor
+	// is 16 bytes including Type. Keeping the exact size matters because
+	// CreateCommandSignature reads the native descriptor layout directly.
+	Union [12]byte
 }
 
 // D3D12_DISCARD_REGION describes a discard region.
@@ -637,6 +641,14 @@ type D3D12_FEATURE_DATA_FEATURE_LEVELS struct {
 	NumFeatureLevels         uint32
 	FeatureLevelsRequested   *D3D_FEATURE_LEVEL
 	MaxSupportedFeatureLevel D3D_FEATURE_LEVEL
+}
+
+// D3D12_FEATURE_DATA_ARCHITECTURE describes adapter architecture.
+type D3D12_FEATURE_DATA_ARCHITECTURE struct {
+	NodeIndex         uint32
+	TileBasedRenderer int32
+	UMA               int32
+	CacheCoherentUMA  int32
 }
 
 // D3D12_RENDER_PASS_RENDER_TARGET_DESC describes a render pass render target.

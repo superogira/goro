@@ -1,7 +1,6 @@
 package gridview
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -20,7 +19,7 @@ func TestCellCache_Update(t *testing.T) {
 		return nil
 	}}
 
-	cc.update(0, 5, builder, -1, -1, 3)
+	cc.update(0, 5, builder, -1, -1, 3, nil)
 
 	if !cc.valid {
 		t.Error("cache should be valid after update")
@@ -44,13 +43,13 @@ func TestCellCache_Reuse(t *testing.T) {
 		return nil
 	}}
 
-	cc.update(0, 5, builder, -1, -1, 3)
+	cc.update(0, 5, builder, -1, -1, 3, nil)
 	if callCount != 5 {
 		t.Errorf("callCount = %d, want 5", callCount)
 	}
 
 	// Second call with same range should be no-op.
-	cc.update(0, 5, builder, -1, -1, 3)
+	cc.update(0, 5, builder, -1, -1, 3, nil)
 	if callCount != 5 {
 		t.Errorf("callCount after reuse = %d, want 5", callCount)
 	}
@@ -64,9 +63,9 @@ func TestCellCache_Invalidate_Forces_Rebuild(t *testing.T) {
 		return nil
 	}}
 
-	cc.update(0, 5, builder, -1, -1, 3)
+	cc.update(0, 5, builder, -1, -1, 3, nil)
 	cc.invalidate()
-	cc.update(0, 5, builder, -1, -1, 3)
+	cc.update(0, 5, builder, -1, -1, 3, nil)
 
 	if callCount != 10 {
 		t.Errorf("callCount = %d, want 10 (5+5 after invalidate)", callCount)
@@ -79,7 +78,7 @@ func TestCellCache_Clear(t *testing.T) {
 		return nil
 	}}
 
-	cc.update(0, 5, builder, -1, -1, 3)
+	cc.update(0, 5, builder, -1, -1, 3, nil)
 	cc.clear()
 
 	if cc.valid {
@@ -96,7 +95,7 @@ func TestCellCache_EmptyRange(t *testing.T) {
 		return nil
 	}}
 
-	cc.update(0, 0, builder, -1, -1, 3)
+	cc.update(0, 0, builder, -1, -1, 3, nil)
 
 	if cc.valid {
 		t.Error("cache should not be valid for empty range")
@@ -117,7 +116,7 @@ func TestCellCache_WidgetAt(t *testing.T) {
 
 func TestCellCache_NilBuilder(t *testing.T) {
 	var cc cellCache
-	cc.update(0, 3, nil, -1, -1, 3)
+	cc.update(0, 3, nil, -1, -1, 3, nil)
 
 	for i := 0; i < 3; i++ {
 		if got := cc.widgetAt(i); got != nil {
@@ -135,7 +134,7 @@ func TestCellCache_ContextPropagation(t *testing.T) {
 	}}
 
 	// 6 items, 3 cols: row 0 = [0,1,2], row 1 = [3,4,5]
-	cc.update(0, 6, builder, 2, 4, 3)
+	cc.update(0, 6, builder, 2, 4, 3, nil)
 
 	if len(received) != 6 {
 		t.Fatalf("received %d contexts, want 6", len(received))
@@ -169,7 +168,7 @@ func TestCellCache_ZeroCols(t *testing.T) {
 	}}
 
 	// Zero cols should not panic.
-	cc.update(0, 2, builder, -1, -1, 0)
+	cc.update(0, 2, builder, -1, -1, 0, nil)
 
 	if len(received) != 2 {
 		t.Fatalf("received %d contexts, want 2", len(received))
@@ -956,4 +955,4 @@ func (m *mockCanvas) PopTransform()                                {}
 func (m *mockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (m *mockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (m *mockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (m *mockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (m *mockCanvas) ReplayScene(_ widget.SceneCache)              {}

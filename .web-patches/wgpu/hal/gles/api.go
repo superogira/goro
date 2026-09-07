@@ -17,6 +17,9 @@ import (
 // Backend implements hal.Backend for OpenGL ES / OpenGL 3.3+.
 type Backend struct{}
 
+// NewBackend returns a GLES backend instance.
+func NewBackend() Backend { return Backend{} }
+
 // Variant returns the backend type identifier.
 func (Backend) Variant() gputypes.Backend {
 	return gputypes.BackendGL
@@ -84,7 +87,11 @@ type Instance struct {
 // user DCs during Present.
 //
 // Follows Rust wgpu-hal/src/gles/wgl.rs Instance::create_surface (lines 624-670).
-func (i *Instance) CreateSurface(_, windowHandle uintptr) (hal.Surface, error) {
+func (i *Instance) CreateSurface(target hal.SurfaceTarget) (hal.Surface, error) {
+	if err := target.RequireKind(hal.SurfaceTargetWindowsHWND); err != nil {
+		return nil, fmt.Errorf("gles: %w", err)
+	}
+	windowHandle := target.WindowHandle
 	hwnd := wgl.HWND(windowHandle)
 
 	// Set pixel format on user window DC. Required for wglMakeCurrent to
@@ -161,8 +168,9 @@ func (i *Instance) EnumerateAdapters(_ hal.Surface) []hal.ExposedAdapter {
 					BufferCopyOffset: 4,
 					BufferCopyPitch:  4,
 				},
-				DownlevelCapabilities: hal.DownlevelCapabilities{
-					ShaderModel: 50, // SM5.0
+				DownlevelCapabilities: gputypes.DownlevelCapabilities{
+					ShaderModel: gputypes.ShaderModelSm5,
+					Limits:      gputypes.DownlevelLimits{},
 					Flags:       caps.DownlevelFlags,
 				},
 			},

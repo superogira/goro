@@ -141,7 +141,14 @@ func (d *Device) UnmapBuffer(buffer hal.Buffer) error {
 	if buf.mapped == nil {
 		return nil
 	}
-	if buf.usage&gputypes.BufferUsageMapWrite != 0 && buf.id != 0 {
+	// Flush the CPU-side shadow buffer to the GL buffer. This must happen for
+	// ALL writable mappings, not only MapWrite buffers. MappedAtCreation works
+	// with any buffer usage (Uniform, Vertex, Index, CopyDst) per the WebGPU
+	// spec: "mappedAtCreation does not require MAP_WRITE usage." Without this
+	// flush, data written via MappedRange is silently discarded and the GL
+	// buffer remains zero-filled — uniform buffers get zero matrices, vertex
+	// buffers get zero positions, etc.
+	if buf.id != 0 {
 		d.glCtx.BindBuffer(buf.target, buf.id)
 		d.glCtx.BufferSubData(buf.target, 0, len(buf.mapped), unsafe.Pointer(&buf.mapped[0]))
 		d.glCtx.BindBuffer(buf.target, 0)
@@ -504,12 +511,18 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (hal.Rende
 		"elapsed", time.Since(start),
 	)
 
-	// Extract blend state and color write mask from the first color target.
-	var blend *gputypes.BlendState
-	colorWriteMask := gputypes.ColorWriteMaskAll
-	if desc.Fragment != nil && len(desc.Fragment.Targets) > 0 {
-		blend = desc.Fragment.Targets[0].Blend
-		colorWriteMask = desc.Fragment.Targets[0].WriteMask
+	// Extract per-target blend/write-mask configuration for MRT.
+	// Matches Rust wgpu-hal GLES device.rs:1559-1570: stores ALL color targets
+	// so that SetPipeline can apply per-draw-buffer blend state.
+	var colorTargets []ColorTargetDesc
+	if desc.Fragment != nil {
+		colorTargets = make([]ColorTargetDesc, len(desc.Fragment.Targets))
+		for i, ct := range desc.Fragment.Targets {
+			colorTargets[i] = ColorTargetDesc{
+				Blend:     ct.Blend,
+				WriteMask: ct.WriteMask,
+			}
+		}
 	}
 
 	pipeline := &RenderPipeline{
@@ -521,8 +534,7 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (hal.Rende
 		frontFace:         desc.Primitive.FrontFace,
 		depthStencil:      desc.DepthStencil,
 		multisample:       desc.Multisample,
-		blend:             blend,
-		colorWriteMask:    colorWriteMask,
+		colorTargets:      colorTargets,
 		vertexBuffers:     desc.Vertex.Buffers,
 	}
 
@@ -725,6 +737,28 @@ func (d *Device) CreateRenderBundleEncoder(desc *hal.RenderBundleEncoderDescript
 
 // DestroyRenderBundle is not supported in GLES backend.
 func (d *Device) DestroyRenderBundle(bundle hal.RenderBundle) {}
+
+// CreateAccelerationStructure returns an error because the GLES backend
+// does not support ray tracing. OpenGL ES has no acceleration structure API.
+func (d *Device) CreateAccelerationStructure(_ *hal.AccelerationStructureDescriptor) (hal.AccelerationStructure, error) {
+	return nil, fmt.Errorf("gles: ray tracing not supported")
+}
+
+// DestroyAccelerationStructure is a no-op (GLES has no ray tracing).
+func (d *Device) DestroyAccelerationStructure(_ hal.AccelerationStructure) {}
+
+// GetAccelerationStructureBuildSizes returns zero sizes (GLES has no ray tracing).
+func (d *Device) GetAccelerationStructureBuildSizes(_ *hal.GetAccelerationStructureBuildSizesDescriptor) hal.AccelerationStructureBuildSizes {
+	return hal.AccelerationStructureBuildSizes{}
+}
+
+// GetAccelerationStructureDeviceAddress returns 0 (GLES has no ray tracing).
+func (d *Device) GetAccelerationStructureDeviceAddress(_ hal.AccelerationStructure) uint64 {
+	return 0
+}
+
+// TlasInstanceToBytes returns nil (GLES has no ray tracing).
+func (d *Device) TlasInstanceToBytes(_ hal.TlasInstance) []byte { return nil }
 
 // WaitIdle waits for all GPU work to complete.
 func (d *Device) WaitIdle() error {

@@ -22,6 +22,7 @@ import (
 type Device struct {
 	core     *core.Device
 	queue    *Queue
+	instance *Instance
 	released atomic.Bool
 
 	// cmdEncoderPool is the single shared encoder pool for the device.
@@ -48,12 +49,12 @@ func (d *Device) Queue() *Queue {
 }
 
 // Features returns the device's enabled features.
-func (d *Device) Features() Features {
+func (d *Device) Features() gputypes.Features {
 	return d.core.Features
 }
 
 // Limits returns the device's resource limits.
-func (d *Device) Limits() Limits {
+func (d *Device) Limits() gputypes.Limits {
 	return d.core.Limits
 }
 
@@ -116,7 +117,7 @@ func (d *Device) CreateTexture(desc *TextureDescriptor) (*Texture, error) {
 
 	halDesc := desc.toHAL()
 
-	if err := core.ValidateTextureDescriptor(halDesc, d.core.Limits); err != nil {
+	if err := core.ValidateTextureDescriptor(halDesc, d.core.Limits, d.core.Features); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +126,21 @@ func (d *Device) CreateTexture(desc *TextureDescriptor) (*Texture, error) {
 		return nil, fmt.Errorf("wgpu: failed to create texture: %w", err)
 	}
 
-	return &Texture{hal: halTexture, device: d, format: desc.Format}, nil
+	// Create core.Texture for TrackerIndex allocation. This enables submit-time
+	// barrier injection: the TrackerIndex is used by populateTextureScope to
+	// record per-texture usage in the command buffer's TextureUsageScope.
+	coreTexture := core.NewTexture(
+		halTexture, d.core, desc.Format, halDesc.Dimension,
+		desc.Usage,
+		gputypes.Extent3D{
+			Width:              desc.Size.Width,
+			Height:             desc.Size.Height,
+			DepthOrArrayLayers: desc.Size.DepthOrArrayLayers,
+		},
+		halDesc.MipLevelCount, halDesc.SampleCount, desc.Label,
+	)
+
+	return &Texture{hal: halTexture, device: d, format: desc.Format, coreTexture: coreTexture}, nil
 }
 
 // CreateTextureView creates a view into a texture.
@@ -135,6 +150,10 @@ func (d *Device) CreateTextureView(texture *Texture, desc *TextureViewDescriptor
 	}
 	if texture == nil {
 		return nil, fmt.Errorf("wgpu: texture is nil")
+	}
+	halTexture := texture.resolveHAL()
+	if halTexture == nil {
+		return nil, ErrReleased
 	}
 
 	halDevice := d.halDevice()
@@ -154,12 +173,18 @@ func (d *Device) CreateTextureView(texture *Texture, desc *TextureViewDescriptor
 		halDesc.ArrayLayerCount = desc.ArrayLayerCount
 	}
 
-	halView, err := halDevice.CreateTextureView(texture.hal, halDesc)
+	halView, err := halDevice.CreateTextureView(halTexture, halDesc)
 	if err != nil {
 		return nil, fmt.Errorf("wgpu: failed to create texture view: %w", err)
 	}
 
-	return &TextureView{hal: halView, device: d, texture: texture}, nil
+	return &TextureView{
+		hal:          halView,
+		device:       d,
+		texture:      texture,
+		surface:      texture.surface,
+		surfaceLease: texture.surfaceLease,
+	}, nil
 }
 
 // CreateSampler creates a texture sampler.
@@ -188,7 +213,7 @@ func (d *Device) CreateSampler(desc *SamplerDescriptor) (*Sampler, error) {
 		halDesc.Anisotropy = desc.Anisotropy
 	}
 
-	if err := core.ValidateSamplerDescriptor(halDesc); err != nil {
+	if err := core.ValidateSamplerDescriptor(halDesc, d.core.Features); err != nil {
 		return nil, err
 	}
 
@@ -197,7 +222,13 @@ func (d *Device) CreateSampler(desc *SamplerDescriptor) (*Sampler, error) {
 		return nil, fmt.Errorf("wgpu: failed to create sampler: %w", err)
 	}
 
-	return &Sampler{hal: halSampler, device: d}, nil
+	return &Sampler{
+		hal:          halSampler,
+		device:       d,
+		magFilter:    halDesc.MagFilter,
+		minFilter:    halDesc.MinFilter,
+		mipmapFilter: halDesc.MipmapFilter,
+	}, nil
 }
 
 // CreateShaderModule creates a shader module.
@@ -222,7 +253,7 @@ func (d *Device) CreateShaderModule(desc *ShaderModuleDescriptor) (*ShaderModule
 		},
 	}
 
-	if err := core.ValidateShaderModuleDescriptor(halDesc); err != nil {
+	if err := core.ValidateShaderModuleDescriptor(halDesc, d.core.Features); err != nil {
 		return nil, err
 	}
 
@@ -315,7 +346,7 @@ func (d *Device) CreatePipelineLayout(desc *PipelineLayoutDescriptor) (*Pipeline
 		BindGroupLayouts: halLayouts,
 	}
 
-	if err := core.ValidatePipelineLayoutDescriptor(halDesc, d.core.Limits); err != nil {
+	if err := core.ValidatePipelineLayoutDescriptor(halDesc, d.core.Limits, d.core.Features); err != nil {
 		return nil, err
 	}
 
@@ -359,6 +390,9 @@ func (d *Device) CreateBindGroup(desc *BindGroupDescriptor) (*BindGroup, error) 
 
 	halEntries := make([]gputypes.BindGroupEntry, len(desc.Entries))
 	for i, entry := range desc.Entries {
+		if entry.TextureView != nil && entry.TextureView.resolveHAL() == nil {
+			return nil, ErrReleased
+		}
 		halEntries[i] = entry.toHAL()
 	}
 
@@ -368,21 +402,9 @@ func (d *Device) CreateBindGroup(desc *BindGroupDescriptor) (*BindGroup, error) 
 		Entries: halEntries,
 	}
 
-	// Build buffer metadata for core validation.
-	var bufferInfos []core.BindGroupBufferInfo
-	for _, entry := range desc.Entries {
-		if entry.Buffer != nil {
-			bufferInfos = append(bufferInfos, core.BindGroupBufferInfo{
-				Binding:    entry.Binding,
-				Usage:      entry.Buffer.Usage(),
-				BufferSize: entry.Buffer.Size(),
-				Offset:     entry.Offset,
-				Size:       entry.Size,
-			})
-		}
-	}
+	bufferInfos, samplerInfos, textureInfos := buildBindGroupValidationInfos(desc.Entries)
 
-	if err := core.ValidateBindGroupDescriptor(halDesc, desc.Layout.entries, bufferInfos, d.core.Limits); err != nil {
+	if err := core.ValidateBindGroupDescriptor(halDesc, desc.Layout.entries, bufferInfos, samplerInfos, textureInfos, d.core.Limits, d.core.Features); err != nil {
 		return nil, err
 	}
 
@@ -396,18 +418,95 @@ func (d *Device) CreateBindGroup(desc *BindGroupDescriptor) (*BindGroup, error) 
 	// to be validated against shader requirements at draw/dispatch time.
 	// Matches Rust wgpu-core's BindGroup.late_buffer_binding_infos population
 	// in Device::create_bind_group (binding_model.rs:1187-1189).
+	lateInfos := buildLateBufferBindingInfos(desc.Layout.entries, desc.Entries)
+
+	// Collect buffer and texture references for submit-time validation (VAL-A6).
+	boundBuffers, boundTextures := collectBindGroupResources(desc.Entries)
+
+	// Initialize ResourceRef with onZero callback for refcount-driven destruction.
+	// When the last reference drops (either from explicit Release or Phase 2
+	// Triage after GPU completion), onZero fires and defers HAL destruction via
+	// DestroyQueue. This matches Rust wgpu's Arc<BindGroup> Drop behavior. ADR-056.
+	halBG := halGroup
+	bgOnZero := func() {
+		dq := d.destroyQueue()
+		if dq != nil {
+			subIdx := d.lastSubmissionIndex()
+			dq.Defer(subIdx, "BindGroup", func() {
+				halDevice.DestroyBindGroup(halBG)
+			})
+		} else {
+			halDevice.DestroyBindGroup(halBG)
+		}
+	}
+
+	bg := &BindGroup{
+		hal:                    halGroup,
+		device:                 d,
+		released:               new(atomic.Bool),
+		layout:                 desc.Layout,
+		lateBufferBindingInfos: lateInfos,
+		ref:                    core.NewResourceRef("BindGroup:"+desc.Label, bgOnZero),
+		boundBuffers:           boundBuffers,
+		boundTextures:          boundTextures,
+	}
+
+	// Safety net: if the bind group is garbage collected without Release(),
+	// schedule deferred destruction via DestroyQueue (BUG-WGPU-RESOURCE-LIFECYCLE-001).
+	bg.cleanup = registerBindGroupCleanup(bg, d, desc.Label)
+
+	return bg, nil
+}
+
+func buildBindGroupValidationInfos(entries []BindGroupEntry) (
+	[]core.BindGroupBufferInfo,
+	[]core.BindGroupSamplerInfo,
+	[]core.BindGroupTextureInfo,
+) {
+	var bufferInfos []core.BindGroupBufferInfo
+	var samplerInfos []core.BindGroupSamplerInfo
+	var textureInfos []core.BindGroupTextureInfo
+	for _, entry := range entries {
+		if entry.Buffer != nil {
+			bufferInfos = append(bufferInfos, core.BindGroupBufferInfo{
+				Binding:    entry.Binding,
+				Usage:      entry.Buffer.Usage(),
+				BufferSize: entry.Buffer.Size(),
+				Offset:     entry.Offset,
+				Size:       entry.Size,
+			})
+		}
+		if entry.Sampler != nil {
+			samplerInfos = append(samplerInfos, core.BindGroupSamplerInfo{
+				Binding: entry.Binding,
+				Desc: &hal.SamplerDescriptor{
+					MagFilter:    entry.Sampler.magFilter,
+					MinFilter:    entry.Sampler.minFilter,
+					MipmapFilter: entry.Sampler.mipmapFilter,
+				},
+			})
+		}
+		if entry.TextureView != nil && entry.TextureView.texture != nil {
+			textureInfos = append(textureInfos, core.BindGroupTextureInfo{
+				Binding: entry.Binding,
+				Format:  entry.TextureView.texture.Format(),
+			})
+		}
+	}
+	return bufferInfos, samplerInfos, textureInfos
+}
+
+func buildLateBufferBindingInfos(layoutEntries []gputypes.BindGroupLayoutEntry, entries []BindGroupEntry) []LateBufferBindingInfo {
+	entryMap := buildBindGroupEntryMap(entries)
 	var lateInfos []LateBufferBindingInfo
-	entryMap := buildBindGroupEntryMap(desc.Entries)
-	for _, layoutEntry := range desc.Layout.entries {
+	for _, layoutEntry := range layoutEntries {
 		if layoutEntry.Buffer == nil || layoutEntry.Buffer.MinBindingSize != 0 {
 			continue
 		}
-		// This is a buffer entry with MinBindingSize == 0.
 		var boundSize uint64
 		if bgEntry, ok := entryMap[layoutEntry.Binding]; ok && bgEntry.Buffer != nil {
 			boundSize = bgEntry.Size
 			if boundSize == 0 {
-				// Size == 0 means "rest of buffer" — use actual buffer size minus offset.
 				bufSize := bgEntry.Buffer.Size()
 				if bgEntry.Offset < bufSize {
 					boundSize = bufSize - bgEntry.Offset
@@ -419,26 +518,7 @@ func (d *Device) CreateBindGroup(desc *BindGroupDescriptor) (*BindGroup, error) 
 			Size:         boundSize,
 		})
 	}
-
-	// Collect buffer and texture references for submit-time validation (VAL-A6).
-	boundBuffers, boundTextures := collectBindGroupResources(desc.Entries)
-
-	bg := &BindGroup{
-		hal:                    halGroup,
-		device:                 d,
-		released:               new(atomic.Bool),
-		layout:                 desc.Layout,
-		lateBufferBindingInfos: lateInfos,
-		ref:                    core.NewResourceRef("BindGroup:"+desc.Label, nil),
-		boundBuffers:           boundBuffers,
-		boundTextures:          boundTextures,
-	}
-
-	// Safety net: if the bind group is garbage collected without Release(),
-	// schedule deferred destruction via DestroyQueue (BUG-WGPU-RESOURCE-LIFECYCLE-001).
-	bg.cleanup = registerBindGroupCleanup(bg, d, desc.Label)
-
-	return bg, nil
+	return lateInfos
 }
 
 // collectBindGroupResources extracts buffer and texture references from bind
@@ -485,7 +565,7 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (*RenderPi
 
 	halDesc := desc.toHAL()
 
-	if err := core.ValidateRenderPipelineDescriptor(halDesc, d.core.Limits); err != nil {
+	if err := core.ValidateRenderPipelineDescriptor(halDesc, d.core.Limits, d.core.Features); err != nil {
 		return nil, err
 	}
 
@@ -524,6 +604,23 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (*RenderPi
 
 	lateGroups := makeLateSizedBufferGroups(shaderBindingSizes, bgLayouts)
 
+	// Initialize ResourceRef with onZero callback for refcount-driven destruction.
+	// When the last reference drops (either from explicit Release or Phase 2
+	// Triage after GPU completion), onZero fires and defers HAL destruction via
+	// DestroyQueue. ADR-056: unified resource lifecycle.
+	halRP := halPipeline
+	rpOnZero := func() {
+		dq := d.destroyQueue()
+		if dq != nil {
+			subIdx := d.lastSubmissionIndex()
+			dq.Defer(subIdx, "RenderPipeline", func() {
+				halDevice.DestroyRenderPipeline(halRP)
+			})
+		} else {
+			halDevice.DestroyRenderPipeline(halRP)
+		}
+	}
+
 	return &RenderPipeline{
 		hal:                   halPipeline,
 		device:                d,
@@ -533,7 +630,7 @@ func (d *Device) CreateRenderPipeline(desc *RenderPipelineDescriptor) (*RenderPi
 		blendConstantRequired: needsBlendConstant,
 		stripIndexFormat:      desc.Primitive.StripIndexFormat,
 		lateSizedBufferGroups: lateGroups,
-		ref:                   core.NewResourceRef("RenderPipeline:"+desc.Label, nil),
+		ref:                   core.NewResourceRef("RenderPipeline:"+desc.Label, rpOnZero),
 	}, nil
 }
 
@@ -580,6 +677,12 @@ func (d *Device) CreateComputePipeline(desc *ComputePipelineDescriptor) (*Comput
 		return nil, fmt.Errorf("wgpu: compute pipeline descriptor is nil")
 	}
 
+	// Validate that the device supports compute shaders (downlevel check).
+	// Matches Rust wgpu-core resource.rs:4367 — first validation in create_compute_pipeline_or_error.
+	if err := d.core.RequireDownlevelFlags(gputypes.DownlevelFlagsComputeShaders); err != nil {
+		return nil, fmt.Errorf("wgpu: CreateComputePipeline: %w", err)
+	}
+
 	halDevice := d.halDevice()
 	if halDevice == nil {
 		return nil, ErrReleased
@@ -619,13 +722,28 @@ func (d *Device) CreateComputePipeline(desc *ComputePipelineDescriptor) (*Comput
 
 	lateGroups := makeLateSizedBufferGroups(shaderBindingSizes, bgLayouts)
 
+	// Initialize ResourceRef with onZero callback for refcount-driven destruction.
+	// ADR-056: unified resource lifecycle.
+	halCP := halPipeline
+	cpOnZero := func() {
+		dq := d.destroyQueue()
+		if dq != nil {
+			subIdx := d.lastSubmissionIndex()
+			dq.Defer(subIdx, "ComputePipeline", func() {
+				halDevice.DestroyComputePipeline(halCP)
+			})
+		} else {
+			halDevice.DestroyComputePipeline(halCP)
+		}
+	}
+
 	return &ComputePipeline{
 		hal:                   halPipeline,
 		device:                d,
 		bindGroupCount:        bgCount,
 		bindGroupLayouts:      bgLayouts,
 		lateSizedBufferGroups: lateGroups,
-		ref:                   core.NewResourceRef("ComputePipeline:"+desc.Label, nil),
+		ref:                   core.NewResourceRef("ComputePipeline:"+desc.Label, cpOnZero),
 	}, nil
 }
 
@@ -833,6 +951,7 @@ func (d *Device) WaitForFence(f *Fence, value uint64, timeout time.Duration) (bo
 // FreeCommandBuffer returns a command buffer to the command pool.
 // This must be called after the GPU has finished using the command buffer.
 // The command buffer handle becomes invalid after this call.
+// For multi-CB encoders, all accumulated HAL command buffers are freed.
 func (d *Device) FreeCommandBuffer(cb *CommandBuffer) {
 	if d.released.Load() || cb == nil {
 		return
@@ -841,9 +960,10 @@ func (d *Device) FreeCommandBuffer(cb *CommandBuffer) {
 	if halDevice == nil {
 		return
 	}
-	raw := cb.halBuffer()
-	if raw != nil {
-		halDevice.FreeCommandBuffer(raw)
+	for _, buf := range cb.halBufferList() {
+		if buf != nil {
+			halDevice.FreeCommandBuffer(buf)
+		}
 	}
 }
 
@@ -863,6 +983,14 @@ func (d *Device) WaitIdle() error {
 	if d.released.Load() {
 		return ErrReleased
 	}
+	return d.waitIdle()
+}
+
+// waitIdle drains the HAL and deferred resource queues without consulting the
+// public released bit. Release marks the device unavailable before starting
+// teardown, but the native device must remain alive while its last submission
+// is drained.
+func (d *Device) waitIdle() error {
 	halDevice := d.halDevice()
 	if halDevice == nil {
 		return ErrReleased
@@ -896,10 +1024,12 @@ func (d *Device) maintainAfterIdle() {
 // Release releases the device and all associated resources.
 // Deferred resource destructions are flushed before the device is destroyed.
 // Shutdown order:
-//  0. WaitIdle — block until ALL GPU submissions complete
-//  1. Triage + FlushAll — deferred callbacks fire (encoders return to pool)
-//  2. Destroy encoder pool (HAL device still alive)
-//  3. Destroy core + HAL device
+//  0. Retire active surface acquisitions
+//  1. WaitIdle and maintain completed work
+//  2. Discard unsubmitted queue writes
+//  3. Triage + FlushAll — deferred callbacks fire (encoders return to pool)
+//  4. Destroy encoder pool (HAL device still alive)
+//  5. Destroy core + HAL device
 //
 // WaitIdle is required because FlushAll calls Triage(PollCompleted()),
 // but PollCompleted may return a stale index if GPU hasn't finished.
@@ -910,23 +1040,42 @@ func (d *Device) maintainAfterIdle() {
 // Rust avoids this via Arc ownership + maintain loop. In Go we must
 // be explicit: WaitIdle ensures PollCompleted returns final index.
 func (d *Device) Release() {
-	if d.released.Load() {
+	if d == nil || d.released.Swap(true) {
 		return
 	}
-	d.released.Store(true)
+	var configuredSurfaces []*Surface
+	if d.instance != nil {
+		configuredSurfaces = d.instance.surfacesForDevice(d)
+	}
+	// Retire active acquisitions while the backend device is still alive.
+	// Vulkan keeps the configured swapchain itself and retires it in
+	// hal.Device.Destroy; other backends also get a chance to release borrowed
+	// drawable state before their device disappears.
+	for _, surface := range configuredSurfaces {
+		surface.discardForDevice(d)
+	}
+	if d.instance != nil {
+		defer func() {
+			d.instance.unregisterDevice(d)
+			d.instance = nil
+		}()
+	}
 
+	// Step 1: Wait for ALL GPU work to finish. Use the internal path because
+	// the public device has already been atomically marked released to close new
+	// entry points. This ensures PollCompleted() returns the final submission
+	// index before pending encoders or resources are destroyed.
+	_ = d.waitIdle()
+
+	// Step 2: Pending writes that were never submitted can now be discarded;
+	// completed inflight batches were recycled by maintainAfterIdle above.
 	if d.queue != nil {
 		d.queue.release()
 	}
 
-	// Step 0: Wait for ALL GPU work to finish. This ensures PollCompleted()
+	// Step 3: Flush deferred destructions. WaitIdle above ensures PollCompleted()
 	// returns the final submission index, so Triage processes all submissions
 	// and deferred encoder recycling callbacks fire correctly.
-	_ = d.WaitIdle()
-
-	// Step 1: Flush deferred destructions. With GPU idle, Triage processes
-	// all submissions. Encoder recycling callbacks fire, returning encoders
-	// to cmdEncoderPool. HAL device is still alive.
 	if d.core != nil && d.core.DestroyQueueRef() != nil {
 		dq := d.core.DestroyQueueRef()
 		// Triage with latest completion index (GPU is idle, all done).
@@ -936,7 +1085,7 @@ func (d *Device) Release() {
 		dq.FlushAll()
 	}
 
-	// Step 2: Destroy encoder pool. Each encoder.Destroy() calls
+	// Step 4: Destroy encoder pool. Each encoder.Destroy() calls
 	// vkDestroyCommandPool / ID3D12CommandAllocator.Release on the still-alive
 	// HAL device. After this, no native encoder resources remain.
 	if d.cmdEncoderPool != nil {
@@ -944,9 +1093,12 @@ func (d *Device) Release() {
 		d.cmdEncoderPool = nil
 	}
 
-	// Step 3: Destroy core + HAL device. core.Destroy() calls FlushAll again
+	// Step 5: Destroy core + HAL device. core.Destroy() calls FlushAll again
 	// (idempotent — already flushed) then halDevice.Destroy().
 	d.core.Destroy()
+	for _, surface := range configuredSurfaces {
+		surface.retireDevice(d)
+	}
 }
 
 // destroyQueue returns the device's DestroyQueue for deferred resource destruction.

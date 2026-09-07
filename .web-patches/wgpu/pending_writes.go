@@ -65,8 +65,12 @@ type pendingWrites struct {
 	// not on hal::Buffer). Used by flush() to compute COPY_DST → read-state barriers.
 	dstBuffers map[hal.Buffer]gputypes.BufferUsage
 
-	// dstTextures tracks textures that have pending writes.
-	dstTextures map[hal.Texture]struct{}
+	// dstTextures tracks textures that have pending writes. The wrapper list
+	// preserves every public lifetime that contributed commands for the raw
+	// texture. This matters for swapchains, which may reuse the same HAL texture
+	// across acquisitions: every recorded acquisition must still be live when
+	// the batch is flushed.
+	dstTextures map[hal.Texture][]*Texture
 
 	// inflight tracks staging buffers and encoders from previous submissions,
 	// keyed by submission index. Cleaned up when PollCompleted advances past them.
@@ -115,7 +119,7 @@ func newPendingWrites(halDevice hal.Device, halQueue hal.Queue, pool *encoderPoo
 		halDevice:    halDevice,
 		halQueue:     halQueue,
 		dstBuffers:   make(map[hal.Buffer]gputypes.BufferUsage),
-		dstTextures:  make(map[hal.Texture]struct{}),
+		dstTextures:  make(map[hal.Texture][]*Texture),
 		usesBatching: halQueue.SupportsCommandBufferCopies(),
 	}
 	if pw.usesBatching {
@@ -225,6 +229,19 @@ func (pw *pendingWrites) writeTexture(
 	layout *hal.ImageDataLayout,
 	size *hal.Extent3D,
 ) error {
+	return pw.writeTextureFor(nil, dst, data, layout, size)
+}
+
+// writeTextureFor records a texture write and retains the public wrapper whose
+// lifetime authorized it. Queue.WriteTexture supplies owner; the ownerless
+// form above remains available to focused HAL-level tests.
+func (pw *pendingWrites) writeTextureFor(
+	owner *Texture,
+	dst *hal.ImageCopyTexture,
+	data []byte,
+	layout *hal.ImageDataLayout,
+	size *hal.Extent3D,
+) error {
 	pw.mu.Lock()
 	defer pw.mu.Unlock()
 
@@ -281,16 +298,11 @@ func (pw *pendingWrites) writeTexture(
 
 	// Transition texture to COPY_DST using its actual tracked state.
 	currentUsage := dst.Texture.CurrentUsage()
+	copyRange := textureCopyRange(owner, dst, size)
 	if currentUsage != gputypes.TextureUsageCopyDst {
 		barrier := [1]hal.TextureBarrier{{
 			Texture: dst.Texture,
-			Range: hal.TextureRange{
-				Aspect:          gputypes.TextureAspectAll,
-				BaseMipLevel:    dst.MipLevel,
-				MipLevelCount:   1,
-				BaseArrayLayer:  0,
-				ArrayLayerCount: 1,
-			},
+			Range:   copyRange,
 			Usage: hal.TextureUsageTransition{
 				OldUsage: currentUsage,
 				NewUsage: gputypes.TextureUsageCopyDst,
@@ -312,18 +324,12 @@ func (pw *pendingWrites) writeTexture(
 	enc.CopyBufferToTexture(alloc.buffer, dst.Texture, texCopy[:])
 
 	// Transition texture to SHADER_RESOURCE for rendering.
-	// Unlike Rust wgpu-core (which defers this to submit-time via DeviceTextureTracker),
-	// we do it eagerly because we lack a centralized tracker. This is correct but slightly
-	// suboptimal — an extra barrier if the next usage is also COPY_DST.
+	// ADR-060: The centralized TextureTracker now handles render pass -> submit barriers.
+	// These eager barriers remain for the pending_writes -> render path until the tracker
+	// also covers queue write operations (pending_writes integration, future work).
 	postBarrier := [1]hal.TextureBarrier{{
 		Texture: dst.Texture,
-		Range: hal.TextureRange{
-			Aspect:          gputypes.TextureAspectAll,
-			BaseMipLevel:    dst.MipLevel,
-			MipLevelCount:   1,
-			BaseArrayLayer:  0,
-			ArrayLayerCount: 1,
-		},
+		Range:   copyRange,
 		Usage: hal.TextureUsageTransition{
 			OldUsage: gputypes.TextureUsageCopyDst,
 			NewUsage: gputypes.TextureUsageTextureBinding,
@@ -333,12 +339,44 @@ func (pw *pendingWrites) writeTexture(
 
 	// Track destination texture. AddPendingRef prevents premature Destroy (BUG-DX12-006).
 	// Staging buffer is managed by the belt (not tracked individually).
-	if _, already := pw.dstTextures[dst.Texture]; !already {
+	owners, already := pw.dstTextures[dst.Texture]
+	if !already {
 		dst.Texture.AddPendingRef()
 	}
-	pw.dstTextures[dst.Texture] = struct{}{}
+	if owner != nil && !containsTextureOwner(owners, owner) {
+		owners = append(owners, owner)
+	}
+	pw.dstTextures[dst.Texture] = owners
 
 	return nil
+}
+
+func textureCopyRange(owner *Texture, dst *hal.ImageCopyTexture, size *hal.Extent3D) hal.TextureRange {
+	baseLayer := uint32(0)
+	layerCount := uint32(1)
+	if owner != nil && owner.coreTexture != nil && owner.coreTexture.Dimension() != gputypes.TextureDimension3D {
+		baseLayer = dst.Origin.Z
+		layerCount = size.DepthOrArrayLayers
+		if layerCount == 0 {
+			layerCount = 1
+		}
+	}
+	return hal.TextureRange{
+		Aspect:          dst.Aspect,
+		BaseMipLevel:    dst.MipLevel,
+		MipLevelCount:   1,
+		BaseArrayLayer:  baseLayer,
+		ArrayLayerCount: layerCount,
+	}
+}
+
+func containsTextureOwner(owners []*Texture, target *Texture) bool {
+	for _, owner := range owners {
+		if owner == target {
+			return true
+		}
+	}
+	return false
 }
 
 // copyTextureDataAligned copies texture data with row pitch alignment padding.
@@ -441,6 +479,19 @@ func (pw *pendingWrites) flush() (hal.CommandBuffer, hal.CommandEncoder, []hal.T
 		return nil, nil, nil, nil, nil
 	}
 
+	// Queue writes are recorded lazily, so a surface acquisition can retire
+	// between WriteTexture and Submit. Revalidate every contributing wrapper
+	// before any command buffer reaches HAL. The raw texture comparison also
+	// protects against a wrapper being rebound to a different resource.
+	for raw, owners := range pw.dstTextures {
+		for _, owner := range owners {
+			if owner.resolveHAL() != raw {
+				pw.discardRecording()
+				return nil, nil, nil, nil, fmt.Errorf("wgpu: pending writes: destination texture retired before submit: %w", ErrReleased)
+			}
+		}
+	}
+
 	// Transition destination buffers from COPY_DEST to their primary read usage
 	// before closing the encoder. Without this barrier, buffers remain in COPY_DEST
 	// state when the render pass tries to use them as VERTEX/INDEX/UNIFORM —
@@ -475,11 +526,7 @@ func (pw *pendingWrites) flush() (hal.CommandBuffer, hal.CommandEncoder, []hal.T
 
 	cmdBuf, err := pw.encoder.EndEncoding()
 	if err != nil {
-		pw.encoder.DiscardEncoding()
-		pw.isRecording = false
-		pw.encoder = nil
-		clear(pw.dstBuffers)
-		clear(pw.dstTextures)
+		pw.discardRecording()
 		return nil, nil, nil, nil, fmt.Errorf("wgpu: pending writes: end encoding: %w", err)
 	}
 
@@ -512,6 +559,55 @@ func (pw *pendingWrites) flush() (hal.CommandBuffer, hal.CommandEncoder, []hal.T
 	clear(pw.dstTextures)
 
 	return cmdBuf, flushedEncoder, flushedDstTextures, flushedDstBuffers, nil
+}
+
+// discardRecording abandons the current batch and restores every resource to
+// its pre-batch ownership state. Must be called with pw.mu held.
+func (pw *pendingWrites) discardRecording() {
+	if pw.encoder != nil {
+		if pw.isRecording {
+			pw.encoder.DiscardEncoding()
+		}
+		pw.encoder.ResetAll(nil)
+		if pw.pool != nil {
+			pw.pool.release(pw.encoder)
+		} else {
+			pw.encoder.Destroy()
+		}
+	}
+
+	for raw := range pw.dstTextures {
+		raw.DecPendingRef()
+	}
+	if pw.belt != nil {
+		pw.belt.discardActive()
+	}
+
+	pw.isRecording = false
+	pw.encoder = nil
+	clear(pw.dstBuffers)
+	clear(pw.dstTextures)
+}
+
+// cancelFlush releases a batch that was closed but rejected by HAL Submit.
+// Must be called with pw.mu held.
+func (pw *pendingWrites) cancelFlush(cmdBuf hal.CommandBuffer, encoder hal.CommandEncoder, dstTextures []hal.Texture) {
+	if pw.belt != nil {
+		pw.belt.discardLastClosed()
+	}
+	for _, texture := range dstTextures {
+		texture.DecPendingRef()
+	}
+	if encoder != nil {
+		encoder.ResetAll([]hal.CommandBuffer{cmdBuf})
+		if pw.pool != nil {
+			pw.pool.release(encoder)
+		} else {
+			encoder.Destroy()
+		}
+	} else if cmdBuf != nil {
+		pw.halDevice.FreeCommandBuffer(cmdBuf)
+	}
 }
 
 // maintain frees staging buffers and returns encoders to the pool from
@@ -565,16 +661,8 @@ func (pw *pendingWrites) destroy() {
 	pw.mu.Lock()
 	defer pw.mu.Unlock()
 
-	// Discard any in-progress encoding.
-	if pw.isRecording && pw.encoder != nil {
-		pw.encoder.DiscardEncoding()
-	}
-	// Destroy the current encoder if it wasn't flushed.
-	if pw.encoder != nil {
-		pw.encoder.Destroy()
-	}
-	pw.isRecording = false
-	pw.encoder = nil
+	// Discard any in-progress encoding and balance its pending references.
+	pw.discardRecording()
 
 	// Destroy pending staging buffers.
 	for _, buf := range pw.staging {
@@ -593,6 +681,9 @@ func (pw *pendingWrites) destroy() {
 			sub.encoder.Destroy()
 		} else if sub.cmdBuf != nil {
 			pw.halDevice.FreeCommandBuffer(sub.cmdBuf)
+		}
+		for _, tex := range sub.dstTextures {
+			tex.DecPendingRef()
 		}
 	}
 	pw.inflight = nil

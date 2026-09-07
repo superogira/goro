@@ -69,6 +69,22 @@ func (a *gpuContextAdapter) AdapterInfo() gpucontext.AdapterInfo {
 	}
 }
 
+// Features returns the set of optional features supported by the device.
+func (a *gpuContextAdapter) Features() gputypes.Features {
+	if a.renderer == nil || a.renderer.device == nil {
+		return 0
+	}
+	return a.renderer.device.Features()
+}
+
+// DownlevelCapabilities returns backend capability flags for the adapter.
+func (a *gpuContextAdapter) DownlevelCapabilities() gputypes.DownlevelCapabilities {
+	if a.renderer == nil || a.renderer.adapter == nil {
+		return gputypes.DownlevelCapabilities{}
+	}
+	return a.renderer.adapter.DownlevelCapabilities()
+}
+
 func mapAdapterType(dt gputypes.DeviceType) gpucontext.AdapterType {
 	switch dt {
 	case gputypes.DeviceTypeDiscreteGPU:
@@ -179,6 +195,13 @@ func (a *gpuContextAdapter) SubpixelLayout() gpucontext.SubpixelLayout {
 		return a.app.SubpixelLayout()
 	}
 	return gpucontext.SubpixelNone
+}
+
+func (a *gpuContextAdapter) FontSmoothing() gpucontext.FontSmoothing {
+	if a.app != nil {
+		return a.app.FontSmoothing()
+	}
+	return gpucontext.FontSmoothingGrayscale
 }
 
 // Ensure gpuContextAdapter implements gpucontext.DeviceProvider.

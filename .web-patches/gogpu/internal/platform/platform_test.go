@@ -134,6 +134,7 @@ func (m *mockPlatformWindow) InSizeMove() bool                 { return false }
 func (m *mockPlatformWindow) SetTitle(string)                  {}
 func (m *mockPlatformWindow) SetMinSize(int, int)              {}
 func (m *mockPlatformWindow) SetMaxSize(int, int)              {}
+func (m *mockPlatformWindow) RequestSize(int, int)             {}
 func (m *mockPlatformWindow) PrepareFrame() PrepareFrameResult { return PrepareFrameResult{} }
 func (m *mockPlatformWindow) SetCursor(int)                    {}
 func (m *mockPlatformWindow) SetCursorMode(int)                {}
@@ -144,11 +145,18 @@ func (m *mockPlatformWindow) Maximize()                        {}
 func (m *mockPlatformWindow) IsMaximized() bool                { return false }
 func (m *mockPlatformWindow) Close()                           {}
 func (m *mockPlatformWindow) Show()                            {}
+func (m *mockPlatformWindow) Hide()                            {}
+func (m *mockPlatformWindow) SetPosition(_, _ int)             {}
 func (m *mockPlatformWindow) SetFullscreen(bool)               {}
 func (m *mockPlatformWindow) IsFullscreen() bool               { return false }
 func (m *mockPlatformWindow) SetModalFrameCallback(func())     {}
 func (m *mockPlatformWindow) Destroy()                         {}
-func (m *mockPlatformWindow) SetOnClose(func() bool)           {}
+func (m *mockPlatformWindow) StartDrag(_ []string, done func(DragResult)) {
+	if done != nil {
+		done(DragCancelled)
+	}
+}
+func (m *mockPlatformWindow) SetOnClose(func() bool) {}
 
 func (m *mockPlatformWindow) SetFrameless(v bool) { m.frameless = v }
 func (m *mockPlatformWindow) IsFrameless() bool   { return m.frameless }

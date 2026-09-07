@@ -199,6 +199,87 @@ func TestBindToSchedulerFunc(t *testing.T) {
 	}
 }
 
+func TestBindToSchedulerLayout(t *testing.T) {
+	sig := state.NewSignal(0)
+	w := &mockWidget{name: "layout-test"}
+	var flushed []widget.Widget
+	sched := state.NewScheduler(func(dirty []widget.Widget) {
+		flushed = append(flushed, dirty...)
+	})
+
+	ctx := widget.NewContext()
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(100, 100)))
+	if !w.IsLayoutCacheValid() {
+		t.Fatal("cache should be valid after LayoutChild")
+	}
+
+	binding := state.BindToSchedulerLayout(sig.AsReadonly(), w, sched)
+	defer binding.Unbind()
+
+	sig.Set(1)
+
+	if w.IsLayoutCacheValid() {
+		t.Error("BindToSchedulerLayout must invalidate layout cache on signal change")
+	}
+	if got := sched.PendingCount(); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+}
+
+func TestBindToSchedulerLayout_Unbind(t *testing.T) {
+	sig := state.NewSignal(0)
+	w := &mockWidget{name: "layout-unbind"}
+	sched := state.NewScheduler(func(_ []widget.Widget) {})
+
+	ctx := widget.NewContext()
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(100, 100)))
+
+	binding := state.BindToSchedulerLayout(sig.AsReadonly(), w, sched)
+	sig.Set(1)
+	binding.Unbind()
+	sched.Flush()
+
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(100, 100)))
+
+	sig.Set(2)
+	if !w.IsLayoutCacheValid() {
+		t.Error("after unbind, layout cache should remain valid")
+	}
+	if sched.PendingCount() != 0 {
+		t.Errorf("after unbind, pending = %d, want 0", sched.PendingCount())
+	}
+}
+
+func TestBindToSchedulerLayoutFunc(t *testing.T) {
+	sig := state.NewSignal(0.5)
+	w := &mockWidget{name: "layout-func"}
+	sched := state.NewScheduler(func(_ []widget.Widget) {})
+
+	ctx := widget.NewContext()
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(100, 100)))
+
+	binding := state.BindToSchedulerLayoutFunc(sig.AsReadonly(), func(v float64) bool {
+		return v > 0.5
+	}, w, sched)
+	defer binding.Unbind()
+
+	sig.Set(0.3)
+	if !w.IsLayoutCacheValid() {
+		t.Error("predicate false: layout cache should remain valid")
+	}
+	if sched.PendingCount() != 0 {
+		t.Errorf("predicate false: pending = %d, want 0", sched.PendingCount())
+	}
+
+	sig.Set(0.8)
+	if w.IsLayoutCacheValid() {
+		t.Error("predicate true: layout cache must be invalidated")
+	}
+	if sched.PendingCount() != 1 {
+		t.Errorf("predicate true: pending = %d, want 1", sched.PendingCount())
+	}
+}
+
 func TestBindToSchedulerFunc_Unbind(t *testing.T) {
 	sig := state.NewSignal(1.0)
 	w := &mockWidget{name: "bar"}

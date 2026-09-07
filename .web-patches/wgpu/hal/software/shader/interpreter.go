@@ -3,17 +3,19 @@
 // SPIR-V interpreter for the software backend.
 //
 // Executes a single SPIR-V entry point with provided inputs and returns outputs.
-// This is a minimal interpreter sufficient for the gogpu triangle shader:
+// Supported features:
 //   - OpLoad / OpStore for variable access
 //   - OpAccessChain for array/composite indexing
 //   - OpCompositeConstruct / OpCompositeExtract for building/decomposing vectors
 //   - OpVariable for local storage
-//   - OpBranch for unconditional jumps between basic blocks
+//   - Control flow: OpBranch, OpBranchConditional, OpSelectionMerge, OpLoopMerge,
+//     OpPhi, OpSwitch, OpSelect (loops, conditionals, switch fully supported)
+//   - OpFunctionCall for function invocation
 //   - OpConvertUToF for uint-to-float conversion
 //   - Basic arithmetic: OpFAdd, OpFSub, OpFMul, OpFDiv, OpFNegate
 //   - Basic integer arithmetic: OpIAdd, OpISub, OpIMul
-//
-// Control flow beyond OpBranch (loops, conditionals) is NOT implemented.
+//   - Comparison: OpFOrd*, OpIEqual, OpINotEqual
+//   - GLSL.std.450 extended instruction set (math intrinsics)
 
 package shader
 
@@ -21,6 +23,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+
+	"github.com/gogpu/gputypes"
 )
 
 // Execute runs the named entry point with the given input variable values.
@@ -485,8 +489,6 @@ func typeByteSize(m *Module, ti *TypeInfo) uint32 {
 var errDebugAbort = fmt.Errorf("spirv: execution aborted by debug callback")
 
 // run executes instructions sequentially, handling OpBranch for jumps.
-//
-//nolint:maintidx // Opcode dispatch switch is inherently large.
 func (interp *interpreter) run() error {
 	instructions := interp.fn.Instructions
 	pc := 0
@@ -510,7 +512,7 @@ func (interp *interpreter) run() error {
 		inst := instructions[pc]
 
 		// --- Debug: pre-instruction hooks ---
-		if debug != nil { //nolint:nestif // Debug context checks require nested conditionals for breakpoints and stepping.
+		if debug != nil {
 			blockLabel := interp.currentBlockLabel(pc)
 			event := InstructionEvent{
 				PC:          pc,
@@ -745,7 +747,7 @@ func (interp *interpreter) run() error {
 			// The actual loop is driven by OpBranchConditional.
 
 		case OpBranchConditional:
-			if len(inst.Operands) >= 3 { //nolint:nestif // Branch + loop iteration guard requires nested depth checks.
+			if len(inst.Operands) >= 3 {
 				cond := interp.values[inst.Operands[0]]
 				trueLabel := inst.Operands[1]
 				falseLabel := inst.Operands[2]
@@ -1235,7 +1237,7 @@ func (interp *interpreter) run() error {
 		}
 
 		// --- Debug: post-instruction hooks ---
-		if debug != nil { //nolint:nestif // Debug trace and watch variable checks require nested conditionals.
+		if debug != nil {
 			// Trace output: write one JSON line per result-producing instruction.
 			if traceEnc != nil && inst.ResultID != 0 {
 				writeTrace(debug.TraceWriter, traceEnc, traceEnt, pc-1, inst, interp.values)
@@ -1962,7 +1964,8 @@ func sampleBilinear(tex *Texture2D, u, v float32) Vec4 {
 }
 
 // readTexel reads a single texel from the texture at pixel coordinates (x, y),
-// unpacking it to RGBA according to the texture's bytes-per-pixel. Single- and
+// unpacking it to RGBA according to the texture's bytes-per-pixel and format.
+// BGRA formats swap R and B channels to return normalized RGBA. Single- and
 // two-channel formats follow the WebGPU convention of filling missing color
 // channels with 0 and alpha with 1. A zero BytesPerPixel means "unspecified"
 // and is treated as 4 (RGBA8) for backward compatibility.
@@ -1981,6 +1984,14 @@ func readTexel(tex *Texture2D, x, y int) Vec4 {
 	case 2:
 		return Vec4{float32(tex.Data[idx]) / 255.0, float32(tex.Data[idx+1]) / 255.0, 0, 1}
 	default:
+		if isBGRAFormat(tex.Format) {
+			return Vec4{
+				float32(tex.Data[idx+2]) / 255.0,
+				float32(tex.Data[idx+1]) / 255.0,
+				float32(tex.Data[idx+0]) / 255.0,
+				float32(tex.Data[idx+3]) / 255.0,
+			}
+		}
 		return Vec4{
 			float32(tex.Data[idx+0]) / 255.0,
 			float32(tex.Data[idx+1]) / 255.0,
@@ -1988,6 +1999,11 @@ func readTexel(tex *Texture2D, x, y int) Vec4 {
 			float32(tex.Data[idx+3]) / 255.0,
 		}
 	}
+}
+
+// isBGRAFormat returns true if the format stores bytes in BGRA order.
+func isBGRAFormat(format uint32) bool {
+	return format == uint32(gputypes.TextureFormatBGRA8Unorm) || format == uint32(gputypes.TextureFormatBGRA8UnormSrgb)
 }
 
 // clampInt clamps an integer to [0, hi].

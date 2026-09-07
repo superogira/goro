@@ -56,15 +56,22 @@ var renderPassPool = sync.Pool{
 
 // Device implements hal.Device for Vulkan.
 type Device struct {
-	handle              vk.Device
-	physicalDevice      vk.PhysicalDevice
-	instance            *Instance
-	graphicsFamily      uint32
-	allocator           *memory.GpuAllocator
-	cmds                *vk.Commands
-	descriptorAllocator *DescriptorAllocator // Descriptor pool management for bind groups
-	queue               *Queue               // Primary queue (for swapchain synchronization)
-	renderPassCache     *RenderPassCache     // Cache for VkRenderPass and VkFramebuffer objects
+	handle                      vk.Device
+	physicalDevice              vk.PhysicalDevice
+	instance                    *Instance
+	graphicsFamily              uint32
+	allocator                   *memory.GpuAllocator
+	cmds                        *vk.Commands
+	supportsMultiDrawIndirect   bool
+	supportsDrawIndirectCount   bool
+	maxDrawIndirectCount        uint32
+	cmdDrawIndirectCount        pfnCmdDrawIndirectCount
+	cmdDrawIndexedIndirectCount pfnCmdDrawIndexedIndirectCount
+	descriptorAllocator         *DescriptorAllocator // Descriptor pool management for bind groups
+	queue                       *Queue               // Primary queue (for swapchain synchronization)
+	renderPassCache             *RenderPassCache     // Cache for VkRenderPass and VkFramebuffer objects
+	pipelineCache               vk.PipelineCache     // Driver-compiled ISA cache (#331)
+	pipelineCachePath           string               // Disk path for pipeline cache persistence
 
 	// supportsIncrementalPresent is true when VK_KHR_incremental_present
 	// is enabled on this device. When true, Present can chain
@@ -108,6 +115,55 @@ type Device struct {
 	// Vulkan object creation (PERF-VK-001). Not thread-safe — setObjectName
 	// is only called during resource creation which is single-threaded per device.
 	debugNameBuf []byte
+
+	// configuredSurfaces contains surfaces whose live swapchains belong to this
+	// device. Device teardown retires them before destroying VkDevice.
+	surfaceMu          sync.Mutex
+	configuredSurfaces map[*Surface]struct{}
+	destroying         bool
+}
+
+func (d *Device) registerConfiguredSurface(surface *Surface) error {
+	if d == nil || surface == nil {
+		return fmt.Errorf("vulkan: cannot register a nil configured surface")
+	}
+	d.surfaceMu.Lock()
+	defer d.surfaceMu.Unlock()
+	if d.destroying || d.handle == 0 {
+		return hal.ErrDeviceLost
+	}
+	if d.configuredSurfaces == nil {
+		d.configuredSurfaces = make(map[*Surface]struct{})
+	}
+	d.configuredSurfaces[surface] = struct{}{}
+	return nil
+}
+
+func (d *Device) unregisterConfiguredSurface(surface *Surface) {
+	if d == nil || surface == nil {
+		return
+	}
+	d.surfaceMu.Lock()
+	delete(d.configuredSurfaces, surface)
+	d.surfaceMu.Unlock()
+}
+
+func (d *Device) beginDestroy() ([]*Surface, bool) {
+	if d == nil {
+		return nil, false
+	}
+	d.surfaceMu.Lock()
+	defer d.surfaceMu.Unlock()
+	if d.destroying || d.handle == 0 {
+		return nil, false
+	}
+	d.destroying = true
+	surfaces := make([]*Surface, 0, len(d.configuredSurfaces))
+	for surface := range d.configuredSurfaces {
+		surfaces = append(surfaces, surface)
+	}
+	clear(d.configuredSurfaces)
+	return surfaces, true
 }
 
 // initAllocator initializes the memory allocator for this device.
@@ -896,14 +952,24 @@ func (d *Device) CreateBindGroupLayout(desc *hal.BindGroupLayoutDescriptor) (hal
 			StageFlags:      shaderStagesToVk(entry.Visibility),
 		}
 
-		// Determine descriptor type based on which binding is set
+		// Determine descriptor type based on which binding is set.
+		// For buffers, pass HasDynamicOffset so Vulkan gets the correct
+		// dynamic descriptor type (VK_DESCRIPTOR_TYPE_*_BUFFER_DYNAMIC).
 		switch {
 		case entry.Buffer != nil:
-			binding.DescriptorType = bufferBindingTypeToVk(entry.Buffer.Type)
-			if entry.Buffer.Type == gputypes.BufferBindingTypeUniform {
-				counts.UniformBuffers++
+			binding.DescriptorType = bufferBindingTypeToVk(entry.Buffer.Type, entry.Buffer.HasDynamicOffset)
+			if entry.Buffer.HasDynamicOffset {
+				if entry.Buffer.Type == gputypes.BufferBindingTypeUniform {
+					counts.UniformBuffersDynamic++
+				} else {
+					counts.StorageBuffersDynamic++
+				}
 			} else {
-				counts.StorageBuffers++
+				if entry.Buffer.Type == gputypes.BufferBindingTypeUniform {
+					counts.UniformBuffers++
+				} else {
+					counts.StorageBuffers++
+				}
 			}
 		case entry.Sampler != nil:
 			binding.DescriptorType = vk.DescriptorTypeSampler
@@ -1476,12 +1542,16 @@ func (d *Device) GetFenceStatus(fence hal.Fence) (bool, error) {
 
 // Destroy releases the device.
 func (d *Device) Destroy() {
-	// Wait for all in-flight frames to complete before destroying resources.
-	// Without this, fences may still be in use by the GPU, causing
-	// "vkResetFences: pFences[0] is in use" validation errors.
-	// Both paths (timeline and binary pool) are handled by waitForLatest.
-	if d.timelineFence != nil {
-		_ = d.timelineFence.waitForLatest(d.cmds, d.handle, 5_000_000_000)
+	surfaces, ok := d.beginDestroy()
+	if !ok {
+		return
+	}
+
+	// One device-wide drain covers every configured swapchain. On device loss,
+	// abandon child handles and let vkDestroyDevice reclaim native storage.
+	drained := vkDeviceWaitIdle(d) == vk.Success
+	for _, surface := range surfaces {
+		surface.releaseConfiguredDevice(d, drained)
 	}
 
 	// Destroy unified fence (timeline semaphore or fencePool).
@@ -1508,6 +1578,8 @@ func (d *Device) Destroy() {
 		d.renderPassCache.Destroy()
 		d.renderPassCache = nil
 	}
+
+	d.destroyPipelineCache()
 
 	if d.allocator != nil {
 		d.allocator.Destroy()

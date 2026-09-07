@@ -37,6 +37,9 @@ import (
 // Backend implements hal.Backend for DirectX 12.
 type Backend struct{}
 
+// NewBackend returns a DX12 backend instance.
+func NewBackend() Backend { return Backend{} }
+
 // Variant returns the backend type identifier.
 func (Backend) Variant() gputypes.Backend {
 	return gputypes.BackendDX12
@@ -171,14 +174,17 @@ func (i *Instance) checkTearingSupport() {
 // CreateSurface creates a rendering surface from platform handles.
 // displayHandle is not used on Windows (can be 0).
 // windowHandle must be a valid HWND.
-func (i *Instance) CreateSurface(displayHandle, windowHandle uintptr) (hal.Surface, error) {
-	if windowHandle == 0 {
+func (i *Instance) CreateSurface(target hal.SurfaceTarget) (hal.Surface, error) {
+	if err := target.RequireKind(hal.SurfaceTargetWindowsHWND); err != nil {
+		return nil, fmt.Errorf("dx12: %w", err)
+	}
+	if target.WindowHandle == 0 {
 		return nil, fmt.Errorf("dx12: windowHandle (HWND) is required")
 	}
 
 	return &Surface{
 		instance: i,
-		hwnd:     windowHandle,
+		hwnd:     target.WindowHandle,
 	}, nil
 }
 
@@ -349,7 +355,7 @@ type Surface struct {
 	height                     uint32
 	format                     dxgi.DXGI_FORMAT
 	halFormat                  gputypes.TextureFormat
-	presentMode                hal.PresentMode
+	presentMode                gputypes.PresentMode
 	swapchainFlags             uint32
 	allowTearing               bool
 	frameLatencyWaitableObject uintptr // HANDLE from GetFrameLatencyWaitableObject
@@ -358,6 +364,11 @@ type Surface struct {
 	// DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL (instead of FLIP_DISCARD).
 	// Only in this mode can Present1 with dirty rects be used.
 	damagePresent bool
+
+	// dcomp holds the DirectComposition visual tree state when using
+	// per-pixel alpha (CreateSwapChainForComposition path). nil for
+	// the standard HWND path.
+	dcomp *dcompState
 }
 
 // Configure configures the surface for presentation.
@@ -372,9 +383,15 @@ func (s *Surface) Configure(device hal.Device, config *hal.SurfaceConfiguration)
 		return fmt.Errorf("dx12: device is not a DX12 device")
 	}
 
-	// If we already have a swapchain with the same device, resize it
+	// If we already have a swapchain with the same device, resize it —
+	// UNLESS the alpha mode changed (Opaque↔Premultiplied requires a
+	// different swap chain creation path: HWND vs DirectComposition).
 	if s.swapchain != nil && s.device == dx12Device {
-		return s.resizeSwapchain(config)
+		needsDComp := config.AlphaMode == hal.CompositeAlphaModePremultiplied
+		hasDComp := s.dcomp != nil
+		if needsDComp == hasDComp {
+			return s.resizeSwapchain(config)
+		}
 	}
 
 	// Destroy old swapchain if switching devices
@@ -404,6 +421,13 @@ func (s *Surface) Unconfigure(_ hal.Device) {
 	if s.swapchain != nil {
 		s.swapchain.Release()
 		s.swapchain = nil
+	}
+
+	// Release DirectComposition state (must be after swapchain release —
+	// the visual holds a reference to the swap chain via SetContent).
+	if s.dcomp != nil {
+		s.dcomp.release()
+		s.dcomp = nil
 	}
 
 	s.device = nil
@@ -448,13 +472,14 @@ func (s *Surface) AcquireTexture(_ hal.Fence) (*hal.AcquiredSurfaceTexture, erro
 
 	// Create surface texture wrapper
 	surfaceTexture := &SurfaceTexture{
-		surface:   s,
-		index:     index,
-		resource:  bb.resource,
-		rtvHandle: bb.rtvHandle,
-		format:    s.halFormat,
-		width:     s.width,
-		height:    s.height,
+		surface:    s,
+		index:      index,
+		resource:   bb.resource,
+		stateOwner: bb.texture,
+		rtvHandle:  bb.rtvHandle,
+		format:     s.halFormat,
+		width:      s.width,
+		height:     s.height,
 		// Note: Suboptimal detection requires DXGI_STATUS_OCCLUDED/DXGI_ERROR_DEVICE_REMOVED checks.
 		suboptimal: false,
 	}

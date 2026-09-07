@@ -79,7 +79,7 @@ func handleMousePress(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 	if !row.node.IsLeaf() {
 		iconBounds := w.expandIconBounds(row.depth, rowBounds)
 		if iconBounds.Contains(e.Position) {
-			w.toggleNode(ctx, row.node)
+			w.toggleNode(row.node)
 			return true
 		}
 	}
@@ -149,7 +149,7 @@ func (w *Widget) handleKeyRight(ctx widget.Context, idx int) bool {
 
 	if !row.node.Expanded {
 		// Expand the node.
-		w.toggleNode(ctx, row.node)
+		w.toggleNode(row.node)
 		return true
 	}
 
@@ -169,7 +169,7 @@ func (w *Widget) handleKeyLeft(ctx widget.Context, idx int) bool {
 
 	// If expanded branch, collapse it.
 	if !row.node.IsLeaf() && row.node.Expanded {
-		w.toggleNode(ctx, row.node)
+		w.toggleNode(row.node)
 		return true
 	}
 

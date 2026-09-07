@@ -12,42 +12,59 @@ import (
 // DeviceDescriptor configures device creation.
 type DeviceDescriptor struct {
 	Label            string
-	RequiredFeatures Features
-	RequiredLimits   Limits
+	RequiredFeatures gputypes.Features
+	RequiredLimits   gputypes.Limits
 }
 
 // Adapter represents a physical GPU.
 type Adapter struct {
-	id       core.AdapterID
-	core     *core.Adapter
-	info     AdapterInfo
-	features Features
-	limits   Limits
-	instance *Instance
-	released bool
+	id        core.AdapterID
+	core      *core.Adapter
+	info      gputypes.AdapterInfo
+	features  gputypes.Features
+	limits    gputypes.Limits
+	downlevel gputypes.DownlevelCapabilities
+	instance  *Instance
+	released  bool
 }
 
 // Info returns adapter metadata.
-func (a *Adapter) Info() AdapterInfo { return a.info }
+func (a *Adapter) Info() gputypes.AdapterInfo { return a.info }
 
 // Features returns supported features.
-func (a *Adapter) Features() Features { return a.features }
+func (a *Adapter) Features() gputypes.Features { return a.features }
 
 // Limits returns the adapter's resource limits.
-func (a *Adapter) Limits() Limits { return a.limits }
+func (a *Adapter) Limits() gputypes.Limits { return a.limits }
+
+// DownlevelCapabilities returns backend capability flags for downlevel adapters.
+// Matches Rust wgpu Adapter::get_downlevel_capabilities() (adapter.rs:174).
+func (a *Adapter) DownlevelCapabilities() gputypes.DownlevelCapabilities { return a.downlevel }
 
 // RequestDevice creates a logical device from this adapter.
 // If desc is nil, default features and limits are used.
 func (a *Adapter) RequestDevice(desc *DeviceDescriptor) (*Device, error) {
-	if a.released {
+	if a == nil || a.released || a.instance == nil || a.instance.isReleased() {
 		return nil, ErrReleased
 	}
 
+	var (
+		device *Device
+		err    error
+	)
 	if a.core.HasHAL() {
-		return a.requestDeviceHAL(desc)
+		device, err = a.requestDeviceHAL(desc)
+	} else {
+		device, err = a.requestDeviceCore(desc)
 	}
-
-	return a.requestDeviceCore(desc)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.instance.adoptDevice(device); err != nil {
+		device.Release()
+		return nil, err
+	}
+	return device, nil
 }
 
 func (a *Adapter) requestDeviceHAL(desc *DeviceDescriptor) (*Device, error) {
@@ -143,7 +160,8 @@ type SurfaceCapabilities struct {
 // GetSurfaceCapabilities returns the capabilities of a surface for this adapter.
 // Returns nil if the adapter has no HAL (core-only path) or the surface is nil.
 func (a *Adapter) GetSurfaceCapabilities(surface *Surface) *SurfaceCapabilities {
-	if a.released || surface == nil {
+	if a == nil || a.released || a.instance == nil || a.instance.isReleased() ||
+		surface == nil || surface.released || surface.instance != a.instance {
 		return nil
 	}
 
@@ -154,7 +172,11 @@ func (a *Adapter) GetSurfaceCapabilities(surface *Surface) *SurfaceCapabilities 
 		}
 	}
 
-	halCaps := a.core.HALAdapter().SurfaceCapabilities(surface.HAL())
+	halSurface := surface.halSurfaceForBackend(a.info.Backend)
+	if halSurface == nil {
+		return nil
+	}
+	halCaps := a.core.HALAdapter().SurfaceCapabilities(halSurface)
 	if halCaps == nil {
 		return nil
 	}
@@ -168,8 +190,11 @@ func (a *Adapter) GetSurfaceCapabilities(surface *Surface) *SurfaceCapabilities 
 
 // Release releases the adapter.
 func (a *Adapter) Release() {
-	if a.released {
+	if a == nil || a.released {
 		return
 	}
 	a.released = true
+	if a.instance != nil && a.instance.core != nil {
+		a.instance.core.ReleaseSurfaceAdapter(a.id)
+	}
 }

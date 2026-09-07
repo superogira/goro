@@ -29,6 +29,7 @@ var (
 
 	cifGetClass    types.CallInterface
 	cifSelRegister types.CallInterface
+	cifSetBytes    types.CallInterface
 )
 
 // selectorCache caches registered selectors for performance.
@@ -159,6 +160,19 @@ func prepareObjCCallInterfaces() error {
 		return fmt.Errorf("metal: failed to prepare sel_registerName: %w", err)
 	}
 
+	err = ffi.PrepareCallInterface(&cifSetBytes, types.DefaultCall,
+		types.VoidTypeDescriptor,
+		[]*types.TypeDescriptor{
+			types.PointerTypeDescriptor,
+			types.PointerTypeDescriptor,
+			types.PointerTypeDescriptor,
+			types.UInt64TypeDescriptor,
+			types.UInt64TypeDescriptor,
+		})
+	if err != nil {
+		return fmt.Errorf("metal: failed to prepare setBytes:length:atIndex: call: %w", err)
+	}
+
 	return nil
 }
 
@@ -270,6 +284,31 @@ func msgSend(obj ID, sel SEL, retType *types.TypeDescriptor, retPtr unsafe.Point
 
 func msgSendVoid(obj ID, sel SEL, args ...objcArg) {
 	_ = msgSend(obj, sel, types.VoidTypeDescriptor, nil, args...)
+}
+
+func msgSendSetBytes(obj ID, sel SEL, bytes unsafe.Pointer, length, index NSUInteger) error {
+	if obj == 0 || sel == 0 {
+		return nil
+	}
+
+	self := uintptr(obj)
+	cmd := uintptr(sel)
+	lengthValue := uint64(length)
+	indexValue := uint64(index)
+	args := [5]unsafe.Pointer{
+		unsafe.Pointer(&self),
+		unsafe.Pointer(&cmd),
+		unsafe.Pointer(&bytes),
+		unsafe.Pointer(&lengthValue),
+		unsafe.Pointer(&indexValue),
+	}
+
+	// Use a per-call copy because goffi requires separate CallInterface
+	// instances for concurrent calls. The prepared type data is immutable.
+	cif := cifSetBytes
+	_, err := ffi.CallFunction(&cif, symObjcMsgSend, nil, args[:])
+	runtime.KeepAlive(bytes)
+	return err
 }
 
 func msgSendID(obj ID, sel SEL, args ...objcArg) ID {
@@ -398,24 +437,87 @@ func Release(obj ID) {
 	_ = MsgSend(obj, Sel("release"))
 }
 
-// AutoreleasePool manages an Objective-C autorelease pool.
+// AutoreleasePool manages an Objective-C autorelease pool. The caller must
+// call Drain once from the same goroutine that created the pool. Pool values
+// must not be copied, shared, or drained concurrently.
 type AutoreleasePool struct {
-	pool ID
+	pool   ID
+	locked bool
+	unlock func()
+	drain  func(ID)
+}
+
+type autoreleasePoolCallbacks struct {
+	lock   func()
+	unlock func()
+	create func() ID
+	drain  func(ID)
+}
+
+func newAutoreleasePoolWithCallbacks(callbacks autoreleasePoolCallbacks) (pool *AutoreleasePool) {
+	locked := callbacks.lock != nil
+	if callbacks.lock != nil {
+		callbacks.lock()
+	}
+
+	pool = &AutoreleasePool{
+		locked: locked,
+		unlock: callbacks.unlock,
+		drain:  callbacks.drain,
+	}
+	created := false
+	defer func() {
+		if created {
+			return
+		}
+		// A create callback can panic after the OS-thread lock is acquired. Make
+		// the partially constructed pool terminal before releasing that lock so
+		// a future recovery cannot accidentally unlock it twice.
+		pool.pool = 0
+		if pool.locked {
+			pool.locked = false
+		}
+		if locked && callbacks.unlock != nil {
+			callbacks.unlock()
+		}
+	}()
+
+	pool.pool = callbacks.create()
+	created = true
+	return pool
 }
 
 // NewAutoreleasePool creates a new autorelease pool.
 func NewAutoreleasePool() *AutoreleasePool {
-	poolClass := GetClass("NSAutoreleasePool")
-	pool := MsgSend(ID(poolClass), Sel("alloc"))
-	pool = MsgSend(pool, Sel("init"))
-	return &AutoreleasePool{pool: pool}
+	return newAutoreleasePoolWithCallbacks(autoreleasePoolCallbacks{
+		lock:   runtime.LockOSThread,
+		unlock: runtime.UnlockOSThread,
+		create: func() ID {
+			poolClass := GetClass("NSAutoreleasePool")
+			pool := MsgSend(ID(poolClass), Sel("alloc"))
+			return MsgSend(pool, Sel("init"))
+		},
+		drain: func(pool ID) {
+			_ = MsgSend(pool, Sel("drain"))
+		},
+	})
 }
 
 // Drain drains the autorelease pool.
 func (p *AutoreleasePool) Drain() {
-	if p.pool != 0 {
-		_ = MsgSend(p.pool, Sel("drain"))
-		p.pool = 0
+	if p == nil || !p.locked {
+		return
+	}
+	// Mark terminal before invoking Objective-C. Drain can panic, but a caller
+	// recovering that panic must not be able to drain or unlock this pool again.
+	pool := p.pool
+	p.pool = 0
+	p.locked = false
+	if p.unlock != nil {
+		defer p.unlock()
+	}
+	if pool != 0 && p.drain != nil {
+		p.drain(pool)
 	}
 }
 
@@ -524,6 +626,13 @@ var blockRegistry sync.Map // map[uint64]*blockRegistryEntry
 // collect the block before Metal invokes the callback.
 var blockPinRegistry sync.Map // map[uint64]*blockLiteral
 
+// blockPtrToID maps block pointer (uintptr) → blockID (uint64).
+// Reverse lookup used by callbacks to recover the blockID without converting
+// the uintptr to unsafe.Pointer — avoids checkptr violation under -race.
+// Follows purego pattern: block pointer used as opaque integer key only.
+// See issue #293.
+var blockPtrToID sync.Map // map[uintptr]uint64
+
 // blockIDCounter is the next block ID to assign. Atomically incremented.
 var blockIDCounter uint64
 
@@ -583,9 +692,13 @@ func getSharedEventBlockInvoke() uintptr {
 			if blockPtr == 0 {
 				return
 			}
-			// Read blockID from the block literal at the fixed offset.
-			// Offset: isa(8) + flags(4) + reserved(4) + invoke(8) + descriptor(8) = 32 bytes
-			blockID := *(*uint64)(unsafe.Pointer(blockPtr + 32)) //nolint:govet // Required for ObjC block ABI access
+			// Look up blockID via reverse map — no unsafe.Pointer conversion.
+			// Avoids checkptr violation under -race (purego pattern, #293).
+			val, ok := blockPtrToID.Load(blockPtr)
+			if !ok {
+				return
+			}
+			blockID := val.(uint64)
 
 			hal.Logger().Debug("metal: shared event notification fired", "blockID", blockID)
 
@@ -635,14 +748,20 @@ func newSharedEventNotificationBlock() (uintptr, uint64, chan struct{}) {
 	}
 
 	// Pin the block so GC doesn't collect it before the callback fires.
+	blockPtr := uintptr(unsafe.Pointer(block))
 	blockPinRegistry.Store(id, block)
+	blockPtrToID.Store(blockPtr, id)
 
-	return uintptr(unsafe.Pointer(block)), id, done
+	return blockPtr, id, done
 }
 
 // releaseBlock removes the block entry from the registry and unpins the block.
 // Must be called after the block fires or times out to prevent memory leaks.
 func releaseBlock(id uint64) {
+	if pinned, ok := blockPinRegistry.Load(id); ok {
+		block := pinned.(*blockLiteral)
+		blockPtrToID.Delete(uintptr(unsafe.Pointer(block)))
+	}
 	blockRegistry.Delete(id)
 	blockPinRegistry.Delete(id)
 }
@@ -686,9 +805,13 @@ func getCompletedHandlerBlockInvoke() uintptr {
 			if blockPtr == 0 {
 				return 0
 			}
-			// Read blockID from the block literal at the fixed offset.
-			// Offset: isa(8) + flags(4) + reserved(4) + invoke(8) + descriptor(8) = 32 bytes
-			blockID := *(*uint64)(unsafe.Pointer(blockPtr + 32)) //nolint:govet // Required for ObjC block ABI access
+			// Look up blockID via reverse map — no unsafe.Pointer conversion.
+			// Avoids checkptr violation under -race (purego pattern, #293).
+			val, ok := blockPtrToID.Load(blockPtr)
+			if !ok {
+				return 0
+			}
+			blockID := val.(uint64)
 
 			hal.Logger().Debug("metal: completion handler fired", "blockID", blockID)
 
@@ -741,9 +864,11 @@ func newCompletedHandlerBlock(stagingBuffer ID) uintptr {
 	}
 
 	// Pin the block so GC doesn't collect it before the callback fires.
+	blockPtr := uintptr(unsafe.Pointer(block))
 	blockPinRegistry.Store(id, block)
+	blockPtrToID.Store(blockPtr, id)
 
-	return uintptr(unsafe.Pointer(block))
+	return blockPtr
 }
 
 // --------------------------------------------------------------------------
@@ -782,9 +907,13 @@ func getFrameCompletionBlockInvoke() uintptr {
 			if blockPtr == 0 {
 				return 0
 			}
-			// Read blockID from the block literal at the fixed offset.
-			// Offset: isa(8) + flags(4) + reserved(4) + invoke(8) + descriptor(8) = 32 bytes
-			blockID := *(*uint64)(unsafe.Pointer(blockPtr + 32)) //nolint:govet // Required for ObjC block ABI access
+			// Look up blockID via reverse map — no unsafe.Pointer conversion.
+			// Avoids checkptr violation under -race (purego pattern, #293).
+			val, ok := blockPtrToID.Load(blockPtr)
+			if !ok {
+				return 0
+			}
+			blockID := val.(uint64)
 
 			hal.Logger().Debug("metal: frame completion fired", "blockID", blockID)
 
@@ -839,9 +968,11 @@ func newFrameCompletionBlock(frameSemaphore chan struct{}) uintptr {
 	}
 
 	// Pin the block so GC doesn't collect it before the callback fires.
+	blockPtr := uintptr(unsafe.Pointer(block))
 	blockPinRegistry.Store(id, block)
+	blockPtrToID.Store(blockPtr, id)
 
-	return uintptr(unsafe.Pointer(block))
+	return blockPtr
 }
 
 // --------------------------------------------------------------------------
@@ -890,9 +1021,13 @@ func getGPUCompletionBlockInvoke() uintptr {
 			if blockPtr == 0 {
 				return 0
 			}
-			// Read blockID from the block literal at the fixed offset.
-			// Offset: isa(8) + flags(4) + reserved(4) + invoke(8) + descriptor(8) = 32 bytes
-			blockID := *(*uint64)(unsafe.Pointer(blockPtr + 32)) //nolint:govet // Required for ObjC block ABI access
+			// Look up blockID via reverse map — no unsafe.Pointer conversion.
+			// Avoids checkptr violation under -race (purego pattern, #293).
+			val, ok := blockPtrToID.Load(blockPtr)
+			if !ok {
+				return 0
+			}
+			blockID := val.(uint64)
 
 			hal.Logger().Debug("metal: GPU completion tracking fired", "blockID", blockID)
 
@@ -957,7 +1092,9 @@ func newGPUCompletionBlock(target *atomic.Uint64, submissionIndex uint64) uintpt
 	}
 
 	// Pin the block so GC doesn't collect it before the callback fires.
+	blockPtr := uintptr(unsafe.Pointer(block))
 	blockPinRegistry.Store(id, block)
+	blockPtrToID.Store(blockPtr, id)
 
-	return uintptr(unsafe.Pointer(block))
+	return blockPtr
 }

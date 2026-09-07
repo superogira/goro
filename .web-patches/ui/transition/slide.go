@@ -194,7 +194,7 @@ func (s *Slide) Layout(ctx widget.Context, constraints geometry.Constraints) geo
 	if s.child == nil {
 		return constraints.Constrain(geometry.Size{})
 	}
-	size := s.child.Layout(ctx, constraints)
+	size := widget.LayoutChild(s.child, ctx, constraints)
 	origin := s.Bounds().Min
 	setChildBounds(s.child, geometry.FromPointSize(origin, size))
 	return size
@@ -244,9 +244,7 @@ func (s *Slide) updateAnimation(ctx widget.Context) {
 		s.progress = 1.0
 		s.animating = false
 	} else {
-		// Request another frame while animating.
 		s.SetNeedsRedraw(true)
-		ctx.InvalidateRect(s.Bounds())
 	}
 }
 

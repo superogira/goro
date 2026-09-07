@@ -9,11 +9,12 @@ import (
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
+	"github.com/gogpu/wgpu/core/track"
 	"github.com/gogpu/wgpu/hal"
 )
 
-// Resource placeholder types - will be properly defined later.
-// These types represent the actual WebGPU resources managed by the hub.
+// Core WebGPU resource types with full HAL integration.
+// Each type wraps a HAL handle and provides safe lifecycle management.
 
 // Adapter represents a physical GPU adapter.
 type Adapter struct {
@@ -25,6 +26,9 @@ type Adapter struct {
 	Limits gputypes.Limits
 	// Backend identifies which graphics backend this adapter uses.
 	Backend gputypes.Backend
+	// DownlevelCapabilities contains backend capability flags for downlevel adapters.
+	// Matches Rust wgpu-types DownlevelCapabilities.
+	DownlevelCapabilities gputypes.DownlevelCapabilities
 
 	// === HAL integration fields ===
 
@@ -113,6 +117,10 @@ type Device struct {
 	// Limits contains the resource limits of this device.
 	Limits gputypes.Limits
 
+	// downlevel stores the adapter's downlevel capabilities for validation.
+	// Matches Rust wgpu-core Device downlevel field (resource.rs).
+	downlevel gputypes.DownlevelCapabilities
+
 	// valid indicates whether the device is still valid for use.
 	// Once a device is destroyed, this becomes false.
 	valid *atomic.Bool
@@ -130,6 +138,13 @@ type Device struct {
 	// or if validation resource creation failed (validation is optional).
 	// Matches Rust wgpu-core Device.indirect_validation (device/resource.rs:264).
 	indirectValidation *IndirectValidation
+
+	// tracker holds the device-level resource usage tracker. During submit,
+	// each command buffer's usage scope is merged into this tracker to produce
+	// the barriers that must be inserted between submissions.
+	//
+	// Reference: wgpu-core device/resource.rs Device.tracker (DeviceTracker)
+	tracker *DeviceTracker
 }
 
 // Backend returns the backend type of the device's adapter.
@@ -161,15 +176,22 @@ func NewDevice(
 	limits gputypes.Limits,
 	label string,
 ) *Device {
+	var downlevel gputypes.DownlevelCapabilities
+	if adapter != nil {
+		downlevel = adapter.DownlevelCapabilities
+	}
+
 	d := &Device{
 		raw:            NewSnatchable(halDevice),
 		adapter:        adapter,
 		snatchLock:     NewSnatchLock(),
 		trackerIndices: NewTrackerIndexAllocators(),
 		destroyQueue:   NewDestroyQueue(),
+		tracker:        NewDeviceTracker(),
 		Label:          label,
 		Features:       features,
 		Limits:         limits,
+		downlevel:      downlevel,
 	}
 	valid := &atomic.Bool{}
 	valid.Store(true)
@@ -314,11 +336,34 @@ func (d *Device) IndirectValidation() *IndirectValidation {
 	return d.indirectValidation
 }
 
+// Tracker returns the device-level resource tracker.
+// Returns nil for ID-based API devices without HAL.
+func (d *Device) Tracker() *DeviceTracker {
+	return d.tracker
+}
+
 // ParentAdapter returns the parent adapter for this device.
 //
 // Returns nil if the device has no HAL integration.
 func (d *Device) ParentAdapter() *Adapter {
 	return d.adapter
+}
+
+// DownlevelCapabilitiesRef returns the device's downlevel capabilities.
+// Matches Rust wgpu-core Device.downlevel (resource.rs).
+func (d *Device) DownlevelCapabilitiesRef() gputypes.DownlevelCapabilities {
+	return d.downlevel
+}
+
+// RequireDownlevelFlags validates that the device supports the required downlevel flags.
+// Returns an error if any required flags are missing.
+// Matches Rust wgpu-core Device::require_downlevel_flags() (resource.rs:437-446).
+func (d *Device) RequireDownlevelFlags(flags gputypes.DownlevelFlags) error {
+	missing := flags &^ d.downlevel.Flags
+	if missing != 0 {
+		return fmt.Errorf("missing required downlevel flags: %s", missing)
+	}
+	return nil
 }
 
 // AssociatedQueue returns the associated queue for this device.
@@ -504,7 +549,9 @@ type Buffer struct {
 	mapState BufferMapState
 
 	// trackingData holds per-resource tracking information.
-	trackingData *TrackingData
+	// Uses the real track.TrackingData with dense index allocation
+	// for efficient usage tracking across command buffers.
+	trackingData *track.TrackingData
 
 	// Ref is the GPU-aware reference counter for this buffer (Phase 2).
 	// When a command encoder uses this buffer, it Clone()'s the Ref.
@@ -545,7 +592,9 @@ type BufferInitTracker struct {
 // Each resource that needs state tracking during command encoding
 // embeds a TrackingData struct to hold its tracker index.
 //
-// This is a stub - full implementation in CORE-006.
+// Buffer and Texture use the real track.TrackingData with dense index
+// allocation. Other resource types (Sampler, BindGroup, Pipeline, etc.)
+// use this lightweight version until they are migrated to track.TrackingData.
 type TrackingData struct {
 	index TrackerIndex
 }
@@ -554,8 +603,6 @@ type TrackingData struct {
 //
 // Unlike resource IDs (which use epochs and may be sparse), tracker indices
 // are always dense (0, 1, 2, ...) for efficient array access.
-//
-// This is a stub - full implementation in CORE-006.
 type TrackerIndex uint32
 
 // InvalidTrackerIndex represents an unassigned tracker index.
@@ -582,18 +629,25 @@ func NewBuffer(
 	size uint64,
 	label string,
 ) *Buffer {
+	// Allocate a dense tracker index from the device's buffer allocator.
+	// This enables efficient per-buffer usage tracking across command buffers.
+	var td *track.TrackingData
+	if device != nil && device.TrackerIndices() != nil {
+		td = track.NewTrackingData(device.TrackerIndices().Buffers())
+	} else {
+		td = track.NewTrackingData(nil)
+	}
+
 	b := &Buffer{
-		raw:         NewSnatchable(halBuffer),
-		device:      device,
-		usage:       usage,
-		size:        size,
-		label:       label,
-		initTracker: NewBufferInitTracker(size),
-		trackingData: NewTrackingData(
-			device.TrackerIndices(),
-		),
-		mapState:    BufferMapStateIdle,
-		mapDataSlot: &mapDataSlot{},
+		raw:          NewSnatchable(halBuffer),
+		device:       device,
+		usage:        usage,
+		size:         size,
+		label:        label,
+		initTracker:  NewBufferInitTracker(size),
+		trackingData: td,
+		mapState:     BufferMapStateIdle,
+		mapDataSlot:  &mapDataSlot{},
 	}
 	trackResource(uintptr(unsafe.Pointer(b)), "Buffer") //nolint:gosec // debug tracking uses pointer as unique ID
 	return b
@@ -620,7 +674,8 @@ func NewBufferInitTracker(size uint64) *BufferInitTracker {
 
 // NewTrackingData creates tracking data for a resource.
 //
-// This is a stub - full implementation in CORE-006.
+// This is a lightweight version for resource types not yet migrated to
+// track.TrackingData. Buffer and Texture use track.NewTrackingData instead.
 func NewTrackingData(_ *TrackerIndexAllocators) *TrackingData {
 	return &TrackingData{
 		index: InvalidTrackerIndex,
@@ -685,7 +740,9 @@ func (b *Buffer) SetMapState(state BufferMapState) {
 }
 
 // TrackingData returns the tracking data for this buffer.
-func (b *Buffer) TrackingData() *TrackingData {
+// The returned TrackingData contains the dense TrackerIndex used
+// for per-buffer usage tracking in command buffer scopes.
+func (b *Buffer) TrackingData() *track.TrackingData {
 	return b.trackingData
 }
 
@@ -832,7 +889,9 @@ type Texture struct {
 	label string
 
 	// trackingData holds per-resource tracking information.
-	trackingData *TrackingData
+	// Uses the real track.TrackingData with dense index allocation
+	// for efficient usage tracking across command buffers.
+	trackingData *track.TrackingData
 
 	// Ref is the GPU-aware reference counter for this texture (Phase 2).
 	Ref *ResourceRef
@@ -861,6 +920,15 @@ func NewTexture(
 	sampleCount uint32,
 	label string,
 ) *Texture {
+	// Allocate a dense tracker index from the device's texture allocator.
+	// This enables efficient per-texture usage tracking across command buffers.
+	var td *track.TrackingData
+	if device != nil && device.TrackerIndices() != nil {
+		td = track.NewTrackingData(device.TrackerIndices().Textures())
+	} else {
+		td = track.NewTrackingData(nil)
+	}
+
 	t := &Texture{
 		raw:           NewSnatchable(halTexture),
 		device:        device,
@@ -871,7 +939,7 @@ func NewTexture(
 		mipLevelCount: mipLevelCount,
 		sampleCount:   sampleCount,
 		label:         label,
-		trackingData:  NewTrackingData(device.TrackerIndices()),
+		trackingData:  td,
 	}
 	trackResource(uintptr(unsafe.Pointer(t)), "Texture") //nolint:gosec // debug tracking uses pointer as unique ID
 	return t
@@ -889,11 +957,37 @@ func (t *Texture) Raw(guard SnatchGuard) hal.Texture {
 	return *p
 }
 
+// Device returns the parent device for this texture.
+func (t *Texture) Device() *Device {
+	return t.device
+}
+
+// TrackingData returns the tracking data for this texture.
+// The returned TrackingData contains the dense TrackerIndex used
+// for per-texture usage tracking in command buffer scopes.
+func (t *Texture) TrackingData() *track.TrackingData {
+	return t.trackingData
+}
+
 // TextureView represents a view into a texture.
+//
+// TextureView wraps a HAL texture view handle and carries a reference to
+// its parent Texture. The parent reference is needed for usage tracking:
+// when a render pass uses a texture view as an attachment, the parent
+// texture's TrackerIndex must be recorded in the command buffer's
+// TextureUsageScope for barrier generation at submit time.
+//
+// Reference: Rust wgpu-core resource.rs TextureView { parent: Arc<Texture>, ... }
 type TextureView struct {
 	// HAL is the underlying HAL texture view handle.
 	// Set by the public API layer when creating texture views with real HAL backends.
 	HAL hal.TextureView
+
+	// Parent is the texture that this view was created from.
+	// Used to access the parent texture's TrackerIndex for usage tracking.
+	// May be nil for texture views created without a parent (e.g., swapchain
+	// views where the parent texture lifecycle is managed externally).
+	Parent *Texture
 }
 
 // Sampler represents a texture sampler with HAL integration.
@@ -1195,6 +1289,14 @@ type RenderPipeline struct {
 
 	// Ref is the GPU-aware reference counter for this render pipeline (Phase 2).
 	Ref *ResourceRef
+
+	// passContext stores the attachment configuration this pipeline expects.
+	// Used for draw-time validation: when SetPipeline is called, the pipeline's
+	// passContext is checked against the render pass's context to ensure the
+	// pipeline's fragment target formats and sample count match the pass.
+	//
+	// Matches Rust wgpu-core pipeline.rs RenderPipeline.pass_context.
+	passContext *RenderPassContext
 }
 
 // NewRenderPipeline creates a core RenderPipeline wrapping a HAL render pipeline.
@@ -1203,19 +1305,29 @@ type RenderPipeline struct {
 //   - halPipeline: The HAL render pipeline to wrap (ownership transferred)
 //   - device: The parent device
 //   - label: Debug label for the render pipeline
+//   - passCtx: The render pass context describing expected attachment formats
+//     and sample count (may be nil for pipelines created without fragment stage)
 func NewRenderPipeline(
 	halPipeline hal.RenderPipeline,
 	device *Device,
 	label string,
+	passCtx *RenderPassContext,
 ) *RenderPipeline {
 	rp := &RenderPipeline{
 		raw:          NewSnatchable(halPipeline),
 		device:       device,
 		label:        label,
 		trackingData: NewTrackingData(device.TrackerIndices()),
+		passContext:  passCtx,
 	}
 	trackResource(uintptr(unsafe.Pointer(rp)), "RenderPipeline") //nolint:gosec // debug tracking uses pointer as unique ID
 	return rp
+}
+
+// PassContext returns the render pass context this pipeline expects.
+// Returns nil if the pipeline was created without fragment targets.
+func (rp *RenderPipeline) PassContext() *RenderPassContext {
+	return rp.passContext
 }
 
 // Raw returns the underlying HAL render pipeline if it hasn't been snatched.
@@ -1564,6 +1676,12 @@ type Surface struct {
 	// acquiredTex is the currently acquired surface texture (nil when not acquired).
 	acquiredTex hal.SurfaceTexture
 
+	// acquisition identifies the currently borrowed surface texture. A zero
+	// value means no acquisition is valid; nextAcquisition prevents an older
+	// wrapper from becoming valid after a later acquire.
+	acquisition     uint64
+	nextAcquisition uint64
+
 	// prepareFrame is an optional platform hook called before acquiring a texture.
 	prepareFrame PrepareFrameFunc
 
@@ -1594,6 +1712,11 @@ func NewSurface(
 
 // RawSurface returns the underlying HAL surface.
 func (s *Surface) RawSurface() hal.Surface {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.raw
 }
 
@@ -1602,5 +1725,12 @@ func (s *Surface) RawSurface() hal.Surface {
 // instance (e.g., switching from Vulkan surface to software surface during
 // Configure when the device's backend differs from the original surface).
 func (s *Surface) SetRawSurface(raw hal.Surface) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.raw = raw
+	s.acquiredTex = nil
+	s.invalidateAcquisitionLocked()
+	s.device = nil
+	s.config = nil
+	s.state = SurfaceStateUnconfigured
 }

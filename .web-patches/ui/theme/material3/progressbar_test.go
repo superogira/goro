@@ -1,7 +1,6 @@
 package material3
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -154,11 +153,11 @@ func TestProgressBarPainter_WithColorScheme(t *testing.T) {
 	}
 
 	ps := progressbar.PaintState{
-		Value:                  0.5,
-		Bounds:                 geometry.NewRect(0, 0, 200, 20),
-		BarHeight:              8,
-		Radius:                 4,
-		ProgressBarColorScheme: scheme,
+		Value:       0.5,
+		Bounds:      geometry.NewRect(0, 0, 200, 20),
+		BarHeight:   8,
+		Radius:      4,
+		ColorScheme: scheme,
 	}
 
 	p.PaintProgressBar(canvas, ps)
@@ -233,4 +232,4 @@ func (c *pbMockCanvas) PopTransform()                                {}
 func (c *pbMockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *pbMockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *pbMockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *pbMockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *pbMockCanvas) ReplayScene(_ widget.SceneCache)              {}

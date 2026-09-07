@@ -3,6 +3,7 @@ package chip
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -34,6 +35,9 @@ type Widget struct {
 	state   interactionState
 	painter Painter
 
+	// Gesture recognizer for click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
+
 	// Styling overrides set via fluent methods.
 	padding float32
 }
@@ -55,6 +59,30 @@ func New(opts ...Option) *Widget {
 	if w.cfg.painter != nil {
 		w.painter = w.cfg.painter
 	}
+
+	// Create ClickRecognizer for unified pointer pipeline (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClickDown: func(details gesture.ClickDownDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			w.state = statePressed
+			w.SetNeedsRedraw(true)
+		},
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			w.state = stateNormal
+			w.SetNeedsRedraw(true)
+			activate(w)
+		},
+		OnClickCancel: func() {
+			w.state = stateNormal
+			w.SetNeedsRedraw(true)
+		},
+	})
 
 	return w
 }
@@ -112,12 +140,19 @@ func (w *Widget) applySelected(sel bool) {
 
 // Layout calculates the chip's preferred size within the given constraints.
 func (w *Widget) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
-	text := w.cfg.ResolvedLabel()
-	textWidth := float32(len(text)) * defaultFontSize * charWidthRatio
+	// Query LayoutMetrics from painter (type assert with default fallback).
+	lm := resolveChipLayoutMetrics(w.painter)
 
-	contentW := textWidth + labelPaddingX*2
-	if contentW < minChipWidth {
-		contentW = minChipWidth
+	fontSize := lm.ChipFontSize()
+	minW := lm.ChipMinWidth()
+	padX := lm.ChipPadding()
+
+	text := w.cfg.ResolvedLabel()
+	textWidth := float32(len(text)) * fontSize * charWidthRatio
+
+	contentW := textWidth + padX*2
+	if contentW < minW {
+		contentW = minW
 	}
 
 	preferred := geometry.Sz(
@@ -129,11 +164,14 @@ func (w *Widget) Layout(_ widget.Context, constraints geometry.Constraints) geom
 
 // Draw renders the chip to the canvas.
 func (w *Widget) Draw(_ widget.Context, canvas widget.Canvas) {
+	// Query LayoutMetrics from painter (type assert with default fallback).
+	lm := resolveChipLayoutMetrics(w.painter)
+
 	w.painter.PaintChip(canvas, PaintState{
 		Label:       w.cfg.ResolvedLabel(),
 		Bounds:      w.contentBounds(),
-		Radius:      defaultChipRadius,
-		FontSize:    defaultFontSize,
+		Radius:      lm.ChipRadius(),
+		FontSize:    lm.ChipFontSize(),
 		Selectable:  w.cfg.selectable,
 		Selected:    w.cfg.ResolvedSelected(),
 		Hovered:     w.state == stateHover,
@@ -176,9 +214,9 @@ func (w *Widget) Mount(ctx widget.Context) {
 		return
 	}
 	if w.cfg.readonlyLabelSignal != nil {
-		w.AddBinding(state.BindToScheduler(w.cfg.readonlyLabelSignal, w, sched))
+		w.AddBinding(state.BindToSchedulerLayout(w.cfg.readonlyLabelSignal, w, sched))
 	} else if w.cfg.labelSignal != nil {
-		w.AddBinding(state.BindToScheduler(w.cfg.labelSignal, w, sched))
+		w.AddBinding(state.BindToSchedulerLayout(w.cfg.labelSignal, w, sched))
 	}
 	if w.cfg.readonlySelectedSignal != nil {
 		w.AddBinding(state.BindToScheduler(w.cfg.readonlySelectedSignal, w, sched))
@@ -195,7 +233,21 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the chip is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.clickRec != nil {
+		w.clickRec.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// Chip is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
 }
 
 // Padding sets the outer padding around the chip content.
@@ -207,7 +259,8 @@ func (w *Widget) Padding(v float32) *Widget {
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

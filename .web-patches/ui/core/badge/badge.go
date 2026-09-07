@@ -216,7 +216,7 @@ func (w *Widget) Mount(ctx widget.Context) {
 // MarkDirty is only called when the clamped count differs from the last drawn
 // count, preventing redundant redraws.
 func (w *Widget) bindCountSignal(sig state.ReadonlySignal[int], sched widget.SchedulerRef) *state.Binding {
-	return state.BindToSchedulerFunc(sig, func(newVal int) bool {
+	return state.BindToSchedulerLayoutFunc(sig, func(newVal int) bool {
 		if newVal < 0 {
 			newVal = 0
 		}

@@ -358,19 +358,23 @@ func TestShaderStagesToVk(t *testing.T) {
 // TestBufferBindingTypeToVk tests buffer binding type conversions.
 func TestBufferBindingTypeToVk(t *testing.T) {
 	tests := []struct {
-		name        string
-		bindingType gputypes.BufferBindingType
-		expect      vk.DescriptorType
+		name             string
+		bindingType      gputypes.BufferBindingType
+		hasDynamicOffset bool
+		expect           vk.DescriptorType
 	}{
-		{"Uniform", gputypes.BufferBindingTypeUniform, vk.DescriptorTypeUniformBuffer},
-		{"Storage", gputypes.BufferBindingTypeStorage, vk.DescriptorTypeStorageBuffer},
-		{"ReadOnlyStorage", gputypes.BufferBindingTypeReadOnlyStorage, vk.DescriptorTypeStorageBuffer},
-		{"Unknown defaults to Uniform", gputypes.BufferBindingType(99), vk.DescriptorTypeUniformBuffer},
+		{"Uniform", gputypes.BufferBindingTypeUniform, false, vk.DescriptorTypeUniformBuffer},
+		{"UniformDynamic", gputypes.BufferBindingTypeUniform, true, vk.DescriptorTypeUniformBufferDynamic},
+		{"Storage", gputypes.BufferBindingTypeStorage, false, vk.DescriptorTypeStorageBuffer},
+		{"StorageDynamic", gputypes.BufferBindingTypeStorage, true, vk.DescriptorTypeStorageBufferDynamic},
+		{"ReadOnlyStorage", gputypes.BufferBindingTypeReadOnlyStorage, false, vk.DescriptorTypeStorageBuffer},
+		{"ReadOnlyStorageDynamic", gputypes.BufferBindingTypeReadOnlyStorage, true, vk.DescriptorTypeStorageBufferDynamic},
+		{"Unknown defaults to Uniform", gputypes.BufferBindingType(99), false, vk.DescriptorTypeUniformBuffer},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := bufferBindingTypeToVk(tt.bindingType)
+			got := bufferBindingTypeToVk(tt.bindingType, tt.hasDynamicOffset)
 			if got != tt.expect {
 				t.Errorf("bufferBindingTypeToVk() = %v, want %v", got, tt.expect)
 			}
@@ -602,7 +606,7 @@ func TestBlendOperationToVk(t *testing.T) {
 func TestStencilOperationToVk(t *testing.T) {
 	tests := []struct {
 		name   string
-		op     hal.StencilOperation
+		op     gputypes.StencilOperation
 		expect vk.StencilOp
 	}{
 		{"Keep", hal.StencilOperationKeep, vk.StencilOpKeep},
@@ -613,7 +617,7 @@ func TestStencilOperationToVk(t *testing.T) {
 		{"DecrementClamp", hal.StencilOperationDecrementClamp, vk.StencilOpDecrementAndClamp},
 		{"IncrementWrap", hal.StencilOperationIncrementWrap, vk.StencilOpIncrementAndWrap},
 		{"DecrementWrap", hal.StencilOperationDecrementWrap, vk.StencilOpDecrementAndWrap},
-		{"Unknown defaults to Keep", hal.StencilOperation(99), vk.StencilOpKeep},
+		{"Unknown defaults to Keep", gputypes.StencilOperation(99), vk.StencilOpKeep},
 	}
 
 	for _, tt := range tests {
@@ -866,81 +870,6 @@ func TestVkFormatToTextureFormat(t *testing.T) {
 	}
 }
 
-// TestVkPresentModeToHAL tests Vulkan present mode conversion to HAL.
-func TestVkPresentModeToHAL(t *testing.T) {
-	tests := []struct {
-		name   string
-		mode   vk.PresentModeKHR
-		expect hal.PresentMode
-	}{
-		{"Immediate", vk.PresentModeImmediateKhr, hal.PresentModeImmediate},
-		{"Mailbox", vk.PresentModeMailboxKhr, hal.PresentModeMailbox},
-		{"FIFO", vk.PresentModeFifoKhr, hal.PresentModeFifo},
-		{"FIFORelaxed", vk.PresentModeFifoRelaxedKhr, hal.PresentModeFifoRelaxed},
-		{"Unknown defaults to FIFO", vk.PresentModeKHR(99), hal.PresentModeFifo},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := vkPresentModeToHAL(tt.mode)
-			if got != tt.expect {
-				t.Errorf("vkPresentModeToHAL(%v) = %v, want %v", tt.mode, got, tt.expect)
-			}
-		})
-	}
-}
-
-// TestVkCompositeAlphaToHAL tests Vulkan composite alpha flag conversion.
-func TestVkCompositeAlphaToHAL(t *testing.T) {
-	tests := []struct {
-		name      string
-		flags     vk.CompositeAlphaFlagsKHR
-		expectLen int
-	}{
-		{"Opaque", vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaOpaqueBitKhr), 1},
-		{"Premultiplied", vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaPreMultipliedBitKhr), 1},
-		{"PostMultiplied", vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaPostMultipliedBitKhr), 1},
-		{"Inherit", vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaInheritBitKhr), 1},
-		{
-			"OpaqueAndPremultiplied",
-			vk.CompositeAlphaFlagsKHR(vk.Flags(vk.CompositeAlphaOpaqueBitKhr) | vk.Flags(vk.CompositeAlphaPreMultipliedBitKhr)),
-			2,
-		},
-		{"None defaults to Opaque", 0, 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := vkCompositeAlphaToHAL(tt.flags)
-			if len(got) != tt.expectLen {
-				t.Errorf("vkCompositeAlphaToHAL() returned %d modes, want %d", len(got), tt.expectLen)
-			}
-		})
-	}
-
-	// Verify specific mode values for single-flag inputs
-	t.Run("OpaqueValue", func(t *testing.T) {
-		modes := vkCompositeAlphaToHAL(vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaOpaqueBitKhr))
-		if len(modes) != 1 || modes[0] != hal.CompositeAlphaModeOpaque {
-			t.Errorf("expected [Opaque], got %v", modes)
-		}
-	})
-
-	t.Run("PremultipliedValue", func(t *testing.T) {
-		modes := vkCompositeAlphaToHAL(vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaPreMultipliedBitKhr))
-		if len(modes) != 1 || modes[0] != hal.CompositeAlphaModePremultiplied {
-			t.Errorf("expected [Premultiplied], got %v", modes)
-		}
-	})
-
-	t.Run("InheritValue", func(t *testing.T) {
-		modes := vkCompositeAlphaToHAL(vk.CompositeAlphaFlagsKHR(vk.CompositeAlphaInheritBitKhr))
-		if len(modes) != 1 || modes[0] != hal.CompositeAlphaModeInherit {
-			t.Errorf("expected [Inherit], got %v", modes)
-		}
-	})
-}
-
 // TestLoadOpToVk tests load operation conversions.
 func TestLoadOpToVk(t *testing.T) {
 	tests := []struct {
@@ -989,14 +918,14 @@ func TestStoreOpToVk(t *testing.T) {
 func TestPresentModeToVk(t *testing.T) {
 	tests := []struct {
 		name   string
-		mode   hal.PresentMode
+		mode   gputypes.PresentMode
 		expect vk.PresentModeKHR
 	}{
 		{"Immediate", hal.PresentModeImmediate, vk.PresentModeImmediateKhr},
 		{"Mailbox", hal.PresentModeMailbox, vk.PresentModeMailboxKhr},
 		{"Fifo", hal.PresentModeFifo, vk.PresentModeFifoKhr},
 		{"FifoRelaxed", hal.PresentModeFifoRelaxed, vk.PresentModeFifoRelaxedKhr},
-		{"Unknown defaults to Fifo", hal.PresentMode(99), vk.PresentModeFifoKhr},
+		{"Unknown defaults to Fifo", gputypes.PresentMode(99), vk.PresentModeFifoKhr},
 	}
 
 	for _, tt := range tests {

@@ -3,10 +3,48 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/gogpu/gputypes"
+	"github.com/gogpu/wgpu/hal"
 )
+
+type providerBackedTestInstance struct{}
+
+func (*providerBackedTestInstance) CreateSurface(hal.SurfaceTarget) (hal.Surface, error) {
+	return nil, errors.New("test instance does not create surfaces")
+}
+
+func (*providerBackedTestInstance) EnumerateAdapters(hal.Surface) []hal.ExposedAdapter {
+	return []hal.ExposedAdapter{{
+		Adapter: &providerBackedTestAdapter{},
+		Info: gputypes.AdapterInfo{
+			Name:       "provider-backed test adapter",
+			DeviceType: gputypes.DeviceTypeCPU,
+			Backend:    gputypes.BackendVulkan,
+		},
+		Capabilities: hal.Capabilities{Limits: gputypes.DefaultLimits()},
+	}}
+}
+
+func (*providerBackedTestInstance) Destroy() {}
+
+type providerBackedTestAdapter struct{}
+
+func (*providerBackedTestAdapter) Open(gputypes.Features, gputypes.Limits) (hal.OpenDevice, error) {
+	return hal.OpenDevice{}, nil
+}
+
+func (*providerBackedTestAdapter) TextureFormatCapabilities(gputypes.TextureFormat) hal.TextureFormatCapabilities {
+	return hal.TextureFormatCapabilities{}
+}
+
+func (*providerBackedTestAdapter) SurfaceCapabilities(hal.Surface) *hal.SurfaceCapabilities {
+	return nil
+}
+
+func (*providerBackedTestAdapter) Destroy() {}
 
 func TestNewInstance(t *testing.T) {
 	tests := []struct {
@@ -52,11 +90,9 @@ func TestNewInstance(t *testing.T) {
 				t.Errorf("Backends() = %v, want %v", got, tt.want)
 			}
 
-			// Verify mock adapter was created
-			adapters := instance.EnumerateAdapters()
-			if len(adapters) == 0 {
-				t.Error("Expected at least one mock adapter")
-			}
+			// Adapter discovery is provider-dependent. A missing provider must not
+			// fabricate a mock adapter; deterministic mock coverage uses the
+			// explicit NewInstanceWithMock constructor.
 		})
 	}
 }
@@ -102,10 +138,101 @@ func TestInstanceFlags(t *testing.T) {
 	}
 }
 
+func TestNewInstanceDoesNotFabricateAdapterWithoutProvider(t *testing.T) {
+	GetGlobal().Clear()
+
+	instance := NewInstance(&gputypes.InstanceDescriptor{})
+	if adapters := instance.EnumerateAdapters(); len(adapters) != 0 {
+		t.Fatalf("NewInstance fabricated %d adapter(s) without an enabled provider", len(adapters))
+	}
+	if instance.IsMock() {
+		t.Fatal("NewInstance unexpectedly enabled mock mode")
+	}
+	if _, err := instance.RequestAdapter(nil); err == nil {
+		t.Fatal("RequestAdapter succeeded without a provider")
+	}
+}
+
+func TestNewInstanceUsesRegisteredProviderWithoutEnablingMock(t *testing.T) {
+	providersMu.Lock()
+	savedProviders := providers
+	providers = map[gputypes.Backend]BackendProvider{
+		gputypes.BackendVulkan: &testProvider{
+			variant:   gputypes.BackendVulkan,
+			available: true,
+			instance:  &providerBackedTestInstance{},
+		},
+	}
+	providersMu.Unlock()
+	t.Cleanup(func() {
+		providersMu.Lock()
+		providers = savedProviders
+		providersMu.Unlock()
+	})
+	GetGlobal().Clear()
+
+	instance := NewInstance(&gputypes.InstanceDescriptor{Backends: gputypes.BackendsVulkan})
+	t.Cleanup(instance.Destroy)
+	if instance.IsMock() {
+		t.Fatal("provider-backed NewInstance unexpectedly enabled mock mode")
+	}
+	if adapters := instance.EnumerateAdapters(); len(adapters) != 1 {
+		t.Fatalf("provider-backed NewInstance returned %d adapters, want 1", len(adapters))
+	}
+}
+
+func TestNewInstanceRecordsDeferredGLESHALInstanceEntry(t *testing.T) {
+	tracker := &trackingGLESInstance{}
+	providersMu.Lock()
+	savedProviders := providers
+	providers = map[gputypes.Backend]BackendProvider{
+		gputypes.BackendGL: &testProvider{
+			variant:   gputypes.BackendGL,
+			available: true,
+			instance:  tracker,
+		},
+	}
+	providersMu.Unlock()
+	t.Cleanup(func() {
+		providersMu.Lock()
+		providers = savedProviders
+		providersMu.Unlock()
+	})
+	GetGlobal().Clear()
+
+	instance := NewInstance(&gputypes.InstanceDescriptor{Backends: gputypes.BackendsGL})
+	t.Cleanup(instance.Destroy)
+	entries := instance.HALInstanceEntries()
+	if len(entries) != 1 {
+		t.Fatalf("HAL instance entries = %d, want 1", len(entries))
+	}
+	if entries[0].Backend != gputypes.BackendGL || entries[0].Instance != tracker {
+		t.Fatalf("HAL instance entry = %+v, want GL tracker", entries[0])
+	}
+
+	entries[0] = HALInstanceEntry{}
+	snapshot := instance.HALInstanceEntries()
+	if len(snapshot) != 1 || snapshot[0].Instance != tracker {
+		t.Fatal("HALInstanceEntries returned an aliased slice")
+	}
+}
+
+func TestNewInstanceWithMockIsExplicit(t *testing.T) {
+	GetGlobal().Clear()
+
+	instance := NewInstanceWithMock(nil)
+	if !instance.IsMock() {
+		t.Fatal("NewInstanceWithMock did not enable mock mode")
+	}
+	if adapters := instance.EnumerateAdapters(); len(adapters) != 1 {
+		t.Fatalf("NewInstanceWithMock returned %d adapters, want 1", len(adapters))
+	}
+}
+
 func TestEnumerateAdapters(t *testing.T) {
 	GetGlobal().Clear()
 
-	instance := NewInstance(nil)
+	instance := NewInstanceWithMock(nil)
 
 	adapters := instance.EnumerateAdapters()
 	if len(adapters) == 0 {
@@ -173,7 +300,7 @@ func TestRequestAdapter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			GetGlobal().Clear()
 
-			instance := NewInstance(nil)
+			instance := NewInstanceWithMock(nil)
 			adapterID, err := instance.RequestAdapter(tt.options)
 
 			if tt.wantErr {
@@ -205,7 +332,7 @@ func TestRequestAdapter(t *testing.T) {
 func TestRequestAdapterNoAdapters(t *testing.T) {
 	GetGlobal().Clear()
 
-	// Create instance but remove mock adapter
+	// An instance with no registered adapters must fail explicitly.
 	instance := &Instance{
 		backends: gputypes.BackendsPrimary,
 		flags:    0,
@@ -277,7 +404,7 @@ func TestMatchesPowerPreference(t *testing.T) {
 func TestInstanceConcurrentAccess(t *testing.T) {
 	GetGlobal().Clear()
 
-	instance := NewInstance(nil)
+	instance := NewInstanceWithMock(nil)
 
 	// Test concurrent reads
 	done := make(chan bool, 10)

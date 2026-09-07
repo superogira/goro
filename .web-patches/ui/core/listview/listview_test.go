@@ -1,7 +1,6 @@
 package listview_test
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -1357,10 +1356,16 @@ func TestLayout_ItemCountChangedViaSignal(t *testing.T) {
 	)
 
 	ctx := widget.NewContext()
+	sched := &mockScheduler{}
+	ctx.SetScheduler(sched)
+	lv.Mount(ctx)
+	defer lv.Unmount()
+
 	constraints := geometry.Constraints{MinWidth: 300, MaxWidth: 300, MinHeight: 400, MaxHeight: 400}
 	lv.Layout(ctx, constraints)
 
-	// Change count via signal.
+	// Change count via signal — the binding from Mount invalidates layout
+	// caches on the listview and all its descendants (scroll, virtualContent).
 	sig.Set(20)
 	lv.Layout(ctx, constraints)
 
@@ -1612,7 +1617,7 @@ func (m *mockCanvas) PopTransform()                                {}
 func (m *mockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (m *mockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (m *mockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (m *mockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (m *mockCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 type mockPainter struct {
 	dividerCalls    int

@@ -23,17 +23,18 @@ import (
 // Config holds configuration for creating a platform window.
 // This mirrors platform.Config to avoid import cycles.
 type Config struct {
-	Title      string
-	Width      int
-	Height     int
-	Resizable  bool
-	Fullscreen bool
-	Frameless  bool
-	MinWidth   int // 0 = no minimum constraint
-	MinHeight  int // 0 = no minimum constraint
-	MaxWidth   int // 0 = no maximum constraint
-	MaxHeight  int // 0 = no maximum constraint
-	Icon       image.Image
+	Title       string
+	Width       int
+	Height      int
+	Resizable   bool
+	Fullscreen  bool
+	Frameless   bool
+	Transparent bool
+	MinWidth    int // 0 = no minimum constraint
+	MinHeight   int // 0 = no minimum constraint
+	MaxWidth    int // 0 = no maximum constraint
+	MaxHeight   int // 0 = no maximum constraint
+	Icon        image.Image
 }
 
 // EventType represents the type of platform event.
@@ -54,6 +55,10 @@ const (
 	EventTypePointerLeave
 	EventTypeScroll
 	EventTypeExpose
+	EventTypeDragEnter // Files entered window area (XDND)
+	EventTypeDragMove  // Files moving over window
+	EventTypeDragDrop  // Files dropped on window
+	EventTypeDragLeave // Files left window area
 )
 
 // PlatformEvent represents a platform event.
@@ -76,6 +81,11 @@ type PlatformEvent struct {
 
 	// Scroll (EventTypeScroll)
 	Scroll gpucontext.ScrollEvent
+
+	// File drag-and-drop (EventTypeDragEnter, EventTypeDragDrop, EventTypeDragMove, EventTypeDragLeave)
+	DragPaths []string // file paths (set on DragEnter and DragDrop)
+	DragX     float64  // drop/hover position in physical pixels
+	DragY     float64  // drop/hover position in physical pixels
 }
 
 // xlibHandle holds the Xlib Display* pointer required for Vulkan surface creation.
@@ -96,6 +106,10 @@ type xlibHandle struct {
 type x11Window struct {
 	// X11 window ID
 	window ResourceID
+
+	// colormap is the ARGB colormap created for a transparent window
+	// (0 when the window uses the root visual). Freed on Destroy.
+	colormap ResourceID
 
 	// Window state (guarded by eventMu for thread-safe access from multiple goroutines).
 	width       int
@@ -141,6 +155,9 @@ type x11Window struct {
 	cursorCenterX int16 // window center for warp-back in locked mode
 	cursorCenterY int16
 	cursorGrabbed bool // whether XGrabPointer is active
+
+	// XDND drag-and-drop state for this window.
+	xdndState xdndState
 }
 
 // Platform implements X11 windowing support.
@@ -179,6 +196,12 @@ type Platform struct {
 	// _XKB_RULES_NAMES is unreliable under XWayland (freedesktop#612).
 	isXWayland bool
 
+	// preferServerKeymap selects the mapping advertised by the connected X
+	// server before host-local xkbcommon. This is required when the server and
+	// client hosts can have different keyboard configuration (X forwarding,
+	// XQuartz, and XWayland).
+	preferServerKeymap bool
+
 	// DPI scale factor (from Xft.dpi or screen physical size) — process-level
 	scaleFactor float64
 
@@ -192,6 +215,9 @@ type Platform struct {
 	clipboardText  string     // locally stored clipboard content
 	ownsClipboard  bool       // true if we are the CLIPBOARD selection owner
 	clipboardReady bool       // signaled by SelectionNotify handler during read
+
+	// XDND (X Drag-and-Drop) protocol atoms. Nil if init failed (non-fatal).
+	xdnd *xdndAtoms
 
 	// Window registry keyed by X11 ResourceID for event routing.
 	windowMu sync.RWMutex
@@ -316,16 +342,17 @@ func (p *Platform) Init(config Config) error {
 
 	// Create window with physical pixel dimensions
 	windowConfig := WindowConfig{
-		Title:      config.Title,
-		Width:      uint16(physWidth),
-		Height:     uint16(physHeight),
-		X:          0,
-		Y:          0,
-		Resizable:  config.Resizable,
-		Fullscreen: config.Fullscreen,
+		Title:       config.Title,
+		Width:       uint16(physWidth),
+		Height:      uint16(physHeight),
+		X:           0,
+		Y:           0,
+		Resizable:   config.Resizable,
+		Fullscreen:  config.Fullscreen,
+		Transparent: config.Transparent,
 	}
 
-	window, err := conn.CreateWindow(windowConfig)
+	window, colormap, err := conn.CreateWindow(windowConfig)
 	if err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("x11: failed to create window: %w", err)
@@ -335,6 +362,7 @@ func (p *Platform) Init(config Config) error {
 	// Store physical pixel dimensions (what the X server sees).
 	w := &x11Window{
 		window:        window,
+		colormap:      colormap,
 		width:         physWidth,
 		height:        physHeight,
 		startTime:     time.Now(),
@@ -371,11 +399,20 @@ func (p *Platform) Init(config Config) error {
 	if p.isXWayland {
 		logger().Info("XWayland detected — _XKB_RULES_NAMES may be unreliable")
 	}
+	vendor := ""
+	if setup := conn.Setup(); setup != nil {
+		vendor = setup.Vendor
+	}
+	p.preferServerKeymap = shouldPreferServerKeymap(os.Getenv("DISPLAY"), vendor, p.isXWayland)
 
 	// Load libxkbcommon for proper text input (AltGr, dead keys, multi-layout).
 	// First try RMLVO from _XKB_RULES_NAMES, then system defaults.
 	// Non-fatal: falls back to manual KeycodeToKeysymGroup (no AltGr support).
-	p.initXkbcommon()
+	if p.preferServerKeymap {
+		logger().Info("using X server keyboard mapping", "DISPLAY", os.Getenv("DISPLAY"), "vendor", vendor)
+	} else {
+		p.initXkbcommon()
+	}
 
 	// Initialize XInput2 for touch support (non-fatal)
 	xi, err := conn.InitXInput2()
@@ -430,6 +467,14 @@ func (p *Platform) Init(config Config) error {
 	}
 	if p.scaleFactor != 1.0 {
 		logger().Info("x11 DPI scale", "factor", p.scaleFactor)
+	}
+
+	// Initialize XDND (X Drag-and-Drop) protocol atoms and set XdndAware
+	// on the window. Non-fatal: drag-and-drop won't work without it.
+	if err := p.internXdndAtoms(); err != nil {
+		logger().Warn("XDND init failed, drag-and-drop unavailable", "error", err)
+	} else if err := p.setXdndAware(window); err != nil {
+		logger().Warn("XdndAware set failed", "error", err)
 	}
 
 	// Enable detectable auto-repeat to suppress spurious KeyRelease events
@@ -490,6 +535,17 @@ func (p *Platform) ScaleFactor() float64 {
 		return 1.0
 	}
 	return p.scaleFactor
+}
+
+// physicalToLogical converts X11 physical pixel coordinates to logical DIP.
+// X11 events report physical pixels; all other platforms (Windows, macOS,
+// Wayland, Browser) deliver logical DIP coordinates. This conversion ensures
+// pointer events are consistent with App.Size() across all platforms.
+func (p *Platform) physicalToLogical(x, y float64) (float64, float64) {
+	if scale := p.ScaleFactor(); scale > 1.0 {
+		return x / scale, y / scale
+	}
+	return x, y
 }
 
 // queryScaleFactor determines the DPI scale factor using two methods:
@@ -651,6 +707,67 @@ func parseXftRGBA(resources string) gpucontext.SubpixelLayout {
 	}
 	// Xft.rgba not set — safe default for unknown displays (ADR-047).
 	return gpucontext.SubpixelNone
+}
+
+// FontSmoothing returns the OS text anti-aliasing mode by reading
+// Xft.antialias and Xft.rgba from the X RESOURCE_MANAGER property.
+// Logic: antialias=0 → None; antialias=1 + rgba=none → Grayscale;
+// antialias=1 + rgba=rgb/bgr/vrgb/vbgr → Subpixel.
+// Returns FontSmoothingGrayscale if resources are unavailable (safe default).
+func (p *Platform) FontSmoothing() gpucontext.FontSmoothing {
+	if p.conn == nil {
+		return gpucontext.FontSmoothingGrayscale
+	}
+
+	rootWindow := p.conn.RootWindow()
+	if rootWindow == 0 {
+		return gpucontext.FontSmoothingGrayscale
+	}
+
+	data, _, _, err := p.conn.GetProperty(rootWindow, AtomResourceManager, Atom(0), 0, 8192, false)
+	if err != nil || len(data) == 0 {
+		return gpucontext.FontSmoothingGrayscale
+	}
+
+	resources := string(data)
+	return fontSmoothingFromXftResources(resources)
+}
+
+// fontSmoothingFromXftResources determines FontSmoothing from Xft resources.
+// Exported-style name for testability, but package-scoped.
+func fontSmoothingFromXftResources(resources string) gpucontext.FontSmoothing {
+	antialias := parseXftAntialias(resources)
+	if antialias == 0 {
+		return gpucontext.FontSmoothingNone
+	}
+
+	// antialias is on (1 or not set, default is on).
+	// Check subpixel layout to distinguish grayscale vs subpixel.
+	layout := parseXftRGBA(resources)
+	if layout != gpucontext.SubpixelNone {
+		return gpucontext.FontSmoothingSubpixel
+	}
+	return gpucontext.FontSmoothingGrayscale
+}
+
+// parseXftAntialias parses the Xft.antialias value from an X RESOURCE_MANAGER string.
+// The string contains lines like "Xft.antialias:\t1" or "Xft.antialias: 0".
+// Returns 1 if Xft.antialias is not found (antialiasing is on by default).
+// Returns 0 if explicitly set to 0, 1 if set to 1.
+func parseXftAntialias(resources string) int {
+	for _, line := range strings.Split(resources, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Xft.antialias:") {
+			continue
+		}
+		value := strings.TrimSpace(line[len("Xft.antialias:"):])
+		if value == "0" {
+			return 0
+		}
+		return 1
+	}
+	// Xft.antialias not set — antialiasing is on by default.
+	return 1
 }
 
 // initXkbcommon loads libxkbcommon and creates a keymap.
@@ -887,6 +1004,12 @@ func (p *Platform) handleEvent(event Event) PlatformEvent {
 			w.eventMu.Unlock()
 			return PlatformEvent{Type: EventTypeClose}
 		}
+		// Check for XDND messages (drag-and-drop).
+		if p.xdnd != nil {
+			if xdndEvent := p.handleXdndClientMessage(w, e); xdndEvent.Type != EventTypeNone {
+				return xdndEvent
+			}
+		}
 
 	case *DestroyNotifyEvent:
 		if e.Window == w.window {
@@ -969,8 +1092,9 @@ func (p *Platform) handleEvent(event Event) PlatformEvent {
 
 // handleMotionNotify processes mouse movement events.
 func (p *Platform) handleMotionNotify(w *x11Window, e *MotionNotifyEvent) {
-	x := float64(e.EventX)
-	y := float64(e.EventY)
+	// X11 reports physical pixels; convert to logical DIP to match
+	// App.Size() and all other platforms (Windows, macOS, Wayland, Browser).
+	x, y := p.physicalToLogical(float64(e.EventX), float64(e.EventY))
 
 	w.eventMu.Lock()
 	cursorMode := w.cursorMode
@@ -1010,8 +1134,7 @@ func (p *Platform) handleMotionNotify(w *x11Window, e *MotionNotifyEvent) {
 
 // handleButtonPress processes mouse button press events.
 func (p *Platform) handleButtonPress(w *x11Window, e *ButtonPressEvent) {
-	x := float64(e.EventX)
-	y := float64(e.EventY)
+	x, y := p.physicalToLogical(float64(e.EventX), float64(e.EventY))
 
 	// Scroll buttons (4-7) are emulated as button presses in X11
 	if isScrollButton(e.Detail) {
@@ -1084,8 +1207,7 @@ func (p *Platform) handleButtonPress(w *x11Window, e *ButtonPressEvent) {
 
 // handleButtonRelease processes mouse button release events.
 func (p *Platform) handleButtonRelease(w *x11Window, e *ButtonReleaseEvent) {
-	x := float64(e.EventX)
-	y := float64(e.EventY)
+	x, y := p.physicalToLogical(float64(e.EventX), float64(e.EventY))
 
 	// Scroll button releases are ignored (scroll is handled on press)
 	if isScrollButton(e.Detail) {
@@ -1152,8 +1274,7 @@ func (p *Platform) handleScrollButton(w *x11Window, detail uint8, x, y float64, 
 
 // handleEnterNotify processes pointer enter events.
 func (p *Platform) handleEnterNotify(w *x11Window, e *EnterNotifyEvent) {
-	x := float64(e.EventX)
-	y := float64(e.EventY)
+	x, y := p.physicalToLogical(float64(e.EventX), float64(e.EventY))
 
 	w.eventMu.Lock()
 	w.mouseX = x
@@ -1169,8 +1290,7 @@ func (p *Platform) handleEnterNotify(w *x11Window, e *EnterNotifyEvent) {
 
 // handleLeaveNotify processes pointer leave events.
 func (p *Platform) handleLeaveNotify(w *x11Window, e *LeaveNotifyEvent) {
-	x := float64(e.EventX)
-	y := float64(e.EventY)
+	x, y := p.physicalToLogical(float64(e.EventX), float64(e.EventY))
 
 	w.eventMu.Lock()
 	w.mouseX = x
@@ -1291,6 +1411,7 @@ func (p *Platform) handleUnknownEvent(e *UnknownEvent) {
 // SDL3 uses the same fallback pattern.
 // BUG-INPUT-005: Now uses full state sync (modifiers + group) instead of group-only.
 func (p *Platform) handleMappingNotify() {
+	p.reloadServerKeymap()
 	if p.xkb == nil {
 		return
 	}
@@ -1322,6 +1443,8 @@ func (p *Platform) handleMappingNotify() {
 // Called on XkbNewKeyboardNotify (keyboard hot-plug) and XkbMapNotify (keymap changed).
 // BUG-INPUT-005: Handles layout reconfiguration without restart.
 func (p *Platform) reloadXkbKeymap() {
+	p.reloadServerKeymap()
+
 	p.mu.Lock()
 	xkbState := p.xkbState
 	p.mu.Unlock()
@@ -1357,14 +1480,23 @@ func (p *Platform) reloadXkbKeymap() {
 			p.mu.Unlock()
 		}
 	}
+}
 
-	// Also re-read keyboard mapping for the fallback path.
-	keymap, _ := p.conn.GetKeyboardMapping()
-	if keymap != nil {
-		p.mu.Lock()
-		p.keymap = keymap
-		p.mu.Unlock()
+// reloadServerKeymap refreshes the pure-Go core mapping after the X server
+// reports a keyboard configuration change. XQuartz rewrites this mapping when
+// the macOS input source changes, so it must be refreshed independently of XKB.
+func (p *Platform) reloadServerKeymap() {
+	if p.conn == nil {
+		return
 	}
+	keymap, err := p.conn.GetKeyboardMapping()
+	if err != nil {
+		logger().Warn("failed to refresh X server keyboard mapping", "err", err)
+		return
+	}
+	p.mu.Lock()
+	p.keymap = keymap
+	p.mu.Unlock()
 }
 
 // handleXITouchEvent processes an XI2 touch event and dispatches it as a PointerEvent.
@@ -1513,6 +1645,64 @@ func (p *Platform) SetMaxSize(width, height int) {
 	_ = p.conn.SetWMSizeHints(p.primary.window, 0, 0, width, height)
 }
 
+// RequestSize resizes the window's content area to the given logical size.
+// Skips if fullscreen. If maximized, sends _NET_WM_STATE remove-maximize
+// so the window manager releases the geometry constraint (winit pattern).
+func (p *Platform) RequestSize(width, height int) {
+	if p.primary == nil || p.conn == nil {
+		return
+	}
+	if p.IsFullscreen() {
+		return
+	}
+
+	// Remove maximize state so the WM allows the resize (winit pattern).
+	// Without this, KDE/GNOME/Sway silently ignore ConfigureWindow.
+	if err := p.conn.Unmaximize(p.primary.window, p.atoms); err != nil {
+		logger().Warn("x11: Unmaximize failed", "err", err)
+	}
+
+	// X11 uses physical pixels; scale logical → physical.
+	scale := p.ScaleFactor()
+	physW := uint16(float64(width) * scale)
+	physH := uint16(float64(height) * scale)
+
+	if err := p.conn.ResizeWindow(p.primary.window, physW, physH); err != nil {
+		logger().Warn("x11: RequestSize failed", "err", err)
+		return
+	}
+
+	_ = p.conn.Flush()
+}
+
+// Hide unmaps the window.
+func (p *Platform) Hide() {
+	if p.primary == nil || p.conn == nil {
+		return
+	}
+	if err := p.conn.UnmapWindow(p.primary.window); err != nil {
+		logger().Warn("x11: UnmapWindow failed in Hide", "err", err)
+		return
+	}
+	_ = p.conn.Flush()
+}
+
+// SetPosition moves the window to the given logical screen position (DIP),
+// converting to physical pixels with the current scale factor.
+func (p *Platform) SetPosition(x, y int) {
+	if p.primary == nil || p.conn == nil {
+		return
+	}
+	scale := p.ScaleFactor()
+	physX := int16(float64(x) * scale)
+	physY := int16(float64(y) * scale)
+	if err := p.conn.MoveWindow(p.primary.window, physX, physY); err != nil {
+		logger().Warn("x11: MoveWindow failed in SetPosition", "err", err)
+		return
+	}
+	_ = p.conn.Flush()
+}
+
 // Destroy closes the window and releases resources.
 func (p *Platform) Destroy() {
 	p.mu.Lock()
@@ -1563,6 +1753,11 @@ func (p *Platform) Destroy() {
 
 			_ = p.conn.DestroyWindow(w.window)
 			w.window = 0
+		}
+		// Free the ARGB colormap created for transparent windows.
+		if w != nil && w.colormap != 0 {
+			_ = p.conn.FreeColormap(w.colormap)
+			w.colormap = 0
 		}
 		_ = p.conn.Close()
 		p.conn = nil
@@ -1679,20 +1874,29 @@ func (p *Platform) handleKeyEvent(w *x11Window, keycode uint8, state uint16, pre
 	// Evdev keycode for xkbcommon: X11 keycode - 8
 	evdevKey := uint32(keycode) - 8
 
-	// Text input: use xkbcommon if available (handles AltGr/Level3 correctly).
-	// Fallback to manual KeycodeToKeysymGroup (no AltGr support).
+	// Text input uses the connected server's mapping for remote/compatibility
+	// servers, otherwise xkbcommon with the server mapping as fallback.
 	p.mu.Lock()
 	xkbState := p.xkbState
 	keymap := p.keymap
+	group := p.xkbGroup
+	preferServerKeymap := p.preferServerKeymap
 	p.mu.Unlock()
 
 	if pressed {
 		dispatched := false
 
+		// Remote and compatibility X servers own the effective keymap. Consulting
+		// their wire-protocol mapping first avoids translating with an unrelated
+		// client-host layout.
+		if preferServerKeymap {
+			dispatched = dispatchServerKeymapText(w, keymap, keycode, mods, group)
+		}
+
 		// Primary: xkbcommon (handles AltGr/Level3 and all layouts correctly).
 		// State is synced via UpdateMask from XkbStateNotify events (winit pattern).
 		// Do NOT call UpdateKey here — winit never does on X11.
-		if xkbState != nil && xkbState.Ready() {
+		if !dispatched && xkbState != nil && xkbState.Ready() {
 			s := xkbState.KeyGetUtf8(evdevKey)
 			if s != "" {
 				for _, r := range s {
@@ -1707,18 +1911,45 @@ func (p *Platform) handleKeyEvent(w *x11Window, keycode uint8, state uint16, pre
 		// Fallback: manual lookup with group-aware keysym resolution.
 		// Covers cases where xkb_keymap_new_from_names(NULL) doesn't include
 		// the user's configured layouts (e.g., Russian via desktop settings).
-		if !dispatched && keymap != nil {
-			p.mu.Lock()
-			group := p.xkbGroup
-			p.mu.Unlock()
-			shift := mods&gpucontext.ModShift != 0
-			capsLock := mods&gpucontext.ModCapsLock != 0
-			keysym := keymap.KeycodeToKeysymGroup(keycode, shift, capsLock, group)
-			if r, ok := KeysymToRune(keysym); ok && r >= 32 {
-				w.queueEvent(PlatformEvent{Type: EventTypeChar, Char: r})
-			}
+		if !dispatched {
+			dispatchServerKeymapText(w, keymap, keycode, mods, group)
 		}
 	}
+}
+
+func dispatchServerKeymapText(
+	w *x11Window,
+	keymap *KeyboardMapping,
+	keycode uint8,
+	mods gpucontext.Modifiers,
+	group int,
+) bool {
+	if keymap == nil {
+		return false
+	}
+	shift := mods&gpucontext.ModShift != 0
+	capsLock := mods&gpucontext.ModCapsLock != 0
+	keysym := keymap.KeycodeToKeysymGroup(keycode, shift, capsLock, group)
+	r, ok := KeysymToRune(keysym)
+	if !ok || r < 32 {
+		return false
+	}
+	w.queueEvent(PlatformEvent{Type: EventTypeChar, Char: r})
+	return true
+}
+
+// shouldPreferServerKeymap reports whether host-local keyboard configuration
+// can differ from the connected X server's effective mapping.
+func shouldPreferServerKeymap(display, vendor string, xwayland bool) bool {
+	if xwayland {
+		return true
+	}
+	vendor = strings.ToLower(vendor)
+	if strings.Contains(vendor, "xquartz") || strings.Contains(vendor, "apple") {
+		return true
+	}
+	host, _, _, err := parseDisplay(display)
+	return err == nil && host != "" && !strings.EqualFold(host, "unix")
 }
 
 // x11KeycodeToKey converts an X11 keycode to a gpucontext.Key.
@@ -2056,6 +2287,8 @@ func isScrollButton(detail uint8) bool {
 }
 
 // createPointerEvent creates a PointerEvent with common fields filled in.
+// Coordinates must be in logical DIP — callers convert from X11 physical
+// pixels via Platform.physicalToLogical before passing x/y here.
 func (w *x11Window) createPointerEvent(
 	eventType gpucontext.PointerEventType,
 	button gpucontext.Button,

@@ -51,12 +51,12 @@ var (
 	cifVoid6TexMS    types.CallInterface // void fn(uint32, int32, uint32, int32, int32, uint8) - TexImage2DMultisample
 	cifVoid10Blit    types.CallInterface // void fn(int32*8, uint32, uint32) - BlitFramebuffer
 	cifVoid3UUF      types.CallInterface // void fn(uint32, uint32, float32) - SamplerParameterf
+	cifVoid1Float    types.CallInterface // void fn(float32) - ClearDepthf
+	cifVoid2Float    types.CallInterface // void fn(float32, float32) - DepthRangef
 	cifInitialized   bool
 )
 
 // initCommonCallInterfaces prepares reusable CallInterface signatures.
-//
-//nolint:maintidx // FFI initialization requires many CallInterface setups
 func initCommonCallInterfaces() error {
 	if cifInitialized {
 		return nil
@@ -120,6 +120,25 @@ func initCommonCallInterfaces() error {
 		return err
 	}
 
+	// void fn(float32) - glClearDepthf
+	err = ffi.PrepareCallInterface(&cifVoid1Float, types.DefaultCall,
+		types.VoidTypeDescriptor,
+		[]*types.TypeDescriptor{types.FloatTypeDescriptor})
+	if err != nil {
+		return err
+	}
+
+	// void fn(float32, float32) - glDepthRangef
+	err = ffi.PrepareCallInterface(&cifVoid2Float, types.DefaultCall,
+		types.VoidTypeDescriptor,
+		[]*types.TypeDescriptor{
+			types.FloatTypeDescriptor,
+			types.FloatTypeDescriptor,
+		})
+	if err != nil {
+		return err
+	}
+
 	// void* fn(uint32)
 	err = ffi.PrepareCallInterface(&cifPtr1, types.DefaultCall,
 		types.PointerTypeDescriptor,
@@ -172,7 +191,6 @@ func initCommonCallInterfaces() error {
 	if err != nil {
 		return err
 	}
-
 	// int32 fn(uint32, void*)
 	err = ffi.PrepareCallInterface(&cifInt322, types.DefaultCall,
 		types.SInt32TypeDescriptor,
@@ -391,6 +409,8 @@ func initCommonCallInterfaces() error {
 // Context holds OpenGL function pointers loaded at runtime via goffi.
 // Functions are loaded via eglGetProcAddress for all OpenGL functions.
 type Context struct {
+	isGLES bool
+
 	// Core GL 1.1
 	glGetError     unsafe.Pointer
 	glGetString    unsafe.Pointer
@@ -474,6 +494,7 @@ type Context struct {
 	glFramebufferTexture2D   unsafe.Pointer
 	glCheckFramebufferStatus unsafe.Pointer
 	glDrawBuffers            unsafe.Pointer
+	glClearBufferfv          unsafe.Pointer // GL 3.0+ — per-buffer float clear
 
 	// Pixel read/store (GL 1.0+)
 	glReadPixels  unsafe.Pointer
@@ -565,6 +586,7 @@ type ProcAddressFunc func(name string) unsafe.Pointer
 // contexts that generate GL_INVALID_ENUM at call time.
 func (c *Context) Load(getProcAddr ProcAddressFunc, isGLES ...bool) error {
 	gles := len(isGLES) > 0 && isGLES[0]
+	c.isGLES = gles
 	// Initialize common CallInterfaces
 	if err := initCommonCallInterfaces(); err != nil {
 		return err
@@ -671,6 +693,7 @@ func (c *Context) Load(getProcAddr ProcAddressFunc, isGLES ...bool) error {
 	c.glFramebufferTexture2D = getProcAddr("glFramebufferTexture2D")
 	c.glCheckFramebufferStatus = getProcAddr("glCheckFramebufferStatus")
 	c.glDrawBuffers = getProcAddr("glDrawBuffers")
+	c.glClearBufferfv = getProcAddr("glClearBufferfv")
 
 	// Pixel read/store
 	c.glReadPixels = getProcAddr("glReadPixels")
@@ -693,7 +716,11 @@ func (c *Context) Load(getProcAddr ProcAddressFunc, isGLES ...bool) error {
 	// Depth/Stencil
 	c.glDepthFunc = getProcAddr("glDepthFunc")
 	c.glDepthMask = getProcAddr("glDepthMask")
-	c.glDepthRange = getProcAddr("glDepthRange")
+	if gles {
+		c.glDepthRange = getProcAddr("glDepthRangef")
+	} else {
+		c.glDepthRange = getProcAddr("glDepthRange")
+	}
 	c.glStencilFunc = getProcAddr("glStencilFunc")
 	c.glStencilOp = getProcAddr("glStencilOp")
 	c.glStencilMask = getProcAddr("glStencilMask")
@@ -823,6 +850,24 @@ func (c *Context) ClearColor(r, g, b, a float32) {
 		unsafe.Pointer(&a),
 	}
 	_, _ = ffi.CallFunction(&cifVoid4Float, c.glClearColor, nil, args[:])
+}
+
+// ClearDepth sets the depth value used by glClear(GL_DEPTH_BUFFER_BIT).
+// On GLES the loaded function is glClearDepthf (float32).
+// On desktop GL it is glClearDepth (double) — but Linux GLES contexts always
+// load glClearDepthf, so we pass float32 unconditionally.
+func (c *Context) ClearDepth(depth float64) {
+	d := float32(depth)
+	args := [1]unsafe.Pointer{unsafe.Pointer(&d)}
+	_, _ = ffi.CallFunction(&cifVoid1Float, c.glClearDepth, nil, args[:])
+}
+
+// DepthRange sets the mapping of NDC depth to window depth.
+// On GLES the loaded function is glDepthRangef (float32).
+func (c *Context) DepthRange(near, far float64) {
+	n, f := float32(near), float32(far)
+	args := [2]unsafe.Pointer{unsafe.Pointer(&n), unsafe.Pointer(&f)}
+	_, _ = ffi.CallFunction(&cifVoid2Float, c.glDepthRange, nil, args[:])
 }
 
 func (c *Context) Viewport(x, y, width, height int32) {
@@ -1443,6 +1488,36 @@ func (c *Context) CheckFramebufferStatus(target uint32) uint32 {
 	args := [1]unsafe.Pointer{unsafe.Pointer(&target)}
 	_, _ = ffi.CallFunction(&cifUInt321, c.glCheckFramebufferStatus, unsafe.Pointer(&result), args[:])
 	return result
+}
+
+// DrawBuffers specifies a list of color buffers to be drawn into.
+// Matches Rust wgpu-hal GLES SetDrawColorBuffers (queue.rs:1202-1207).
+func (c *Context) DrawBuffers(bufs []uint32) {
+	if len(bufs) == 0 {
+		return
+	}
+	n := int32(len(bufs))
+	pBufs := &bufs[0]
+	args := [2]unsafe.Pointer{
+		unsafe.Pointer(&n),
+		unsafe.Pointer(&pBufs),
+	}
+	_, _ = ffi.CallFunction(&cifVoid2, c.glDrawBuffers, nil, args[:])
+}
+
+// ClearBufferfv clears a specific draw buffer with float values.
+// buffer must be GL_COLOR, drawBuffer is the index (0..MAX_DRAW_BUFFERS-1),
+// value points to 4 float32 values (RGBA).
+// Matches Rust wgpu-hal GLES ClearColorF (queue.rs:1222).
+func (c *Context) ClearBufferfv(buffer uint32, drawBuffer int32, value *[4]float32) {
+	db := uint32(drawBuffer)
+	pValue := unsafe.Pointer(value)
+	args := [3]unsafe.Pointer{
+		unsafe.Pointer(&buffer),
+		unsafe.Pointer(&db),
+		unsafe.Pointer(&pValue),
+	}
+	_, _ = ffi.CallFunction(&cifVoid3Shader, c.glClearBufferfv, nil, args[:])
 }
 
 // --- Renderbuffers ---

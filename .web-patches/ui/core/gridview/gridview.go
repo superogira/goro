@@ -9,6 +9,7 @@ import (
 	"github.com/gogpu/ui/core/scrollview"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -384,6 +385,9 @@ type Widget struct {
 	cfg     config
 	painter Painter
 
+	// Gesture recognizer for cell click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
+
 	// Internal scroll view (composition).
 	scroll  *scrollview.Widget
 	virtual *virtualContent
@@ -451,6 +455,17 @@ func New(opts ...Option) *Widget {
 	// Flutter: RenderObject.adoptChild sets parent on each child.
 	w.scroll.SetParent(w)
 
+	// Create ClickRecognizer for cell click handling (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			// Cell click is handled by content mouse event dispatch.
+		},
+	})
+
 	return w
 }
 
@@ -487,7 +502,7 @@ func (w *Widget) Layout(ctx widget.Context, constraints geometry.Constraints) ge
 
 	// Layout the internal scroll view with concrete constraints.
 	svConstraints := geometry.Tight(size)
-	w.scroll.Layout(ctx, svConstraints)
+	widget.LayoutChild(w.scroll, ctx, svConstraints)
 
 	return size
 }
@@ -548,10 +563,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 
 	// Bind item count signals.
 	if w.cfg.readonlyItemCountSignal != nil {
-		b := state.BindToScheduler(w.cfg.readonlyItemCountSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyItemCountSignal, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.itemCountSignal != nil {
-		b := state.BindToScheduler(w.cfg.itemCountSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.itemCountSignal, w, sched)
 		w.AddBinding(b)
 	}
 
@@ -575,10 +590,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 
 	// Bind columns signals.
 	if w.cfg.readonlyColumnsSignal != nil {
-		b := state.BindToScheduler(w.cfg.readonlyColumnsSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyColumnsSignal, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.columnsSignal != nil {
-		b := state.BindToScheduler(w.cfg.columnsSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.columnsSignal, w, sched)
 		w.AddBinding(b)
 	}
 
@@ -589,8 +604,22 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the grid view is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.clickRec != nil {
+		w.clickRec.Dispose()
+	}
 	w.scroll.Unmount()
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// GridView is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
 }
 
 // --- Public API ---
@@ -1128,7 +1157,7 @@ func (w *Widget) drawVisibleCells(ctx widget.Context, canvas widget.Canvas) {
 	}
 
 	// Update cell widget cache.
-	w.cache.update(startIdx, endIdx, w.cfg.cellContent, selectedIdx, w.hoveredIndex, cols)
+	w.cache.update(startIdx, endIdx, w.cfg.cellContent, selectedIdx, w.hoveredIndex, cols, ctx)
 
 	contentWidth := w.viewportWidth - w.scroll.ScrollbarInset()
 	_ = contentWidth // Used for future cell width scaling.
@@ -1193,7 +1222,7 @@ type cellCache struct {
 }
 
 // update ensures the cache contains widgets for the range [start, end).
-func (cc *cellCache) update(start, end int, content cdk.Content[CellContext], selectedIndex, hoveredIndex, cols int) {
+func (cc *cellCache) update(start, end int, content cdk.Content[CellContext], selectedIndex, hoveredIndex, cols int, ctx widget.Context) {
 	count := end - start
 	if count <= 0 {
 		cc.clear()
@@ -1202,6 +1231,13 @@ func (cc *cellCache) update(start, end int, content cdk.Content[CellContext], se
 
 	if cc.valid && cc.startIndex == start && cc.endIndex == end {
 		return
+	}
+
+	// Unmount old cell widgets before replacing the slice (#181).
+	for _, w := range cc.widgets {
+		if w != nil {
+			widget.UnmountTree(w)
+		}
 	}
 
 	if cap(cc.widgets) >= count {
@@ -1214,23 +1250,32 @@ func (cc *cellCache) update(start, end int, content cdk.Content[CellContext], se
 		for i := range cc.widgets {
 			cc.widgets[i] = nil
 		}
-	} else {
-		safeCols := cols
-		if safeCols <= 0 {
-			safeCols = 1
+		cc.startIndex = start
+		cc.endIndex = end
+		cc.valid = true
+		return
+	}
+
+	safeCols := cols
+	if safeCols <= 0 {
+		safeCols = 1
+	}
+	for i := range count {
+		idx := start + i
+		row := idx / safeCols
+		col := idx % safeCols
+		w := content.Render(CellContext{
+			Index:      idx,
+			Row:        row,
+			Col:        col,
+			IsSelected: idx == selectedIndex,
+			IsHovered:  idx == hoveredIndex,
+		})
+		// Mount cell widget so signal bindings activate (#181).
+		if w != nil && ctx != nil {
+			widget.MountTree(w, ctx)
 		}
-		for i := range count {
-			idx := start + i
-			row := idx / safeCols
-			col := idx % safeCols
-			cc.widgets[i] = content.Render(CellContext{
-				Index:      idx,
-				Row:        row,
-				Col:        col,
-				IsSelected: idx == selectedIndex,
-				IsHovered:  idx == hoveredIndex,
-			})
-		}
+		cc.widgets[i] = w
 	}
 
 	cc.startIndex = start
@@ -1251,9 +1296,12 @@ func (cc *cellCache) invalidate() {
 	cc.valid = false
 }
 
-// clear resets the cache entirely.
+// clear resets the cache entirely and unmounts all cell widgets.
 func (cc *cellCache) clear() {
-	for i := range cc.widgets {
+	for i, w := range cc.widgets {
+		if w != nil {
+			widget.UnmountTree(w)
+		}
 		cc.widgets[i] = nil
 	}
 	cc.widgets = cc.widgets[:0]
@@ -1264,8 +1312,9 @@ func (cc *cellCache) clear() {
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
-	_ a11y.Accessible  = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ a11y.Accessible      = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

@@ -81,6 +81,9 @@ func (m *mockPlatformProvider) FontScale() float32 { return m.fontScale }
 func (m *mockPlatformProvider) SubpixelLayout() gpucontext.SubpixelLayout {
 	return gpucontext.SubpixelNone
 }
+func (m *mockPlatformProvider) FontSmoothing() gpucontext.FontSmoothing {
+	return gpucontext.FontSmoothingGrayscale
+}
 
 // mockEventSource implements gpucontext.EventSource and gpucontext.PointerEventSource for testing.
 type mockEventSource struct {
@@ -134,6 +137,18 @@ func (m *mockEventSource) OnIMECompositionEnd(fn func(string)) {
 }
 func (m *mockEventSource) OnPointer(fn func(gpucontext.PointerEvent)) {
 	m.onPointer = fn
+}
+
+// mockScrollEventSource exercises the detailed, position-carrying scroll
+// path. Keep it separate from mockEventSource because the bridge registers
+// either OnScrollEvent or OnScroll, never both.
+type mockScrollEventSource struct {
+	mockEventSource
+	onScrollEvent func(gpucontext.ScrollEvent)
+}
+
+func (m *mockScrollEventSource) OnScrollEvent(fn func(gpucontext.ScrollEvent)) {
+	m.onScrollEvent = fn
 }
 
 // --- App tests ---

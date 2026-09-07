@@ -20,19 +20,21 @@ func NewWindowID() WindowID {
 
 // Config holds platform-agnostic window configuration.
 type Config struct {
-	Title             string
-	Width             int
-	Height            int
-	Resizable         bool
-	Fullscreen        bool
-	Frameless         bool
-	TabbingMode       int
-	TabbingIdentifier string
-	MinWidth          int // 0 = no minimum constraint
-	MinHeight         int // 0 = no minimum constraint
-	MaxWidth          int // 0 = no maximum constraint
-	MaxHeight         int // 0 = no maximum constraint
-	Icon              image.Image
+	Title                string
+	Width                int
+	Height               int
+	Resizable            bool
+	Fullscreen           bool
+	Frameless            bool
+	Transparent          bool
+	UseDirectComposition bool // Windows DX12 only: set WS_EX_NOREDIRECTIONBITMAP at creation
+	TabbingMode          int
+	TabbingIdentifier    string
+	MinWidth             int // 0 = no minimum constraint
+	MinHeight            int // 0 = no minimum constraint
+	MaxWidth             int // 0 = no maximum constraint
+	MaxHeight            int // 0 = no maximum constraint
+	Icon                 image.Image
 }
 
 // Event represents a platform event.
@@ -57,6 +59,14 @@ type Event struct {
 
 	// Scroll (EventScroll)
 	Scroll gpucontext.ScrollEvent
+
+	// File drag-and-drop (EventDragEnter, EventDragDrop, EventDragMove, EventDragLeave)
+	DragPaths []string // file paths (set on DragEnter and DragDrop)
+	DragX     float64  // drop/hover position in physical pixels
+	DragY     float64  // drop/hover position in physical pixels
+
+	// Scale factor (EventScaleChanged)
+	ScaleFactor float64
 }
 
 // EventType represents the type of platform event.
@@ -77,6 +87,11 @@ const (
 	EventPointerLeave
 	EventScroll
 	EventExpose
+	EventDragEnter    // Files entered window area (OS file drag-and-drop)
+	EventDragMove     // Files moving over window
+	EventDragDrop     // Files dropped on window
+	EventDragLeave    // Files left window area
+	EventScaleChanged // DPI scale factor changed (ADR-059)
 )
 
 // PrepareFrameResult contains per-frame surface state from the platform layer.
@@ -159,6 +174,11 @@ type PlatformManager interface {
 
 	// SubpixelLayout returns the display's subpixel arrangement for LCD text.
 	SubpixelLayout() gpucontext.SubpixelLayout
+
+	// FontSmoothing returns the OS text anti-aliasing mode.
+	// Used by text rendering pipelines to select between aliased, grayscale,
+	// and subpixel anti-aliasing.
+	FontSmoothing() gpucontext.FontSmoothing
 
 	// SetAppName sets the application name (displayed in menus).
 	SetAppName(name string)
@@ -252,6 +272,16 @@ type PlatformWindow interface {
 	// On Wayland and Browser this is a no-op (compositor controls visibility).
 	Show()
 
+	// Hide hides the window.
+	// On Wayland this is a no-op (the compositor controls window visibility;
+	// clients can only minimize a toplevel). On Browser it is a no-op.
+	Hide()
+
+	// SetPosition moves the window to the given logical screen position
+	// (top-left origin, DIP). On Wayland this is a no-op — the compositor
+	// owns toplevel placement.
+	SetPosition(x, y int)
+
 	// SyncFrame synchronizes the rendered frame with the compositor.
 	SyncFrame()
 
@@ -264,9 +294,39 @@ type PlatformWindow interface {
 	// SetModalFrameCallback registers a callback for platform modal operations.
 	SetModalFrameCallback(fn func())
 
+	// RequestSize requests the window to resize its content area to the given
+	// logical size in DIP (device-independent pixels). The request is ignored
+	// when the window is in fullscreen mode. On Wayland, this is advisory —
+	// the compositor may reject the request for tiled/maximized windows.
+	RequestSize(width, height int)
+
+	// StartDrag initiates an outgoing drag-and-drop operation with the given
+	// file paths. The done callback is invoked when the drag completes with a
+	// result indicating whether the data was copied, moved, or canceled.
+	//
+	// This must be called from the main thread (inside a pointer-down handler
+	// or similar user gesture). On platforms that block the caller during the
+	// drag session (Windows DoDragDrop, X11 XDND source loop), the callback
+	// fires before StartDrag returns. On platforms with async DnD (Wayland,
+	// macOS), the callback fires later when the compositor or pasteboard
+	// reports completion.
+	StartDrag(paths []string, done func(DragResult))
+
 	// Destroy releases native window resources.
 	Destroy()
 }
+
+// DragResult describes how a drag-and-drop operation ended.
+type DragResult int
+
+const (
+	// DragCancelled means the user canceled the drag.
+	DragCancelled DragResult = iota
+	// DragCopied means the target copied the dragged data.
+	DragCopied
+	// DragMoved means the target moved the dragged data.
+	DragMoved
+)
 
 // DisplayLocker is an optional interface for platforms where the display
 // connection is shared between threads and requires explicit synchronization.
@@ -303,6 +363,23 @@ type FrameGater interface {
 	// when no frame callback is pending (initial state) or when the compositor
 	// has fired the done event. Returns false while waiting for the compositor.
 	FrameCallbackReady() bool
+}
+
+// PresentationSyncer is an optional transactional interface for platforms
+// whose compositor synchronization must be prepared before presentation.
+// It lets the renderer force synchronization for one frame independently of
+// the platform's normal frame-pacing policy and cancel the preparation if
+// presentation fails.
+type PresentationSyncer interface {
+	// PrepareFrameSync prepares compositor synchronization for the next
+	// presentation. When force is false, the platform's normal pacing policy
+	// applies. It returns true only when a synchronization request was prepared
+	// by this call and can therefore be canceled.
+	PrepareFrameSync(force bool) bool
+
+	// CancelFrameSync cancels the synchronization request most recently
+	// prepared by PrepareFrameSync.
+	CancelFrameSync()
 }
 
 type MenuRole int

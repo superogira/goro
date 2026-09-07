@@ -114,6 +114,7 @@ func preRegisterSelectors() {
 		"newSamplerStateWithDescriptor:",
 		"newCommandQueue",
 		"newRenderPipelineStateWithDescriptor:error:",
+		"setSupportIndirectCommandBuffers:",
 		"newLibraryWithSource:options:error:",
 		"newFunctionWithName:",
 		"supportsFamily:",
@@ -142,6 +143,8 @@ func preRegisterSelectors() {
 		"drawPrimitives:vertexStart:vertexCount:",
 		"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
 		"endEncoding",
+		// MTLComputeCommandEncoder
+		"setBytes:length:atIndex:",
 		// CAMetalLayer
 		"setDevice:",
 		"setPixelFormat:",
@@ -160,9 +163,10 @@ func preRegisterSelectors() {
 		// MTLTexture
 		"width", "height", "depth",
 		"pixelFormat", "textureType",
+		"replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:",
 		"newTextureViewWithPixelFormat:",
 		// Descriptors
-		"setWidth:", "setHeight:", "setDepth:",
+		"setWidth:", "setHeight:", "setDepth:", "setArrayLength:",
 		"setPixelFormat:", "setTextureType:", "setUsage:",
 		"setStorageMode:", "setMipmapLevelCount:", "setSampleCount:",
 		// MTLRenderPipelineDescriptor

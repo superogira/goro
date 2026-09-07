@@ -11,6 +11,11 @@ import (
 	"github.com/gogpu/wgpu/hal"
 )
 
+// instanceEnumerateMu serializes HAL backend probing during NewInstance.
+// Concurrent CreateInstance calls on Windows CI (kolkov/racedetector) can
+// otherwise race inside driver init while enumerating adapters.
+var instanceEnumerateMu sync.Mutex
+
 // Instance represents a WebGPU instance for GPU discovery and initialization.
 // The instance is responsible for enumerating available GPU adapters and
 // creating adapters based on application requirements.
@@ -20,16 +25,30 @@ import (
 //
 // Thread-safe for concurrent use.
 type Instance struct {
-	mu       sync.RWMutex
-	backends gputypes.Backends
-	flags    gputypes.InstanceFlags
+	mu sync.RWMutex
+	// surfaceRequestMu serializes surface-aware adapter requests. Deferred GLES
+	// enumeration is intentionally one-shot, so the snapshot that distinguishes
+	// adapters created for the current surface must be taken atomically with that
+	// enumeration.
+	surfaceRequestMu sync.Mutex
+	backends         gputypes.Backends
+	flags            gputypes.InstanceFlags
 
 	// adapters contains the registered adapter IDs.
 	adapters []AdapterID
 
+	// surfaceAdapters contains request-local adapters created for a compatible
+	// surface. They are intentionally kept out of adapters so ordinary adapter
+	// enumeration and selection never retain surface-bound queue state.
+	surfaceAdapters []AdapterID
+
 	// halInstances tracks HAL instances created for each backend.
 	// These are destroyed when the Instance is destroyed.
 	halInstances []hal.Instance
+	// halInstanceEntries preserves backend priority alongside each HAL instance.
+	// Surface creation uses this ordered view to mirror Rust wgpu's attempt to
+	// create a raw surface for every enabled backend.
+	halInstanceEntries []HALInstanceEntry
 
 	// halInstanceMap maps backend type to its HAL instance for backend-specific
 	// surface creation. When a device uses a different backend than the initially
@@ -46,17 +65,33 @@ type Instance struct {
 	// glesEnumerated tracks whether deferred GLES adapters have been enumerated.
 	glesEnumerated bool
 
-	// useMock indicates whether to use mock adapters (for testing or when no HAL available).
+	// useMock indicates whether this instance was explicitly created with mock
+	// adapters through NewInstanceWithMock.
 	useMock bool
+}
+
+// HALInstanceEntry associates an enabled backend with its HAL instance.
+// Entries are ordered by the same backend priority used during discovery.
+type HALInstanceEntry struct {
+	Backend  gputypes.Backend
+	Instance hal.Instance
+}
+
+// surfaceAdapterQualifier is an optional backend capability. It intentionally
+// stays private to core so the stable HAL Adapter interface does not grow a
+// surface-specific method. Vulkan implements the method on its concrete
+// adapter and returns a request-local wrapper with queue/surface state.
+type surfaceAdapterQualifier interface {
+	QualifySurface(surface hal.Surface) (hal.Adapter, error)
 }
 
 // NewInstance creates a new WebGPU instance with the given descriptor.
 // If desc is nil, default settings are used.
 //
 // The instance will enumerate available GPU adapters based on the enabled
-// backends specified in the descriptor. If HAL backends are available,
-// real GPU adapters will be enumerated. Otherwise, a mock adapter is created
-// for testing purposes.
+// backends specified in the descriptor. If no provider is available, the
+// instance remains empty and RequestAdapter reports the failure. Tests that
+// need a deterministic adapter must opt in through NewInstanceWithMock.
 func NewInstance(desc *gputypes.InstanceDescriptor) *Instance {
 	if desc == nil {
 		defaultDesc := gputypes.DefaultInstanceDescriptor()
@@ -73,13 +108,7 @@ func NewInstance(desc *gputypes.InstanceDescriptor) *Instance {
 	}
 
 	// Try to enumerate real adapters via HAL backends
-	realAdaptersFound := i.enumerateRealAdapters(desc)
-
-	// Fall back to mock adapter if no real adapters were found
-	if !realAdaptersFound {
-		i.useMock = true
-		i.createMockAdapter()
-	}
+	i.enumerateRealAdapters(desc)
 
 	trackResource(uintptr(unsafe.Pointer(i)), "Instance") //nolint:gosec // debug tracking uses pointer as unique ID
 	return i
@@ -107,19 +136,18 @@ func NewInstanceWithMock(desc *gputypes.InstanceDescriptor) *Instance {
 	return i
 }
 
-// enumerateRealAdapters attempts to enumerate real GPU adapters via HAL backends.
-// Returns true if at least one real adapter was found.
-func (i *Instance) enumerateRealAdapters(desc *gputypes.InstanceDescriptor) bool {
+// enumerateRealAdapters attempts to enumerate real GPU adapters via HAL
+// backends. If none are available, the instance remains empty.
+func (i *Instance) enumerateRealAdapters(desc *gputypes.InstanceDescriptor) {
+	instanceEnumerateMu.Lock()
+	defer instanceEnumerateMu.Unlock()
+
 	// First, ensure HAL backends are registered
 	RegisterHALBackends()
 
 	// Get backend providers filtered by the enabled backends mask
 	providers := FilterBackendsByMask(desc.Backends)
-	if len(providers) == 0 {
-		return false
-	}
 
-	foundAdapters := false
 	hub := GetGlobal().Hub()
 
 	// Create HAL descriptor
@@ -160,6 +188,10 @@ func (i *Instance) enumerateRealAdapters(desc *gputypes.InstanceDescriptor) bool
 		// Lock() call creates the GL context on the render thread via sync.Once.
 		if provider.Variant() == gputypes.BackendGL {
 			i.halInstances = append(i.halInstances, halInstance)
+			i.halInstanceEntries = append(i.halInstanceEntries, HALInstanceEntry{
+				Backend:  provider.Variant(),
+				Instance: halInstance,
+			})
 			i.halInstanceMap[provider.Variant()] = halInstance
 			i.deferredGLES = append(i.deferredGLES, halInstance)
 			continue
@@ -167,6 +199,10 @@ func (i *Instance) enumerateRealAdapters(desc *gputypes.InstanceDescriptor) bool
 
 		// Track HAL instance for cleanup
 		i.halInstances = append(i.halInstances, halInstance)
+		i.halInstanceEntries = append(i.halInstanceEntries, HALInstanceEntry{
+			Backend:  provider.Variant(),
+			Instance: halInstance,
+		})
 		i.halInstanceMap[provider.Variant()] = halInstance
 
 		// Enumerate adapters from this backend
@@ -175,22 +211,20 @@ func (i *Instance) enumerateRealAdapters(desc *gputypes.InstanceDescriptor) bool
 			exposed := &exposedAdapters[idx] // Use pointer to avoid copy
 			// Create core.Adapter wrapping the HAL adapter
 			adapter := &Adapter{
-				Info:            exposed.Info,
-				Features:        exposed.Features,
-				Limits:          exposed.Capabilities.Limits,
-				Backend:         exposed.Info.Backend,
-				halAdapter:      exposed.Adapter,
-				halCapabilities: &exposed.Capabilities,
+				Info:                  exposed.Info,
+				Features:              exposed.Features,
+				Limits:                exposed.Capabilities.Limits,
+				DownlevelCapabilities: exposed.Capabilities.DownlevelCapabilities,
+				Backend:               exposed.Info.Backend,
+				halAdapter:            exposed.Adapter,
+				halCapabilities:       &exposed.Capabilities,
 			}
 
 			// Register in the hub
 			adapterID := hub.RegisterAdapter(adapter)
 			i.adapters = append(i.adapters, adapterID)
-			foundAdapters = true
 		}
 	}
-
-	return foundAdapters
 }
 
 // createMockAdapter creates a mock adapter for testing purposes.
@@ -246,7 +280,7 @@ func (i *Instance) EnumerateAdapters() []AdapterID {
 //   - CompatibleSurface: adapter must support the given surface
 //
 // If options is nil, the first available adapter is returned.
-func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (AdapterID, error) { //nolint:gocognit // adapter selection with GPU preference logic
+func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (AdapterID, error) {
 	// Trigger deferred GLES adapter enumeration if not yet done.
 	// When called directly (without a prior RequestAdapterWithSurface call) the
 	// nil surfaceHint causes EnumerateAdapters to return a zero-value Adapter
@@ -257,16 +291,26 @@ func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (Adap
 	i.enumerateDeferredGLES(nil)
 
 	i.mu.RLock()
-	defer i.mu.RUnlock()
+	adapterIDs := append([]AdapterID(nil), i.adapters...)
+	i.mu.RUnlock()
 
-	if len(i.adapters) == 0 {
+	return selectAdapterIDs(options, adapterIDs)
+}
+
+// selectAdapterIDs applies the public adapter selection policy to an explicit
+// candidate list. Keeping the policy independent from Instance state lets a
+// surface request select request-local adapters without exposing unqualified
+// cached adapters to the selection pass.
+func selectAdapterIDs(options *gputypes.RequestAdapterOptions, adapterIDs []AdapterID) (AdapterID, error) { //nolint:gocognit // adapter selection with GPU preference logic
+	if len(adapterIDs) == 0 {
 		return AdapterID{}, fmt.Errorf("no adapters available")
 	}
 
+	hub := GetGlobal().Hub()
+
 	// If no options specified, prefer non-CPU adapters (GPU > Software fallback).
 	if options == nil {
-		hub := GetGlobal().Hub()
-		for _, adapterID := range i.adapters {
+		for _, adapterID := range adapterIDs {
 			adapter, err := hub.GetAdapter(adapterID)
 			if err != nil {
 				continue
@@ -275,14 +319,12 @@ func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (Adap
 				return adapterID, nil
 			}
 		}
-		return i.adapters[0], nil // fallback to first (Software)
+		return adapterIDs[0], nil // fallback to first (Software)
 	}
 
-	hub := GetGlobal().Hub()
-
-	// ForceFallbackAdapter: return first CPU adapter directly
+	// ForceFallbackAdapter: return first CPU adapter directly.
 	if options.ForceFallbackAdapter {
-		for _, adapterID := range i.adapters {
+		for _, adapterID := range adapterIDs {
 			adapter, err := hub.GetAdapter(adapterID)
 			if err != nil {
 				continue
@@ -304,7 +346,7 @@ func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (Adap
 	hasGPUFallback := false
 
 	// Pass 1: find preferred adapter + track fallbacks.
-	for _, adapterID := range i.adapters {
+	for _, adapterID := range adapterIDs {
 		adapter, err := hub.GetAdapter(adapterID)
 		if err != nil {
 			continue
@@ -318,13 +360,13 @@ func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (Adap
 			continue
 		}
 
-		// Track first non-CPU adapter as GPU fallback
+		// Track first non-CPU adapter as GPU fallback.
 		if !hasGPUFallback {
 			gpuFallback = adapterID
 			hasGPUFallback = true
 		}
 
-		// Check power preference — return immediately on exact match
+		// Check power preference — return immediately on exact match.
 		if options.PowerPreference != gputypes.PowerPreferenceNone {
 			if matchesPowerPreference(adapter.Info.DeviceType, options.PowerPreference) {
 				return adapterID, nil
@@ -355,11 +397,161 @@ func (i *Instance) RequestAdapter(options *gputypes.RequestAdapterOptions) (Adap
 // a GL context, which is required before EnumerateAdapters can return a real
 // adapter. Calling without a surface yields a zero-value Adapter (nil glCtx).
 func (i *Instance) RequestAdapterWithSurface(options *gputypes.RequestAdapterOptions, surfaceHint hal.Surface) (AdapterID, error) {
-	// Run deferred GLES enumeration with the real surface hint BEFORE RequestAdapter
-	// calls enumerateDeferredGLES(nil). Once glesEnumerated is true the nil call
-	// inside RequestAdapter becomes a no-op, so the surface-backed adapters win.
-	i.enumerateDeferredGLES(surfaceHint)
-	return i.RequestAdapter(options)
+	if surfaceHint == nil {
+		return i.RequestAdapter(options)
+	}
+	return i.requestAdapterWithSurfaceResolver(options, func(gputypes.Backend) hal.Surface {
+		return surfaceHint
+	})
+}
+
+// RequestAdapterWithSurfaces requests an adapter using the surface created for
+// each adapter's own backend. This mirrors Rust wgpu's per-backend surface map
+// while preserving RequestAdapterWithSurface for callers that own one HAL.
+func (i *Instance) RequestAdapterWithSurfaces(options *gputypes.RequestAdapterOptions, surfaces map[gputypes.Backend]hal.Surface) (AdapterID, error) {
+	if len(surfaces) == 0 {
+		return i.RequestAdapter(options)
+	}
+	return i.requestAdapterWithSurfaceResolver(options, func(backend gputypes.Backend) hal.Surface {
+		return surfaces[backend]
+	})
+}
+
+func (i *Instance) requestAdapterWithSurfaceResolver(options *gputypes.RequestAdapterOptions, surfaceForBackend func(gputypes.Backend) hal.Surface) (AdapterID, error) {
+	i.surfaceRequestMu.Lock()
+	defer i.surfaceRequestMu.Unlock()
+
+	// Remember which adapters existed before deferred enumeration. Adapters
+	// created by EnumerateAdapters(surfaceHint) are already surface-qualified by
+	// their backend and can be used directly. Cached adapters are qualified via
+	// the optional HAL SurfaceAdapter interface below.
+	i.mu.RLock()
+	before := make(map[AdapterID]struct{}, len(i.adapters))
+	for _, adapterID := range i.adapters {
+		before[adapterID] = struct{}{}
+	}
+	i.mu.RUnlock()
+
+	// Run deferred GLES enumeration with the real surface hint before collecting
+	// candidates. Once glesEnumerated is true this is a no-op on later calls.
+	if glesSurface := surfaceForBackend(gputypes.BackendGL); glesSurface != nil {
+		i.enumerateDeferredGLES(glesSurface)
+	}
+
+	i.mu.RLock()
+	allAdapterIDs := append([]AdapterID(nil), i.adapters...)
+	i.mu.RUnlock()
+
+	hub := GetGlobal().Hub()
+	i.mu.RLock()
+	usingMock := i.useMock
+	i.mu.RUnlock()
+	candidates := make([]AdapterID, 0, len(allAdapterIDs))
+	qualifiedIDs := make([]AdapterID, 0, len(allAdapterIDs))
+	for _, adapterID := range allAdapterIDs {
+		adapter, err := hub.GetAdapter(adapterID)
+		if err != nil {
+			continue
+		}
+		surfaceHint := surfaceForBackend(adapter.Backend)
+		if surfaceHint == nil {
+			continue
+		}
+
+		// A newly enumerated adapter was produced with the surface hint. Keep
+		// that backend-owned adapter as-is; this preserves existing GLES
+		// enumeration behavior and avoids a second context query.
+		if _, isNew := before[adapterID]; !isNew {
+			candidates = append(candidates, adapterID)
+			continue
+		}
+
+		if adapter.halAdapter == nil {
+			if usingMock {
+				// Explicit mock instances have no native surface query. Preserve
+				// their established behavior instead of turning a test adapter
+				// request into an unexpected compatibility error.
+				candidates = append(candidates, adapterID)
+			}
+			continue
+		}
+
+		if qualifier, ok := adapter.halAdapter.(surfaceAdapterQualifier); ok {
+			qualified, err := qualifier.QualifySurface(surfaceHint)
+			if err != nil || qualified == nil {
+				continue
+			}
+
+			// Register a request-local core adapter. The cached adapter and its
+			// HAL object are left untouched; only the wrapper carries the queue
+			// family and checked surface snapshot into Open().
+			qualifiedCore := adapter
+			qualifiedCore.halAdapter = qualified
+			// Capabilities belong to the cached physical adapter. The qualified
+			// wrapper carries request-local surface capabilities through its HAL
+			// adapter and must not alias the cached pointer.
+			qualifiedCore.halCapabilities = nil
+			qualifiedID := hub.RegisterAdapter(&qualifiedCore)
+			i.mu.Lock()
+			i.surfaceAdapters = append(i.surfaceAdapters, qualifiedID)
+			i.mu.Unlock()
+			candidates = append(candidates, qualifiedID)
+			qualifiedIDs = append(qualifiedIDs, qualifiedID)
+			continue
+		}
+
+		// Backends without a request-local qualifier may still expose a
+		// checked surface capability query. Do not treat a nil result as
+		// compatible, and never fall back to an unqualified Vulkan adapter.
+		if adapter.halAdapter.SurfaceCapabilities(surfaceHint) != nil {
+			candidates = append(candidates, adapterID)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return AdapterID{}, fmt.Errorf("no adapters compatible with surface")
+	}
+	selectedID, err := selectAdapterIDs(options, candidates)
+	for _, qualifiedID := range qualifiedIDs {
+		if err != nil || qualifiedID != selectedID {
+			i.ReleaseSurfaceAdapter(qualifiedID)
+		}
+	}
+	return selectedID, err
+}
+
+// ReleaseSurfaceAdapter releases a request-local adapter created by
+// RequestAdapterWithSurface. Ordinary cached adapter IDs are instance-owned and
+// intentionally ignored, so public Adapter.Release can use this method without
+// special-casing the selected backend.
+func (i *Instance) ReleaseSurfaceAdapter(id AdapterID) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	index := -1
+	for candidateIndex, candidateID := range i.surfaceAdapters {
+		if candidateID == id {
+			index = candidateIndex
+			break
+		}
+	}
+	if index < 0 {
+		return
+	}
+
+	hub := GetGlobal().Hub()
+	if adapter, err := hub.GetAdapter(id); err == nil {
+		if adapter.halAdapter != nil {
+			adapter.halAdapter.Destroy()
+		}
+		_, _ = hub.UnregisterAdapter(id)
+	}
+	copy(i.surfaceAdapters[index:], i.surfaceAdapters[index+1:])
+	i.surfaceAdapters[len(i.surfaceAdapters)-1] = AdapterID{}
+	i.surfaceAdapters = i.surfaceAdapters[:len(i.surfaceAdapters)-1]
 }
 
 // enumerateDeferredGLES enumerates adapters for deferred GLES HAL instances.
@@ -386,12 +578,13 @@ func (i *Instance) enumerateDeferredGLES(surfaceHint hal.Surface) {
 		for idx := range exposedAdapters {
 			exposed := &exposedAdapters[idx]
 			adapter := &Adapter{
-				Info:            exposed.Info,
-				Features:        exposed.Features,
-				Limits:          exposed.Capabilities.Limits,
-				Backend:         exposed.Info.Backend,
-				halAdapter:      exposed.Adapter,
-				halCapabilities: &exposed.Capabilities,
+				Info:                  exposed.Info,
+				Features:              exposed.Features,
+				Limits:                exposed.Capabilities.Limits,
+				DownlevelCapabilities: exposed.Capabilities.DownlevelCapabilities,
+				Backend:               exposed.Info.Backend,
+				halAdapter:            exposed.Adapter,
+				halCapabilities:       &exposed.Capabilities,
 			}
 
 			adapterID := hub.RegisterAdapter(adapter)
@@ -401,47 +594,6 @@ func (i *Instance) enumerateDeferredGLES(surfaceHint hal.Surface) {
 
 	// Clear deferred list -- enumeration is done.
 	i.deferredGLES = nil
-
-	// If we were in mock mode and now have real adapters from GLES,
-	// remove mock adapters so real ones are selected first.
-	if i.useMock && i.hasRealAdaptersLocked(hub) {
-		i.useMock = false
-		i.removeMockAdaptersLocked(hub)
-	}
-}
-
-// hasRealAdaptersLocked checks if any adapter has a non-nil HAL adapter.
-// Caller must hold i.mu.
-func (i *Instance) hasRealAdaptersLocked(hub *Hub) bool {
-	for _, adapterID := range i.adapters {
-		adapter, err := hub.GetAdapter(adapterID)
-		if err != nil {
-			continue
-		}
-		if adapter.halAdapter != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// removeMockAdaptersLocked filters out mock adapters (halAdapter == nil) from
-// the adapter list and unregisters them from the hub.
-// Caller must hold i.mu.
-func (i *Instance) removeMockAdaptersLocked(hub *Hub) {
-	filtered := make([]AdapterID, 0, len(i.adapters))
-	for _, adapterID := range i.adapters {
-		adapter, err := hub.GetAdapter(adapterID)
-		if err != nil {
-			continue
-		}
-		if adapter.halAdapter != nil {
-			filtered = append(filtered, adapterID)
-		} else {
-			_, _ = hub.UnregisterAdapter(adapterID)
-		}
-	}
-	i.adapters = filtered
 }
 
 // matchesPowerPreference checks if a device type matches the power preference.
@@ -473,8 +625,8 @@ func (i *Instance) Flags() gputypes.InstanceFlags {
 }
 
 // IsMock returns true if the instance is using mock adapters.
-// Mock adapters are used when no HAL backends are available or
-// when the instance was explicitly created with NewInstanceWithMock.
+// Mock adapters are used only when the instance was explicitly created with
+// NewInstanceWithMock.
 func (i *Instance) IsMock() bool {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
@@ -499,6 +651,15 @@ func (i *Instance) HALInstance() hal.Instance {
 	return nil
 }
 
+// HALInstanceEntries returns enabled HAL instances in backend-priority order.
+// The returned slice is a snapshot and may be inspected without holding the
+// Instance lock.
+func (i *Instance) HALInstanceEntries() []HALInstanceEntry {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return append([]HALInstanceEntry(nil), i.halInstanceEntries...)
+}
+
 // HALInstanceForBackend returns the HAL instance for a specific backend type.
 // Returns nil if no instance exists for the given backend.
 // Used to re-create surfaces when the device's backend differs from the
@@ -521,6 +682,9 @@ func (i *Instance) HALInstanceMap() map[gputypes.Backend]hal.Instance {
 // This includes unregistering all adapters and destroying HAL instances.
 // After calling Destroy, the instance should not be used.
 func (i *Instance) Destroy() {
+	i.surfaceRequestMu.Lock()
+	defer i.surfaceRequestMu.Unlock()
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -545,10 +709,25 @@ func (i *Instance) Destroy() {
 	}
 	i.adapters = nil
 
+	// Request-local surface adapters are separate from the ordinary adapter
+	// list, but still belong to this instance and must be released here.
+	for _, adapterID := range i.surfaceAdapters {
+		adapter, err := hub.GetAdapter(adapterID)
+		if err != nil {
+			continue
+		}
+		if adapter.halAdapter != nil {
+			adapter.halAdapter.Destroy()
+		}
+		_, _ = hub.UnregisterAdapter(adapterID)
+	}
+	i.surfaceAdapters = nil
+
 	// Destroy all HAL instances (includes deferred GLES instances).
 	for _, halInstance := range i.halInstances {
 		halInstance.Destroy()
 	}
 	i.halInstances = nil
+	i.halInstanceEntries = nil
 	i.deferredGLES = nil
 }

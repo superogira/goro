@@ -158,3 +158,35 @@ func (w *WidgetBase) layoutCacheStore(c geometry.Constraints, size geometry.Size
 	w.lastSize = size
 	w.layoutCacheValid = true
 }
+
+// InvalidateLayoutTree clears the layout cache on every descendant of w,
+// without touching w itself (the caller is expected to have already
+// invalidated w via [WidgetBase.MarkNeedsLayout]).
+//
+// This is the downward complement of MarkNeedsLayout's upward propagation.
+// When a widget's layout-affecting state changes (via signal binding), its
+// children may produce different Layout results even for the same constraints.
+// Clearing their caches ensures [LayoutChild] re-measures them.
+//
+// The walk uses [Widget.Children], so overridden Children methods dispatch
+// correctly to the concrete widget type.
+func InvalidateLayoutTree(w Widget) {
+	if w == nil {
+		return
+	}
+	for _, child := range w.Children() {
+		invalidateLayoutSubtree(child)
+	}
+}
+
+func invalidateLayoutSubtree(w Widget) {
+	if w == nil {
+		return
+	}
+	if lc, ok := w.(interface{ InvalidateLayoutCache() }); ok {
+		lc.InvalidateLayoutCache()
+	}
+	for _, child := range w.Children() {
+		invalidateLayoutSubtree(child)
+	}
+}

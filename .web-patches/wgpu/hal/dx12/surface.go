@@ -7,6 +7,7 @@ package dx12
 
 import (
 	"fmt"
+	"os"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -24,6 +25,7 @@ const maxFrameLatency = 2
 // backBuffer represents a back buffer resource and its RTV.
 type backBuffer struct {
 	resource  *d3d12.ID3D12Resource
+	texture   *Texture // shared queue-scheduled state owner
 	rtvHandle d3d12.D3D12_CPU_DESCRIPTOR_HANDLE
 	rtvIndex  uint32 // Heap index for recycling on release
 }
@@ -80,22 +82,67 @@ func (s *Surface) createSwapchain(device *Device, config *hal.SurfaceConfigurati
 		Flags:       swapchainFlags,
 	}
 
-	// Create swapchain using factory and command queue
-	swapchain1, err := s.instance.factory.CreateSwapChainForHwnd(
-		unsafe.Pointer(device.directQueue),
-		s.hwnd,
-		&desc,
-		nil, // fullscreen desc (windowed)
-		nil, // restrict to output
-	)
-	if err != nil {
-		return fmt.Errorf("dx12: CreateSwapChainForHwnd failed: %w", err)
+	// Determine swap chain creation path.
+	// DirectComposition is required for per-pixel alpha (DXGI_ALPHA_MODE_PREMULTIPLIED)
+	// because CreateSwapChainForHwnd only supports DXGI_ALPHA_MODE_IGNORE.
+	// GOGPU_DX12_FORCE_HWND=1 overrides this for RenderDoc compatibility (RenderDoc
+	// cannot capture frames through DirectComposition).
+	useDComp := config.AlphaMode == hal.CompositeAlphaModePremultiplied &&
+		os.Getenv("GOGPU_DX12_FORCE_HWND") != "1"
+
+	var swapchain1 *dxgi.IDXGISwapChain1
+
+	if useDComp {
+		// DirectComposition path — create swap chain via CreateSwapChainForComposition
+		// and bind it to a DComp visual tree rooted on the HWND.
+		s.dcomp = &dcompState{}
+		if err := s.dcomp.init(s.hwnd); err != nil {
+			s.dcomp = nil
+			return fmt.Errorf("dx12: DirectComposition init failed: %w", err)
+		}
+
+		sc, err := s.instance.factory.CreateSwapChainForComposition(
+			unsafe.Pointer(device.directQueue),
+			&desc,
+			nil, // restrict to output
+		)
+		if err != nil {
+			s.dcomp.release()
+			s.dcomp = nil
+			return fmt.Errorf("dx12: CreateSwapChainForComposition failed: %w", err)
+		}
+		swapchain1 = sc
+
+		// Bind swap chain to DComp visual and commit the composition.
+		if err := s.dcomp.bindSwapChain(swapchain1); err != nil {
+			swapchain1.Release()
+			s.dcomp.release()
+			s.dcomp = nil
+			return fmt.Errorf("dx12: DComp bindSwapChain failed: %w", err)
+		}
+	} else {
+		// Standard HWND path — swap chain is directly associated with the window.
+		sc, err := s.instance.factory.CreateSwapChainForHwnd(
+			unsafe.Pointer(device.directQueue),
+			s.hwnd,
+			&desc,
+			nil, // fullscreen desc (windowed)
+			nil, // restrict to output
+		)
+		if err != nil {
+			return fmt.Errorf("dx12: CreateSwapChainForHwnd failed: %w", err)
+		}
+		swapchain1 = sc
 	}
 
 	// Query for IDXGISwapChain4 interface (required for GetCurrentBackBufferIndex)
 	swapchain4, err := querySwapChain4(swapchain1)
 	if err != nil {
 		swapchain1.Release()
+		if s.dcomp != nil {
+			s.dcomp.release()
+			s.dcomp = nil
+		}
 		return fmt.Errorf("dx12: failed to query IDXGISwapChain4: %w", err)
 	}
 	// Release the original swapchain1 reference (swapchain4 holds a reference)
@@ -118,16 +165,25 @@ func (s *Surface) createSwapchain(device *Device, config *hal.SurfaceConfigurati
 	// Without this wait, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT is a no-op.
 	s.frameLatencyWaitableObject = swapchain4.GetFrameLatencyWaitableObject()
 
-	// Disable Alt+Enter fullscreen toggle
-	if err := s.instance.factory.MakeWindowAssociation(s.hwnd, dxgi.DXGI_MWA_NO_ALT_ENTER); err != nil {
-		// Non-fatal, just continue
-		_ = err
+	// Disable Alt+Enter fullscreen toggle (HWND path only — DirectComposition
+	// swap chains are not associated with the HWND, so DXGI Alt+Enter
+	// interception does not apply). Matches Rust wgpu: MakeWindowAssociation
+	// is called only for SurfaceTarget::WndHandle.
+	if s.dcomp == nil {
+		if err := s.instance.factory.MakeWindowAssociation(s.hwnd, dxgi.DXGI_MWA_NO_ALT_ENTER); err != nil {
+			// Non-fatal, just continue
+			_ = err
+		}
 	}
 
 	// Create RTVs for back buffers
 	if err := s.createBackBufferRTVs(); err != nil {
 		swapchain4.Release()
 		s.swapchain = nil
+		if s.dcomp != nil {
+			s.dcomp.release()
+			s.dcomp = nil
+		}
 		return err
 	}
 
@@ -136,12 +192,23 @@ func (s *Surface) createSwapchain(device *Device, config *hal.SurfaceConfigurati
 		return err
 	}
 
-	hal.Logger().Info("dx12: surface configured",
-		"width", config.Width,
-		"height", config.Height,
-		"format", config.Format,
-		"presentMode", config.PresentMode,
-	)
+	if useDComp {
+		hal.Logger().Info("dx12: surface configured (DirectComposition)",
+			"width", config.Width,
+			"height", config.Height,
+			"format", config.Format,
+			"presentMode", config.PresentMode,
+			"alphaMode", config.AlphaMode,
+		)
+	} else {
+		hal.Logger().Info("dx12: surface configured",
+			"width", config.Width,
+			"height", config.Height,
+			"format", config.Format,
+			"presentMode", config.PresentMode,
+			"alphaMode", config.AlphaMode,
+		)
+	}
 
 	return nil
 }
@@ -183,10 +250,23 @@ func (s *Surface) createBackBufferRTVs() error {
 		s.device.raw.CreateRenderTargetView(resource, nil, rtvHandle)
 
 		s.backBuffers[i] = backBuffer{
-			resource:  resource,
+			resource: resource,
+			texture: &Texture{
+				raw:          resource,
+				format:       s.halFormat,
+				dimension:    gputypes.TextureDimension2D,
+				size:         hal.Extent3D{Width: s.width, Height: s.height, DepthOrArrayLayers: 1},
+				mipLevels:    1,
+				samples:      1,
+				usage:        gputypes.TextureUsageRenderAttachment,
+				device:       s.device,
+				isExternal:   true,
+				currentState: d3d12.D3D12_RESOURCE_STATE_PRESENT,
+			},
 			rtvHandle: rtvHandle,
 			rtvIndex:  rtvIndex,
 		}
+		s.backBuffers[i].texture.stateOwner.setTextureStates([]d3d12.D3D12_RESOURCE_STATES{d3d12.D3D12_RESOURCE_STATE_PRESENT})
 	}
 
 	return nil
@@ -196,11 +276,15 @@ func (s *Surface) createBackBufferRTVs() error {
 func (s *Surface) releaseBackBuffers() {
 	for i := range s.backBuffers {
 		if s.backBuffers[i].resource != nil {
+			if s.backBuffers[i].texture != nil {
+				s.backBuffers[i].texture.raw = nil
+				s.backBuffers[i].texture = nil
+			}
 			s.backBuffers[i].resource.Release()
 			s.backBuffers[i].resource = nil
 		}
 		// Recycle RTV descriptor slot for reuse (prevents heap exhaustion on resize)
-		if s.device != nil {
+		if s.device != nil && s.device.rtvHeap != nil {
 			s.device.rtvHeap.Free(s.backBuffers[i].rtvIndex, 1)
 		}
 	}
@@ -390,7 +474,7 @@ func textureFormatToDXGI(format gputypes.TextureFormat) dxgi.DXGI_FORMAT {
 }
 
 // compositeAlphaModeToDXGI converts HAL CompositeAlphaMode to DXGI_ALPHA_MODE.
-func compositeAlphaModeToDXGI(mode hal.CompositeAlphaMode) dxgi.DXGI_ALPHA_MODE {
+func compositeAlphaModeToDXGI(mode gputypes.CompositeAlphaMode) dxgi.DXGI_ALPHA_MODE {
 	switch mode {
 	case hal.CompositeAlphaModePremultiplied:
 		return dxgi.DXGI_ALPHA_MODE_PREMULTIPLIED
@@ -414,6 +498,7 @@ type SurfaceTexture struct {
 	surface    *Surface
 	index      uint32
 	resource   *d3d12.ID3D12Resource
+	stateOwner *Texture
 	rtvHandle  d3d12.D3D12_CPU_DESCRIPTOR_HANDLE
 	format     gputypes.TextureFormat
 	width      uint32
@@ -421,10 +506,15 @@ type SurfaceTexture struct {
 	suboptimal bool
 }
 
-// CurrentUsage returns 0 — DX12 surface textures are managed by swapchain, state tracked externally.
-func (t *SurfaceTexture) CurrentUsage() gputypes.TextureUsage { return 0 }
-func (t *SurfaceTexture) AddPendingRef()                      {}
-func (t *SurfaceTexture) DecPendingRef()                      {}
+// CurrentUsage returns the queue-scheduled usage of the shared back-buffer owner.
+func (t *SurfaceTexture) CurrentUsage() gputypes.TextureUsage {
+	if t == nil || t.stateOwner == nil {
+		return 0
+	}
+	return t.stateOwner.CurrentUsage()
+}
+func (t *SurfaceTexture) AddPendingRef() {}
+func (t *SurfaceTexture) DecPendingRef() {}
 
 // Destroy implements hal.SurfaceTexture.
 // Surface textures are owned by the swapchain and should not be destroyed individually.

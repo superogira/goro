@@ -15,8 +15,10 @@ import (
 	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/ui/app"
 	"github.com/gogpu/ui/compositor"
+	"github.com/gogpu/ui/dnd"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/render"
+	"github.com/gogpu/ui/widget"
 )
 
 var (
@@ -28,7 +30,8 @@ var (
 
 func isDebugDamageEnabled() bool {
 	debugDamageOnce.Do(func() {
-		debugDamageEnabled = os.Getenv("GOGPU_DEBUG_DAMAGE") == "1"
+		v := os.Getenv("GOGPU_DEBUG_DAMAGE")
+		debugDamageEnabled = v == "overlay" || v == "overlay,log" || v == "log,overlay"
 	})
 	return debugDamageEnabled
 }
@@ -68,9 +71,25 @@ func Run(gogpuApp *gogpu.App, uiApp *app.App) error {
 		uiApp:    uiApp,
 	}
 
+	widget.RegisterClipboardProvider(gogpuApp)
+
 	gogpuApp.OnDraw(rl.draw)
 
+	// Bridge OS file drag-and-drop to ui dnd system.
+	// When the OS delivers a file drop event, hit-test registered
+	// DropTargets at the drop position and deliver the DragData.
+	gogpuApp.OnDragDrop(func(paths []string, x, y float64) {
+		mgr := uiApp.Window().DndManager()
+		data := dnd.DragData{
+			Kind:    dnd.KindFile,
+			Payload: dnd.FilePayload{Paths: paths},
+		}
+		mgr.DropExternal(data, x, y)
+	})
+
 	gogpuApp.OnClose(func() {
+		// Teardown widget trees, stop animation pumper (#175).
+		uiApp.Window().Close()
 		rl.releaseBoundaryTextures()
 		gg.CloseAccelerator()
 		if rl.canvas != nil {
@@ -89,16 +108,20 @@ func Run(gogpuApp *gogpu.App, uiApp *app.App) error {
 // all textures via non-MSAA path instead of replaying all scenes through
 // MSAA SDF pipeline.
 type renderLoop struct {
-	gogpuApp     *gogpu.App
-	uiApp        *app.App
-	canvas       *ggcanvas.Canvas
-	debugOverlay dirtyOverlay
+	gogpuApp               *gogpu.App
+	uiApp                  *app.App
+	canvas                 *ggcanvas.Canvas
+	dirtyOverlayRegistered bool // true after dirtyWidgetDebugOverlay registered with gogpu
 
 	// Per-boundary GPU texture cache. Key = boundary cache key (uint64).
 	// Each boundary rendered into its own offscreen texture.
 	// Clean boundaries: texture reused. Dirty: re-rendered.
 	boundaryTextures map[uint64]*boundaryTexEntry
-	fullRedrawNeeded bool // First frame, resize, theme change
+	fullRedrawNeeded bool // First frame, before boundary textures exist
+	// A canvas resize clears the surface but does not invalidate retained
+	// boundary textures. Keep the surface work distinct from fullRedrawNeeded,
+	// which deliberately makes every boundary texture dirty.
+	surfaceResizePending bool
 
 	// Damage-aware blit (ADR-030): when only child boundaries changed
 	// (root clean), skip root DrawGPUTextureBase and use
@@ -119,7 +142,7 @@ type renderLoop struct {
 
 	// Persistent layer tree (D5). Survives across frames; UpdateLayerTree
 	// reuses PictureLayerImpl/OffsetLayerImpl objects for unchanged boundaries.
-	// Nil on first frame or after releaseBoundaryTextures (resize, close).
+	// Nil on first frame or after releaseBoundaryTextures (close).
 	layerTree *compositor.OffsetLayerImpl
 
 	// Diagnostic counters (reset each frame, logged with GOGPU_DEBUG_DAMAGE=1).
@@ -137,6 +160,43 @@ type boundaryTexEntry struct {
 	sceneVersion uint64        // tracks which scene version was last rendered into texture
 	clipRect     geometry.Rect // screen-space clip for compositor scissoring
 	hasClip      bool          // whether clipRect is set
+}
+
+type surfaceResizer interface {
+	Resize(width, height int) error
+}
+
+func (rl *renderLoop) resizeSurface(resizer surfaceResizer, width, height int) bool {
+	if err := resizer.Resize(width, height); err != nil {
+		log.Printf("desktop: canvas.Resize: %v", err)
+		return false
+	}
+	rl.surfaceResizePending = true
+	return true
+}
+
+func (rl *renderLoop) finishSurfaceRender(err error) {
+	if err != nil {
+		log.Printf("desktop: canvas.Render: %v", err)
+		return
+	}
+	// A successful full render has populated the resized surface. Keep the
+	// flag on errors so the next platform redraw retries the frame.
+	rl.surfaceResizePending = false
+}
+
+// needsFrame reports whether the retained compositor has any work to present.
+// Kept as a policy seam so surface-only work cannot accidentally become
+// boundary texture invalidation.
+func (rl *renderLoop) needsFrame(win *app.Window) bool {
+	return rl.surfaceResizePending || rl.fullRedrawNeeded ||
+		win.NeedsRedraw() || win.HasDirtyBoundaries() || win.NeedsAnimationFrame()
+}
+
+// requiresFullSurfaceRender reports whether the swapchain must be fully
+// recomposed instead of preserving its previous contents with LoadOpLoad.
+func (rl *renderLoop) requiresFullSurfaceRender() bool {
+	return rl.surfaceResizePending || rl.rootTextureChanged || rl.fullRedrawNeeded
 }
 
 // draw is the OnDraw callback registered with gogpu.App.
@@ -165,13 +225,20 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 
 	cw, ch := rl.canvas.Size()
 	if cw != w || ch != h {
-		if err := rl.canvas.Resize(w, h); err != nil {
-			log.Printf("desktop: canvas.Resize: %v", err)
+		if rl.resizeSurface(rl.canvas, w, h) {
+			cw, ch = w, h
 		}
-		cw, ch = w, h
-		rl.releaseBoundaryTextures()
-		rl.fullRedrawNeeded = true
+		// Boundary texture lifetime follows each boundary's physical size,
+		// not the swapchain size. ensureBoundaryTexture below selectively
+		// replaces only entries whose dimensions changed. The separate
+		// surfaceResizePending flag still forces the cleared canvas to be
+		// recomposed and presented during platform live-resize ticks.
 	}
+
+	// A display-scale change can leave the logical size unchanged, so it does
+	// not pass through the resize branch above. Synchronize from this frame's
+	// snapshot before the idle gate and before allocating boundary textures.
+	rl.syncDeviceScale(dc.ScaleFactor())
 
 	win := rl.uiApp.Window()
 
@@ -182,7 +249,8 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 	// No O(n) tree walk needed — the flat dirty set is authoritative.
 	//
 	// Work sources (all O(1)):
-	//   - fullRedrawNeeded: resize, first frame, texture release
+	//   - surfaceResizePending: canvas changed size and needs recomposition
+	//   - fullRedrawNeeded: first frame, before boundary textures exist
 	//   - win.NeedsRedraw(): layout changed, ctx.Invalidate, signal dirty
 	//   - win.HasDirtyBoundaries(): upward propagation → RegisterDirtyBoundary
 	//   - win.NeedsAnimationFrame(): spinner ScheduleAnimationFrame
@@ -190,10 +258,9 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 	// Flutter equivalent: _hasScheduledFrame || _nodesNeedingPaint.isNotEmpty
 	// Before Phase C: NeedsRedrawInTreeNonBoundary O(n) walked entire tree.
 	// After Phase C: HasDirtyBoundaries O(1) checks map length.
-	needsAnyWork := rl.fullRedrawNeeded || win.NeedsRedraw() || win.HasDirtyBoundaries() || win.NeedsAnimationFrame()
-	if isDebugDirtyEnabled() && rl.debugOverlay.needsAnimationFrame() {
-		needsAnyWork = true
-	}
+	needsAnyWork := rl.needsFrame(win)
+	// Dirty widget overlay animation frames are handled by gogpu's
+	// drawDebugOverlays (self-sustaining render loop via RequestRedraw).
 	if isDebugDamageEnabled() && rl.canvas != nil && rl.canvas.NeedsAnimationFrame() {
 		needsAnyWork = true
 	}
@@ -208,9 +275,9 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 	rl.blitCount = 0
 
 	if isDebugDamageEnabled() {
-		log.Printf("[FRAME] #%d needsRedraw=%v dirtyBoundaries=%d animFrame=%v fullRedraw=%v",
+		log.Printf("[FRAME] #%d needsRedraw=%v dirtyBoundaries=%d animFrame=%v fullRedraw=%v surfaceResize=%v",
 			rl.frameCounter, win.NeedsRedraw(), win.DirtyBoundaryCount(),
-			win.NeedsAnimationFrame(), rl.fullRedrawNeeded)
+			win.NeedsAnimationFrame(), rl.fullRedrawNeeded, rl.surfaceResizePending)
 	}
 
 	cc := rl.canvas.Context()
@@ -281,6 +348,22 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 	// damage tracking already covers via boundaryDamageLogical.
 	win.CollectDirtyRegions()
 	prePaintDirtyRegions := win.DirtyRegions()
+
+	// Clear the flat dirty set BEFORE painting, not after.
+	//
+	// The set is only the O(1) frame-skip gate (needsAnyWork above); painting
+	// walks the tree on each boundary's own sceneDirty and never reads it. But
+	// painting WRITES to it: a boundary re-dirtied while it was being recorded
+	// re-registers itself for the next frame (layer_tree.go, "if boundary
+	// re-dirtied, register it for next frame"). Clearing afterwards threw that
+	// registration away, and since the widget's sceneDirty stayed true, its
+	// InvalidateScene hit the already-dirty O(1) guard forever after and never
+	// notified the window again — the boundary went permanently unpainted.
+	//
+	// Any widget written from another goroutine hits this on the first frame
+	// that overlaps a write: a terminal under continuous output froze on screen
+	// within one frame and stayed frozen after the output stopped.
+	win.ClearDirtyBoundaries()
 
 	// Paint main tree boundaries.
 	app.PaintBoundaryLayersWithContext(root, nil, winCtx)
@@ -384,27 +467,33 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 		cc.TrackDamageRect(image.Rect(0, 0, cw, ch))
 	}
 	win.ClearAfterPaint()
-	win.ClearDirtyBoundaries()
 
-	// Debug overlay: cyan flash-and-fade on dirty widget regions (ADR-023).
-	// Suppress damage tracking — overlay is visualization, not content.
-	if isDebugDirtyEnabled() {
-		rl.debugOverlay.update(win.DirtyRegions())
-		cc.SetDamageTracking(false)
-		rl.debugOverlay.draw(cc, rl.canvas.DeviceScale())
-		cc.SetDamageTracking(true)
-		if rl.debugOverlay.needsAnimationFrame() {
-			if isDebugDamageEnabled() {
-				log.Printf("[REDRAW-SRC] ui-dirty-overlay-fade")
-			}
-			rl.gogpuApp.RequestRedraw()
-		}
+	// Debug overlay: dirty widget regions (ADR-023, ADR-066).
+	// Rendering moved to dirtyWidgetDebugOverlay registered with gogpu compositor.
+	// Registration is lazy (first draw) because dc (*gogpu.Context) is needed.
+	if isDebugDirtyEnabled() && !rl.dirtyOverlayRegistered {
+		rl.dirtyOverlayRegistered = true
+		dirtyRegionsFn := win.DirtyRegions
+		dc.RegisterDebugOverlay(&dirtyWidgetDebugOverlay{
+			ctx:     cc,
+			regions: dirtyRegionsFn,
+		})
 	}
 
 	// ADR-021 Phase 7: Pass damage rects to gg for partial present.
-	// ui knows which boundaries are dirty → their screen bounds = damage rects.
 	// Chain: ui → gg SetPresentDamage → gogpu SetDamageRects → wgpu PresentWithDamage → OS.
-	if dirtyRegions := win.DirtyRegions(); len(dirtyRegions) > 0 {
+	//
+	// When the root texture changed or the canvas resized, send full-window
+	// damage to the OS compositor. Wayland compositors use
+	// wl_surface.damage_buffer as an optimization hint — without full damage
+	// on full repaint, vacated areas (e.g. collapsed content) may show stale
+	// pixels on the physical display because the compositor doesn't know those
+	// pixels changed.
+	if rl.requiresFullSurfaceRender() {
+		rl.canvas.SetPresentDamage([]image.Rectangle{
+			image.Rect(0, 0, cw, ch),
+		})
+	} else if dirtyRegions := win.DirtyRegions(); len(dirtyRegions) > 0 {
 		rects := make([]image.Rectangle, len(dirtyRegions))
 		for i, r := range dirtyRegions {
 			rects[i] = image.Rect(
@@ -421,7 +510,7 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 	// content preserved. Fallback to full Render when root changed or overlays present.
 	rl.canvas.MarkDirty()
 
-	skipRootBlit := !rl.rootTextureChanged && !rl.fullRedrawNeeded
+	skipRootBlit := !rl.requiresFullSurfaceRender()
 	hasOverlays := win.HasOverlays()
 
 	// Damage-aware blit: enabled by default (ADR-007 Phase 7, TASK-UI-OPT-003).
@@ -434,15 +523,15 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 			rl.frameCounter, damageBlitEnabled, skipRootBlit, hasOverlays,
 			len(rl.frameDamageRects), rl.rootTextureChanged, rl.renderCount, rl.blitCount)
 	}
-	// Disable damage-aware blit when debug damage overlay is active.
+	// Disable damage-aware blit when any debug overlay is active.
 	// RenderDirectWithDamage uses LoadOpLoad which preserves previous swapchain
 	// content — including debug overlay pixels. Without LoadOpClear, overlay
-	// rects from previous frames are never erased, causing permanent green.
+	// rects from previous frames are never erased, causing permanent artifacts.
 	// Full Render (LoadOpClear) ensures overlay is redrawn fresh each frame.
-	if isDebugDamageEnabled() {
+	if isDebugDamageEnabled() || isDebugDirtyEnabled() {
 		damageBlitEnabled = false
 	}
-	if damageBlitEnabled && skipRootBlit && !hasOverlays && len(rl.frameDamageRects) > 0 { //nolint:nestif // damage blit feature flag path selection
+	if damageBlitEnabled && skipRootBlit && !hasOverlays && len(rl.frameDamageRects) > 0 {
 		// ADR-030: Multi-rect damage-aware path.
 		// Accumulate damage across N swapchain buffers (ring buffer).
 		// Pass individual rects for per-draw dynamic scissor — zero pixel waste
@@ -454,10 +543,8 @@ func (rl *renderLoop) draw(dc *gogpu.Context) { //nolint:gocyclo,cyclop,gocognit
 			log.Printf("desktop: RenderDirectWithDamageRects: %v", err)
 		}
 	} else {
-		// Full blit path: root changed, overlays present, or first frame.
-		if err := rl.canvas.Render(dc.RenderTarget()); err != nil {
-			log.Printf("desktop: canvas.Render: %v", err)
-		}
+		// Full blit path: root changed, surface resized, overlays present, or first frame.
+		rl.finishSurfaceRender(rl.canvas.Render(dc.RenderTarget()))
 		// Fill ALL ring buffer slots with fullWindow so every swapchain
 		// buffer (up to 4 on Linux Wayland) knows the entire screen
 		// changed. Without this, buffer N-1 from a previous frame has
@@ -494,16 +581,22 @@ func (rl *renderLoop) accumulatedDamageRects() []image.Rectangle {
 	rects := make([]image.Rectangle, 0, len(rl.frameDamageRects)+8)
 	rects = append(rects, rl.frameDamageRects...)
 
+	// Accumulate with PREVIOUS frames' damage BEFORE storing current.
+	// The ring holds damage from the last N-1 frames (N = ring size).
+	// With a quad-buffered swapchain, the buffer being presented was last used
+	// 4 frames ago — we need damage from frames [N-3, N-2, N-1, current].
+	// Iterating the ring BEFORE storing current ensures it contains only
+	// previous frames, avoiding double-counting current frame rects (#177).
+	for _, prev := range rl.damageRingRects {
+		rects = append(rects, prev...)
+	}
+
 	// Store current frame rects in ring buffer (copy to avoid aliasing).
+	// This overwrites the oldest slot for the NEXT frame's accumulation.
 	stored := make([]image.Rectangle, len(rl.frameDamageRects))
 	copy(stored, rl.frameDamageRects)
 	rl.damageRingRects[rl.damageRingIdx] = stored
 	rl.damageRingIdx = (rl.damageRingIdx + 1) % len(rl.damageRingRects)
-
-	// Accumulate with previous frames' damage.
-	for _, prev := range rl.damageRingRects {
-		rects = append(rects, prev...)
-	}
 
 	// ADR-030 threshold: merge to single union when too many rects.
 	// GPU scissor state changes are cheap but not free. Enterprise
@@ -591,7 +684,8 @@ func (rl *renderLoop) renderSingleBoundaryFromLayer(pic *compositor.PictureLayer
 	entry := rl.ensureBoundaryTexture(pic.BoundaryCacheKey(), bw, bh, cc)
 
 	// Detect fresh recordings via scene version. Skip re-rendering clean textures.
-	cachedScene := pic.Picture()
+	cachedSceneRaw := pic.Picture()
+	cachedScene, _ := cachedSceneRaw.(*scene.Scene)
 	if rl.isBoundaryClean(entry, pic, cachedScene) {
 		rl.updateClipRect(entry, pic)
 		return
@@ -639,6 +733,28 @@ func scaleToPhysical(w, h int, scale float64) (int, int) {
 	return int(float64(w)*scale + 0.5), int(float64(h)*scale + 0.5)
 }
 
+// physicalDamageRect converts a logical damage rect (origin rx,ry + size bw,bh)
+// to physical pixels for the GPU scissor, matching gg's own Context.trackDamage
+// rounding: Floor on the min corner, Ceil on the max corner, independently.
+//
+// This ensures the scissor rect fully covers the damaged region at any device
+// scale. The previous formula (truncate min + round-half-up size) can
+// under-cover by one physical pixel at fractional scales (1.25x, 1.5x, 1.75x).
+// Integer scales (1x, 2x, 3x) are unaffected -- both formulas agree.
+//
+// A scale <= 0 is treated as 1.0 (headless / non-HiDPI).
+func physicalDamageRect(rx, ry, bw, bh int, scale float64) image.Rectangle {
+	if scale <= 0 {
+		scale = 1.0
+	}
+	return image.Rect(
+		int(math.Floor(float64(rx)*scale)),
+		int(math.Floor(float64(ry)*scale)),
+		int(math.Ceil(float64(rx+bw)*scale)),
+		int(math.Ceil(float64(ry+bh)*scale)),
+	)
+}
+
 // ensureBoundaryTexture allocates or resizes the offscreen texture for a boundary.
 //
 // HiDPI: bw/bh are LOGICAL widget bounds, but an offscreen texture is a GPU
@@ -658,7 +774,6 @@ func (rl *renderLoop) ensureBoundaryTexture(key uint64, bw, bh int, cc *gg.Conte
 		tex, release := cc.CreateOffscreenTexture(pw, ph)
 		entry = &boundaryTexEntry{texture: tex, release: release, width: pw, height: ph}
 		rl.boundaryTextures[key] = entry
-		rl.fullRedrawNeeded = true
 	}
 	return entry
 }
@@ -727,14 +842,19 @@ func (rl *renderLoop) trackBoundaryDamage(pic *compositor.PictureLayerImpl, bw, 
 	rl.boundaryDamageLogical = append(rl.boundaryDamageLogical, image.Rect(
 		rx, ry, rx+bw, ry+bh,
 	))
-	// Physical coords for GPU scissor.
+	// Physical coords for GPU scissor. Match gg's own trackDamage rounding
+	// (Floor on the min corner, Ceil on the max corner) exactly -- truncating
+	// the min corner while round-half-up-ing the SIZE is a different function,
+	// and at fractional device scales it can under-cover by one physical pixel.
+	// E.g. scale=1.5, rx=11, bw=20: Floor/Ceil gives [16,47) but
+	// truncate+rounded-size gives [16,46) -- the right edge lands one physical
+	// pixel short of gg's own damage rect, leaving a stale LoadOpLoad seam.
+	// Integer scales are unaffected -- both formulas agree when scale is whole.
+	// (Finding 2 in issue #195.)
 	scale := float64(rl.canvas.DeviceScale())
-	rl.frameDamageRects = append(rl.frameDamageRects, image.Rect(
-		int(float64(rx)*scale),
-		int(float64(ry)*scale),
-		int(float64(rx)*scale)+int(float64(bw)*scale+0.5),
-		int(float64(ry)*scale)+int(float64(bh)*scale+0.5),
-	))
+	rl.frameDamageRects = append(rl.frameDamageRects,
+		physicalDamageRect(rx, ry, bw, bh, scale),
+	)
 }
 
 // compositeTexturesFromTree walks the Layer Tree and blits all boundary textures
@@ -750,6 +870,15 @@ func (rl *renderLoop) compositeTexturesFromTree(root compositor.Layer, cc *gg.Co
 
 func (rl *renderLoop) compositeFromTreeRecursive(layer compositor.Layer, cc *gg.Context, parentOpacity float32) {
 	if layer == nil {
+		return
+	}
+
+	// ExternalTextureLayer: blit external GPU texture (GPUView, video).
+	if ext, ok := layer.(*compositor.ExternalTextureLayer); ok {
+		if !ext.Texture().IsNil() && ext.Width() > 0 && ext.Height() > 0 {
+			cc.DrawGPUTexture(ext.Texture(), ext.X(), ext.Y(), ext.Width(), ext.Height())
+			rl.blitCount++
+		}
 		return
 	}
 
@@ -883,6 +1012,20 @@ func collectLiveKeys(layer compositor.Layer, keys map[uint64]bool) {
 	}
 }
 
+// syncDeviceScale resets every cache whose contents or allocation depends on
+// device pixels. It returns true when a new scale was applied.
+func (rl *renderLoop) syncDeviceScale(scale float64) bool {
+	if scale <= 0 || rl.canvas.DeviceScale() == scale {
+		return false
+	}
+
+	rl.canvas.SetDeviceScale(scale)
+	rl.releaseBoundaryTextures()
+	rl.uiApp.Window().HandleScaleChange(scale)
+	rl.fullRedrawNeeded = true
+	return true
+}
+
 // releaseBoundaryTextures frees all offscreen GPU textures.
 func (rl *renderLoop) releaseBoundaryTextures() {
 	for _, entry := range rl.boundaryTextures {
@@ -909,5 +1052,15 @@ func (rl *renderLoop) initCanvas(w, h int) bool {
 	// LCD subpixel layout is auto-detected by ggcanvas.New() via
 	// PlatformProvider.SubpixelLayout() (ADR-024). The gpuContextAdapter
 	// delegates PlatformProvider to App since gogpu BUG-ADAPTER-001 fix.
+
+	// Wire GPU texture creation for GPUView widgets (#193).
+	// Delegates to gg.Context.CreateOffscreenTexture which allocates
+	// offscreen GPU textures usable as render targets.
+	cc := rl.canvas.Context()
+	rl.uiApp.Window().Context().SetOnCreateGPUTexture(func(width, height int) (any, func()) {
+		tex, release := cc.CreateOffscreenTexture(width, height)
+		return tex, release
+	})
+
 	return true
 }

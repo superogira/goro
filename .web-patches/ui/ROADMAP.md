@@ -1,7 +1,7 @@
 # gogpu/ui Roadmap
 
-> **Version:** 0.1.30-dev
-> **Updated:** June 2026
+> **Version:** 0.1.54
+> **Updated:** August 2026
 > **Go Version:** 1.25+
 
 ---
@@ -10,7 +10,7 @@
 
 **gogpu/ui** is the first enterprise-grade GUI toolkit for Go — zero CGO, GPU-accelerated, signal-driven.
 
-Go has waited 17 years for a professional graphics ecosystem. We're building it: 1.1M+ LOC across the gogpu ecosystem, all platforms, native menus and dialogs, triple-backend WebGPU, shader compiler, and a complete GUI toolkit.
+Go has waited 17 years for a professional graphics ecosystem. We're building it: 1.14M+ LOC across the gogpu ecosystem, all platforms, native menus and dialogs, triple-backend WebGPU, shader compiler, and a complete GUI toolkit.
 
 **Target applications:**
 - **IDEs** — GoLand/VS Code class (docking, tabs, tree, toolbar, menus, code editor)
@@ -23,6 +23,7 @@ Go has waited 17 years for a professional graphics ecosystem. We're building it:
 - Pure Go by default (zero CGO), Rust backend optional via `-tags rust` (ADR-038 triple-backend)
 - WebGPU-first rendering via gogpu/wgpu (Vulkan/Metal/DX12/GLES/Software/Browser)
 - Signals-based reactive state (coregx/signals — hybrid push-pull, zero glitch)
+- Arena-based gesture recognition (Flutter GestureArena protocol, ADR-049)
 - Layer Tree compositor with damage-aware blit (Flutter/Chrome patterns)
 - Four design systems: Material 3, DevTools (JetBrains), Fluent, Cupertino
 - Polymorphic Content[C] pattern (CDK — inspired by taiga-family/polymorpheus)
@@ -35,16 +36,17 @@ Go has waited 17 years for a professional graphics ecosystem. We're building it:
 
 | Metric | Value |
 |--------|-------|
-| Packages | 56+ |
-| Go Source Files | ~413 |
-| Test Files | ~202 |
-| Total LOC | ~198,000+ |
-| Test Functions | ~7,300+ |
+| Packages | 70 |
+| Total LOC (scc) | ~220,000+ |
+| Test Functions | ~7,800+ |
 | Test Coverage | 97%+ |
 | Linter Issues | 0 |
-| Interactive Widgets | 22 |
+| Interactive Widgets | 27 |
 | Design Systems | 4 (M3, DevTools, Fluent, Cupertino) |
-| Painters | 61 (21 + 22 + 9 + 9) |
+| Painters | 70 (24 + 24 + 11 + 11) |
+| Gesture Recognition | Arena-based (ADR-049), 4 recognizers, Flutter pattern |
+| Layout Cache | Per-widget (ADR-032), O(affected subtree) |
+| Render Pipeline | Unified draw queue (ADR-051/052), backend-agnostic |
 
 ---
 
@@ -140,7 +142,17 @@ Slider, Dialog, Animation engine (Tween, Spring, M3 motion), ScrollView, TabView
 | Overlay boundary pipeline | Dropdown/dialog via Layer Tree |
 | Custom font pipeline | FontRegistry, StyledTextDrawer |
 | PointerCapturer | ADR-031, widget-level mouse capture |
+| Gesture recognition (ADR-049) | Arena-based disambiguation, 4 recognizers, Team groups, VelocityTracker |
+| Unified pointer pipeline | PointerEvent as single source of pointer input |
+| OS clipboard | ClipboardProvider DI, Win32/macOS/Linux |
+| TextField drag selection | Drag-to-select, double-click word, triple-click all |
 | 34 integration tests | Multi-frame lifecycle, visibility matrix |
+| Badge widget | Notification badge (dot/count), signal bindings |
+| Chip widget | Action/filter chip (M3 spec), toggleable, two-way signal |
+| Layout cache (ADR-032) | Per-widget caching via LayoutChild, O(n)→O(subtree) |
+| Animation before layout (GAP-3) | Flutter BeginFrame pattern, layout = pure function |
+| Stripe widget | Alternating row backgrounds |
+| TitleBar widget | Window title bar widget |
 
 **Remaining Phase 4:**
 
@@ -164,8 +176,8 @@ Essential widgets for production applications.
 | **RichText** | Styled text with bold/italic/links, inline formatting | Medium | Content display, help text |
 | **NumberField** | Numeric input: spinner buttons, range, step | Low | Forms, settings |
 | **ToggleSwitch** | iOS/Material on/off switch with animation | Low | Settings, preferences |
-| **Badge** | Notification badge (dot or count) on any widget | Low | Navigation, status |
-| **Chip** | Filter/action chips (M3 spec) | Low | Tags, filters |
+| ~~**Badge**~~ | ~~Notification badge~~ | — | ✅ Done (v0.1.35) |
+| ~~**Chip**~~ | ~~Filter/action chips~~ | — | ✅ Done (v0.1.35) |
 | **SegmentedControl** | Toggle button group (iOS/Fluent style) | Medium | View switching |
 | **SearchField** | Text input with search icon, clear, suggestions | Medium | Data filtering |
 
@@ -209,7 +221,7 @@ Platform-specific features for native feel.
 | **Native file dialogs** | Open/Save/Folder via system dialogs | P1 |
 | **Clipboard rich content** | HTML/RTF clipboard support | P2 |
 | **IME support** | Input method for CJK languages | P2 |
-| **Touch/gesture input** | Pinch, swipe, long press | P2 |
+| **Touch/gesture input** | Pinch, swipe (gesture/ infrastructure in place — ADR-049) | P2 |
 
 ### Phase 9: API Freeze & Stabilization (v0.9.x — Q2-Q3 2027)
 
@@ -260,6 +272,25 @@ Platform-specific features for native feel.
 | Phase 3 | Per-boundary GPU textures (MSAA offscreen, DrawChild skip) | ✅ |
 | Phase 4 | Layer Tree + Damage-aware blit (persistent tree, multi-rect scissor, LoadOpLoad) | ✅ |
 
+### Unified Draw Queue (ADR-051/052) — v0.1.45
+
+gg v0.50.6 introduced a **backend-agnostic draw queue** (ADR-051) and **three-tier clip architecture** (ADR-052). All rendering commands — shapes, text, GPU textures — flow through a single dispatch pipeline. On GPU backends, commands are batched into scissor groups and dispatched via render passes. On software adapters (`strategyRasterAtlas`), the same commands dispatch through CPU rasterizer paths.
+
+This architectural change ensures **correctness on all backends** — the software renderer uses the same Layer Tree compositor, offscreen boundary textures, and damage-aware blit as GPU backends. Performance optimization is the next step.
+
+### Software Backend Optimization Roadmap
+
+The software backend (`GOGPU_GRAPHICS_API=software`) is architecturally correct but requires performance work. The CPU renders every pixel via a SPIR-V interpreter — inherently slower than GPU parallel execution. Planned optimization tiers:
+
+| Tier | What | Expected Speedup | Status |
+|------|------|-------------------|--------|
+| **1. gg direct CPU rasterization** | gg already has fast native Go CPU rasterizers (AnalyticFiller from tiny-skia/Skia, SparseStrips 4×4 from Vello, TileCompute 16×16 from Vello 9-stage). Smart dispatch: shapes/text rendered by gg directly, only texture compositing through software HAL. Highest impact, minimal changes. | **10-50x** | Research ([ADR-053](https://github.com/gogpu/gg)) |
+| **2. naga Go+SIMD backend** | WGSL → naga IR → generated Go + `goexperiment.simd` (AVX-512/NEON). Replaces SPIR-V interpreter entirely for shader execution. Reference: GoMLX PackGEMM 14x on MatMul. | **100x+** | Backlog ([NAGA-FEAT-004](https://github.com/gogpu/naga)) |
+| **3. SPIR-V interpreter SIMD** | `goexperiment.simd` Float32x4 for vec4 ops in existing interpreter. ~500 LOC change. Interim solution before naga Go backend. | 2-4x | Backlog ([FEAT-SW-008](https://github.com/gogpu/wgpu)) |
+| **4. Multi-threaded CPU dispatch** | Parallel dispatch for independent boundary textures. Each boundary = isolated pixmap → no shared state → trivially parallel. | 2-8x (multi-core) | Design |
+
+**Community contributions welcome** — profiling reports, optimization PRs, SIMD expertise. See [issue #158](https://github.com/gogpu/ui/issues/158).
+
 ### Future Rendering
 
 | Phase | What | Target |
@@ -287,6 +318,7 @@ gogpu/ui is one part of a larger ecosystem. Future integration points:
 
 | Integration | Description | Timeline |
 |-------------|-------------|----------|
+| **Android** | Android/arm64 Vulkan support ([wgpu#268](https://github.com/gogpu/wgpu/pull/268)). Full Vulkan WSI, Rust wgpu v29 parity, ANativeWindow lifecycle. Contributed by [@besmpl](https://github.com/besmpl) for [Hearth](https://github.com/besmpl/hearth) game engine. | In Review |
 | **gogpu/compute** | GPU compute via ComputeProvider (Born ML pattern) | Q3 2026 |
 | **gogpu/editor** | Native code editor widget (ADR-028) | Q4 2026 |
 | **gogpu/g3d** | 3D viewport widget for CAD/games | 2027 |
@@ -317,6 +349,7 @@ All releases must follow this cascade. Breaking changes in lower layers require 
 | Layer Tree compositor | Flutter, Chrome, Qt6, Android | `compositor/` package |
 | Pluggable Painters | All design systems (Swing L&F, Qt styles) | Painter interfaces per widget |
 | Polymorphic Content[C] | taiga-family/polymorpheus | `cdk/` package |
+| Arena gesture disambiguation | Flutter GestureArena | `gesture/` package |
 | Signal-driven reactivity | Angular Signals, SolidJS, Preact | `state/` + coregx/signals |
 | Functional Options | Go community best practice | All widget constructors |
 | RepaintBoundary | Flutter RenderObject.isRepaintBoundary | `widget.WidgetBase` property |
@@ -337,13 +370,13 @@ All releases must follow this cascade. Breaking changes in lower layers require 
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| gogpu/gg | v0.48.11 | 2D rendering + scene.Scene |
-| gogpu/gogpu | v0.42.0 | Windowing, input (examples) |
-| gogpu/gpucontext | v0.21.0 | Shared interfaces (opaque struct tokens) |
-| coregx/signals | v0.1.0 | Reactive state management |
-| golang.org/x/image | v0.41.0 | Inter font (standard) |
+| gogpu/gg | v0.52.2 | 2D rendering + unified draw queue (ADR-051/052) |
+| gogpu/gogpu | v0.52.1 | Windowing, input (examples) |
+| gogpu/gpucontext | v0.27.0 | Shared interfaces (opaque struct tokens) |
+| coregx/signals | v0.1.1 | Reactive state management |
+| golang.org/x/image | v0.44.0 | Inter font (standard) |
 
-**Indirect:** gogpu/wgpu v0.30.1, gogpu/naga v0.17.15, gogpu/gputypes v0.5.0, go-text/typesetting v0.3.4
+**Indirect:** gogpu/wgpu v0.31.2, gogpu/naga v0.18.0, gogpu/gputypes v0.5.2, go-text/typesetting v0.3.4
 
 ---
 
@@ -377,10 +410,7 @@ All releases must follow this cascade. Breaking changes in lower layers require 
 | UI Repository | https://github.com/gogpu/ui |
 | Discussions | https://github.com/orgs/gogpu/discussions/18 |
 | awesome-go listing | https://github.com/avelino/awesome-go |
-| Kanban Tasks | `docs/dev/kanban/` |
-| Research | `docs/dev/research/` |
-| ADRs | `docs/dev/architecture/` |
 
 ---
 
-*This roadmap evolves with the project. Last updated: June 2026.*
+*This roadmap evolves with the project. Last updated: August 2026.*

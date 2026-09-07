@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/gogpu/gpucontext"
 	ui "github.com/gogpu/ui"
+	"github.com/gogpu/ui/dnd"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/internal/dirty"
 	ifocus "github.com/gogpu/ui/internal/focus"
 	internalRender "github.com/gogpu/ui/internal/render"
@@ -57,6 +60,11 @@ type Window struct {
 	theme     *theme.Theme
 	overlays  *overlay.Stack
 	focusMgr  *ifocus.Manager
+
+	// animationTickers caches the layout-affecting animation widgets in the
+	// current root. Widget trees are rebuilt through SetRoot, so collecting
+	// them there avoids walking (and allocating through Children) every frame.
+	animationTickers []widget.AnimationTicker
 
 	// renderMode controls background ownership and incremental rendering.
 	// See RenderMode documentation for details.
@@ -137,7 +145,7 @@ type Window struct {
 	// reset during drag operations (Frame.ResetCursor skipped while dragging).
 	mouseButtonsHeld event.ButtonState
 
-	// windowSize tracks the last known window size in physical pixels.
+	// windowSize tracks the last known window size in logical pixels.
 	windowSize geometry.Size
 
 	// frameCallback, if set, is called after each frame with statistics.
@@ -153,7 +161,29 @@ type Window struct {
 	// upward propagation (ADR-007, Task 1e). Populated by the
 	// onBoundaryDirty callback wired during mount. Used by future Phase 2
 	// PaintDirtyBoundaries to repaint only changed boundaries.
+	//
+	// dirtyMu guards the map. It is the one unguarded hop in a chain that is
+	// otherwise locked end to end: SetNeedsRedraw, InvalidateScene and
+	// RegisterDirtyBoundary each take their mutex, snapshot, and release it
+	// before calling out — the shape of code meant to be reached from another
+	// goroutine, which is how an app whose content arrives on its own
+	// goroutines (a terminal pane, a video surface, a download) marks dirty.
+	// With one such goroutine the race stayed invisible; with two, the runtime
+	// takes the process down with "concurrent map writes", which no recover
+	// can catch.
+	dirtyMu         sync.Mutex
 	dirtyBoundaries map[uint64]dirtyBoundaryEntry
+
+	// dndManager coordinates drag-and-drop operations for this window.
+	// Used by both internal widget-to-widget drags and OS file drops
+	// bridged via desktop.Run's OnDragDrop callback.
+	dndManager *dnd.Manager
+
+	// gestureArena manages gesture disambiguation for all pointers.
+	// Created lazily on first HandlePointerEvent call to avoid allocation
+	// overhead for windows with no GestureAware widgets. One arena per
+	// window is the Flutter pattern (GestureBinding.gestureArena).
+	gestureArena *gesture.Arena
 }
 
 // newWindow creates a Window with the given providers.
@@ -222,6 +252,11 @@ func newWindow(
 	ctx.SetOnInvalidate(func() {
 		w.needsLayout = true
 		w.needsRedraw = true
+		if w.root != nil {
+			if lm, ok := w.root.(interface{ InvalidateLayoutCache() }); ok {
+				lm.InvalidateLayoutCache()
+			}
+		}
 		if w.wp != nil {
 			w.wp.RequestRedraw()
 		}
@@ -362,6 +397,8 @@ func (w *Window) SetRoot(root widget.Widget) {
 		widget.MountTree(w.root, w.ctx)
 		widget.MarkRedrawInTree(w.root)
 	}
+	clear(w.animationTickers)
+	w.animationTickers = collectAnimationTickers(w.animationTickers[:0], w.root)
 }
 
 // Root returns the current root widget, or nil if none is set.
@@ -422,6 +459,8 @@ func (w *Window) HandleEvent(e event.Event) {
 	// Update context time for event processing.
 	w.ctx.SetNow(time.Now())
 
+	w.trackMouseButtonOwnership(e)
+
 	// Overlays get priority.
 	if w.overlays.HandleEvent(w.ctx, e) {
 		return
@@ -450,8 +489,6 @@ func (w *Window) HandleEvent(e event.Event) {
 			if me.MouseType == event.MouseRelease && me.Buttons == 0 {
 				w.capturedWidget = nil
 			}
-			// Track mouse button state even during capture.
-			w.mouseButtonsHeld = me.Buttons
 			if consumed {
 				return
 			}
@@ -474,11 +511,6 @@ func (w *Window) HandleEvent(e event.Event) {
 		}
 	}
 
-	// Track mouse button state for drag cursor protection.
-	if me, ok := e.(*event.MouseEvent); ok {
-		w.mouseButtonsHeld = me.Buttons
-	}
-
 	// Dispatch event to root widget.
 	_ = w.root.Event(w.ctx, e)
 
@@ -496,21 +528,83 @@ func (w *Window) HandleEvent(e event.Event) {
 	}
 }
 
+// trackMouseButtonOwnership records button state before any dispatch path can
+// return early, such as when an overlay consumes a press and captures the
+// pointer.
+func (w *Window) trackMouseButtonOwnership(e event.Event) {
+	me, ok := e.(*event.MouseEvent)
+	if !ok {
+		return
+	}
+
+	previousButtons := w.mouseButtonsHeld
+	w.mouseButtonsHeld = me.Buttons
+	if me.MouseType == event.MousePress && previousButtons == 0 {
+		// A press can be the first positional event delivered after focus or
+		// window creation. Establish its target so cancellation can clear a
+		// pressed control even when no preceding MouseMove was observed.
+		w.updateHover(me.Position, me.Buttons, me.Modifiers())
+	}
+}
+
 // HandleResize processes a window resize.
 //
 // This updates the window size and marks layout as needing recalculation.
+// LayoutChild's constraint cache invalidates only widgets whose incoming
+// constraints changed; fixed-size subtrees remain clean across the resize.
 func (w *Window) HandleResize(width, height int) {
 	w.windowSize = geometry.Sz(float32(width), float32(height))
 	w.needsLayout = true
 	w.needsRedraw = true
 	w.needsFullRepaint = true
-	if w.root != nil {
-		widget.MarkRedrawInTree(w.root)
+}
+
+// HandleScaleChange applies a new display scale and invalidates retained
+// rendering created at the previous scale. Logical layout is unchanged, but
+// cached scenes may contain scale-specific raster content such as SVG paths.
+func (w *Window) HandleScaleChange(scale float64) {
+	if scale <= 0 {
+		return
+	}
+
+	w.ctx.SetScale(float32(scale))
+	invalidateScenesInTree(w.root)
+	for _, overlayContent := range w.OverlayContentWidgets() {
+		invalidateScenesInTree(overlayContent)
+	}
+	w.needsRedraw = true
+	w.needsFullRepaint = true
+}
+
+func invalidateScenesInTree(w widget.Widget) {
+	if w == nil {
+		return
+	}
+
+	type boundaryInvalidator interface {
+		IsRepaintBoundary() bool
+		InvalidateScene()
+	}
+	if boundary, ok := w.(boundaryInvalidator); ok && boundary.IsRepaintBoundary() {
+		boundary.InvalidateScene()
+	}
+	// Legacy RepaintBoundary widgets own a separate retained scene. A widget
+	// can implement both boundary mechanisms, so invalidate them independently.
+	if boundary, ok := w.(widget.RepaintBoundaryMarker); ok {
+		boundary.MarkBoundaryDirty()
+	}
+
+	for _, child := range w.Children() {
+		invalidateScenesInTree(child)
 	}
 }
 
 // HandleFocusChange processes a window focus change.
 func (w *Window) HandleFocusChange(focused bool) {
+	if !focused {
+		w.cancelPointerState()
+	}
+
 	if w.root == nil {
 		return
 	}
@@ -530,6 +624,66 @@ func (w *Window) HandleFocusChange(focused bool) {
 	w.needsRedraw = true
 	if w.wp != nil {
 		w.wp.RequestRedraw()
+	}
+}
+
+// cancelPointerState ends Window-owned capture and held-button tracking when a
+// matching release may never arrive, such as after focus loss or a platform
+// PointerCancel. Captured widgets receive releases at an outside-window point
+// first so they can clear internal drag state without activating a control.
+func (w *Window) cancelPointerState() {
+	// Window's zero value is valid for public no-op handlers such as
+	// HandleFocusChange. Pointer callbacks also share this cleanup path, so
+	// keep it safe before newWindow has installed a widget context.
+	if w.ctx == nil {
+		w.capturedWidget = nil
+		w.mouseButtonsHeld = 0
+		w.hoveredWidget = nil
+		return
+	}
+
+	if captured := w.capturedWidget; captured != nil && w.mouseButtonsHeld != 0 {
+		remaining := w.mouseButtonsHeld
+		outside := geometry.Pt(-1, -1)
+		if bounded, ok := captured.(interface{ Bounds() geometry.Rect }); ok {
+			bounds := bounded.Bounds()
+			outside = geometry.Pt(bounds.Min.X-1, bounds.Min.Y-1)
+		}
+		for _, heldButton := range [...]struct {
+			button event.Button
+			state  event.ButtonState
+		}{
+			{event.ButtonLeft, event.ButtonStateLeft},
+			{event.ButtonRight, event.ButtonStateRight},
+			{event.ButtonMiddle, event.ButtonStateMiddle},
+			{event.ButtonX1, event.ButtonStateX1},
+			{event.ButtonX2, event.ButtonStateX2},
+		} {
+			if !remaining.Has(heldButton.state) {
+				continue
+			}
+			remaining &^= heldButton.state
+			_ = captured.Event(w.ctx, event.NewMouseEvent(
+				event.MouseRelease,
+				heldButton.button,
+				remaining,
+				outside,
+				outside,
+				event.ModNone,
+			))
+		}
+	}
+
+	// A widget may explicitly release itself while handling the synthetic
+	// event. Clear any capture that remains afterward.
+	if captured := w.capturedWidget; captured != nil {
+		w.ctx.ReleasePointer(captured)
+	}
+	w.mouseButtonsHeld = 0
+	w.clearHover(0, event.ModNone)
+	w.ctx.ResetCursor()
+	if w.pp != nil {
+		w.syncCursor()
 	}
 }
 
@@ -570,6 +724,13 @@ func (w *Window) Frame() {
 		}
 	}
 
+	// ADR-032 GAP-3: Tick layout-affecting animations BEFORE layout.
+	// Flutter pattern: handleBeginFrame (Animate) → handleDrawFrame (Layout).
+	// Layout must be a pure function of (constraints + widget state) for
+	// RelayoutBoundary correctness (Phase 5). Animation ticks mutate state
+	// (e.g., Collapsible.progress) so they must complete before layout reads it.
+	tickAnimations(w.animationTickers, w.ctx)
+
 	// Update scale factor (may change between frames on multi-monitor setups).
 	w.updateScale()
 
@@ -582,14 +743,12 @@ func (w *Window) Frame() {
 	if w.needsLayout {
 		ui.Logger().Info("[LAYOUT-TRIGGER]")
 		layoutStart := time.Now()
+		// Clear before layout so both ctx.Invalidate() and MarkNeedsLayout()
+		// can re-set it during layout (animation ticks). The respective
+		// callbacks (onInvalidate, onLayoutDirty) set w.needsLayout = true.
+		w.needsLayout = false
 		w.layout()
 		layoutDur = time.Since(layoutStart)
-		// Clear needsLayout only if no widget re-invalidated during layout.
-		// Animations call ctx.Invalidate() from tickAnimation() during layout,
-		// which sets needsLayout back to true — we must not clobber that.
-		if !w.ctx.IsInvalidated() {
-			w.needsLayout = false
-		}
 		// Layout completed — widgets with changed positions need redraw.
 		// ADR-028: do NOT MarkRedrawInTree(root) — that marks ALL widgets
 		// dirty → full screen repaint. Only widgets that actually changed
@@ -811,6 +970,32 @@ func (w *Window) syncContextFocusToManager() {
 	}
 }
 
+// collectAnimationTickers walks a newly installed widget tree and caches its
+// layout-affecting animation widgets. SetRoot is the structural update point
+// for a Window, so the steady-state frame path can tick the cache without
+// repeatedly allocating child slices.
+func collectAnimationTickers(dst []widget.AnimationTicker, w widget.Widget) []widget.AnimationTicker {
+	if w == nil {
+		return dst
+	}
+	if ticker, ok := w.(widget.AnimationTicker); ok {
+		dst = append(dst, ticker)
+	}
+	for _, child := range w.Children() {
+		dst = collectAnimationTickers(dst, child)
+	}
+	return dst
+}
+
+// tickAnimations advances cached animation widgets BEFORE layout so their
+// state is final when Layout reads it (Flutter pattern: handleBeginFrame →
+// Animate → handleDrawFrame → Layout).
+func tickAnimations(tickers []widget.AnimationTicker, ctx widget.Context) {
+	for _, ticker := range tickers {
+		ticker.TickAnimation(ctx)
+	}
+}
+
 // layout performs the layout pass on the widget tree and overlays.
 func (w *Window) layout() {
 	if w.root == nil {
@@ -823,8 +1008,10 @@ func (w *Window) layout() {
 	// Create tight constraints matching the window size.
 	constraints := geometry.Tight(w.windowSize)
 
-	// Layout the root widget.
-	size := w.root.Layout(w.ctx, constraints)
+	// Layout the root widget through LayoutChild so the root's cache is
+	// managed by layoutCacheStore, eliminating the need for the former
+	// MarkLayoutCleanRecursive shim.
+	size := widget.LayoutChild(w.root, w.ctx, constraints)
 
 	// Set root bounds to fill the window from origin.
 	if setter, ok := w.root.(interface{ SetBounds(geometry.Rect) }); ok {
@@ -851,6 +1038,43 @@ func (w *Window) draw() {
 	// Real rendering happens via DrawTo() when the host provides a canvas.
 	w.lastDrawStats = widget.CollectDrawStats(w.root)
 	widget.ClearRedrawInTree(w.root)
+}
+
+// Close performs teardown of the window's widget trees and animation state.
+//
+// This stops the animation pumper goroutine, unmounts all overlay trees,
+// and unmounts the root widget tree. After Close, the window should not
+// be used for rendering.
+//
+// Close is idempotent — calling it multiple times is safe.
+func (w *Window) Close() {
+	// Stop animation pumper goroutine.
+	if w.animToken != nil {
+		w.animToken.Stop()
+		w.animToken = nil
+	}
+
+	// Unmount all overlay widget trees.
+	if w.overlays != nil {
+		for _, o := range w.overlays.List() {
+			widget.UnmountTree(o)
+		}
+		// Pop all overlays (Stack has no Clear method).
+		for w.overlays.Len() > 0 {
+			w.overlays.Pop()
+		}
+	}
+
+	// Unmount root widget tree.
+	if w.root != nil {
+		widget.UnmountTree(w.root)
+		w.root = nil
+	}
+	w.animationTickers = nil
+
+	// Clear references to prevent pinning unmounted widgets.
+	w.hoveredWidget = nil
+	w.capturedWidget = nil
 }
 
 // RenderMode returns the window's current rendering mode.
@@ -899,6 +1123,13 @@ func (w *Window) DrawTo(canvas widget.Canvas) bool {
 		return false
 	}
 
+	// Root has no parent to invalidate its cached scene when callers render
+	// directly after a resize without an intervening Frame/layout pass. Keep
+	// this root-only: descendants rely on their own layout and paint dirtiness.
+	if w.needsRedraw || w.needsFullRepaint {
+		w.invalidateRootScene()
+	}
+
 	// Collect dirty regions (always — for RepaintBoundary Intersects fast path).
 	w.dirtyTracker.Reset()
 	w.dirtyCollector.Collect(w.root)
@@ -932,6 +1163,28 @@ func (w *Window) DrawTo(canvas widget.Canvas) bool {
 	}
 
 	return drawn
+}
+
+// invalidateRootScene marks only the root RepaintBoundary dirty without
+// scheduling another frame while the current draw is already in progress.
+func (w *Window) invalidateRootScene() {
+	type sceneDirtier interface {
+		IsRepaintBoundary() bool
+		InvalidateScene()
+	}
+	sd, ok := w.root.(sceneDirtier)
+	if !ok || !sd.IsRepaintBoundary() {
+		return
+	}
+
+	type dirtySuppressor interface{ SetSuppressDirtyCallback(bool) }
+	if ds, ok := w.root.(dirtySuppressor); ok {
+		ds.SetSuppressDirtyCallback(true)
+		sd.InvalidateScene()
+		ds.SetSuppressDirtyCallback(false)
+		return
+	}
+	sd.InvalidateScene()
 }
 
 // drawHostManaged draws the full widget tree without clearing the canvas.
@@ -1054,15 +1307,18 @@ func (w *Window) drawDirtyRegions(canvas widget.Canvas) {
 
 	// Draw the tree clipped to each dirty region in turn. Widgets outside
 	// the clip early-exit from isVisible checks, so only widgets
-	// overlapping a region render into it.
+	// overlapping a region render into it. Widget painters commonly center
+	// one-pixel strokes on their bounds; the per-region clip gets one
+	// logical pixel of pad so strokes and their antialiasing fringe are
+	// not cut off.
 	for _, region := range regions {
-		canvas.PushClip(region.Bounds)
+		canvas.PushClip(region.Bounds.Expand(1))
 		w.lastDrawStats = widget.DrawTree(w.root, w.ctx, canvas)
 		canvas.PopClip()
 		union = union.Union(region.Bounds)
 	}
 
-	w.lastDirtyUnion = union
+	w.lastDirtyUnion = union.Expand(1)
 }
 
 // ThemeBackground returns the window background color from the current theme.
@@ -1122,6 +1378,173 @@ func (w *Window) FocusManager() *ifocus.Manager {
 	return w.focusMgr
 }
 
+// DndManager returns the window's drag-and-drop manager.
+//
+// The Manager is created lazily on first access. It coordinates both
+// internal widget-to-widget drags and OS file drops bridged via the
+// desktop render loop's OnDragDrop callback.
+func (w *Window) DndManager() *dnd.Manager {
+	if w.dndManager == nil {
+		w.dndManager = dnd.NewManager()
+	}
+	return w.dndManager
+}
+
+// HandlePointerEvent is the unified entry point for all pointer input
+// (ADR-049 Phase 3).
+//
+// It performs TWO functions:
+//  1. Feed the gesture arena: collect GestureAware recognizers on PointerDown,
+//     route subsequent events, sweep on PointerUp.
+//  2. Derive MouseEvent: synthesize a legacy MouseEvent from the PointerEvent
+//     and dispatch it to the widget tree via HandleEvent, so existing widgets
+//     continue to work unchanged.
+//
+// This replaces the previous dual-dispatch architecture where legacy mouse
+// callbacks and pointer events were dispatched independently.
+func (w *Window) HandlePointerEvent(ev *gesture.PointerEvent) {
+	if w.root == nil || ev == nil {
+		return
+	}
+
+	// Lazy arena creation.
+	if w.gestureArena == nil {
+		w.gestureArena = gesture.NewArena()
+	}
+
+	// --- Part 1: Gesture Arena ---
+	switch ev.EventType {
+	case gesture.PointerDown:
+		// Hit-test: find all GestureAware widgets under the pointer.
+		// Collect their recognizers and add them to the arena.
+		recognizers := w.hitTestGestureAware(ev.GlobalPosition)
+		for _, rec := range recognizers {
+			rec.AddPointer(ev, w.gestureArena)
+		}
+		// Close the arena for this pointer — no more members can join.
+		w.gestureArena.Close(ev.PointerID)
+
+	case gesture.PointerMove, gesture.PointerUp, gesture.PointerCancel:
+		// Route to all recognizers tracking this pointer.
+		w.gestureArena.Route(ev)
+	}
+
+	// Sweep after PointerUp: if no recognizer has claimed victory,
+	// the first remaining member wins by default.
+	if ev.EventType == gesture.PointerUp {
+		w.gestureArena.Sweep(ev.PointerID)
+	}
+
+	// --- Part 2: Derive MouseEvent for existing widget dispatch ---
+	derived := deriveMouseEvent(ev)
+	if derived != nil {
+		w.HandleEvent(derived)
+	}
+}
+
+// deriveMouseEvent synthesizes a legacy MouseEvent from a gesture.PointerEvent
+// so that existing widgets continue to receive mouse events unchanged.
+//
+// Mapping:
+//   - PointerDown  -> MousePress
+//   - PointerUp    -> MouseRelease
+//   - PointerMove  -> MouseMove
+//   - PointerCancel -> (no MouseEvent derived — cancel is gesture-only)
+func deriveMouseEvent(ev *gesture.PointerEvent) *event.MouseEvent {
+	var mouseType event.MouseEventType
+	switch ev.EventType {
+	case gesture.PointerDown:
+		mouseType = event.MousePress
+	case gesture.PointerUp:
+		mouseType = event.MouseRelease
+	case gesture.PointerMove:
+		mouseType = event.MouseMove
+	default:
+		// PointerCancel has no legacy MouseEvent equivalent.
+		return nil
+	}
+
+	return event.NewMouseEvent(
+		mouseType,
+		ev.Button,
+		ev.Buttons,
+		ev.Position,
+		ev.GlobalPosition,
+		ev.Modifiers(),
+	)
+}
+
+// GestureArena returns the window's gesture arena, or nil if no pointer
+// events have been processed yet. Exposed for testing.
+func (w *Window) GestureArena() *gesture.Arena {
+	return w.gestureArena
+}
+
+// hitTestGestureAware walks the widget tree from root, collecting
+// recognizers from all GestureAware widgets whose ScreenBounds contain
+// the given position. Children are checked in reverse order (topmost
+// first in z-order) to match visual ordering.
+//
+// This is a separate hit-test from overlayAwareHitTest (used for hover):
+// gesture hit-testing collects ALL matching widgets on the path (not just
+// the deepest one), because parent and child may both have recognizers
+// that compete in the arena.
+//
+// Each GestureAware widget receives the pointer position in widget-local
+// coordinates, allowing container widgets (Collapsible, TabView, Docking)
+// to filter recognizers based on their interactive region.
+func (w *Window) hitTestGestureAware(pos geometry.Point) []gesture.Recognizer {
+	var recognizers []gesture.Recognizer
+	hitTestGestureRecursive(w.root, pos, &recognizers)
+	return recognizers
+}
+
+// hitTestGestureRecursive walks the widget tree depth-first, collecting
+// recognizers from GestureAware widgets that contain the point.
+//
+// When calling GestureHitTest, the window-coordinate position is translated
+// to widget-local coordinates using ScreenOrigin. This lets container widgets
+// decide whether the click is within their interactive area (e.g., Collapsible
+// header) before returning recognizers.
+func hitTestGestureRecursive(w widget.Widget, pos geometry.Point, out *[]gesture.Recognizer) {
+	if w == nil {
+		return
+	}
+
+	// Check visibility.
+	if base, ok := w.(interface{ IsVisible() bool }); ok && !base.IsVisible() {
+		return
+	}
+
+	// Check if the widget's ScreenBounds contains the position.
+	if sb, ok := w.(interface{ ScreenBounds() geometry.Rect }); ok {
+		bounds := sb.ScreenBounds()
+		if !bounds.Contains(pos) {
+			return
+		}
+	}
+
+	// Collect recognizers from GestureAware widgets.
+	// Translate pos to widget-local coordinates using ScreenOrigin.
+	if ga, ok := w.(gesture.GestureAware); ok {
+		localPos := pos
+		if so, ok2 := w.(interface{ ScreenOrigin() geometry.Point }); ok2 {
+			origin := so.ScreenOrigin()
+			localPos = geometry.Pt(pos.X-origin.X, pos.Y-origin.Y)
+		}
+		recs := ga.GestureHitTest(localPos)
+		if len(recs) > 0 {
+			*out = append(*out, recs...)
+		}
+	}
+
+	// Recurse into children (reverse order for z-order consistency).
+	children := w.Children()
+	for i := len(children) - 1; i >= 0; i-- {
+		hitTestGestureRecursive(children[i], pos, out)
+	}
+}
+
 // windowOverlayManager adapts the Window's overlay.Stack to the
 // widget.OverlayManager interface. This avoids circular imports since
 // the widget package cannot import the overlay package.
@@ -1148,21 +1571,42 @@ func (m *windowOverlayManager) PushOverlay(w widget.Widget, onDismiss func()) {
 		}),
 	)
 	m.window.overlays.Push(container)
+
+	// Mount the overlay container tree so signal bindings activate (#171).
+	widget.MountTree(container, m.window.ctx)
 }
 
-// PopOverlay removes the topmost overlay.
+// PopOverlay removes the topmost overlay and unmounts its widget tree.
 func (m *windowOverlayManager) PopOverlay() {
-	m.window.overlays.Pop()
+	top := m.window.overlays.Pop()
+	if top != nil {
+		widget.UnmountTree(top)
+	}
 }
 
 // RemoveOverlay finds and removes the overlay containing the given widget.
+// All overlays above the target are also unmounted (stack semantics).
 func (m *windowOverlayManager) RemoveOverlay(w widget.Widget) {
 	for _, o := range m.window.overlays.List() {
 		if c, ok := o.(*overlay.Container); ok {
 			if c.Content() == w {
+				// overlay.Stack.Remove pops everything above 'o' too.
+				// Unmount all overlays at and above the target.
+				m.unmountOverlaysAbove(o)
 				m.window.overlays.Remove(o)
 				return
 			}
+		}
+	}
+}
+
+// unmountOverlaysAbove unmounts the given overlay and all overlays above it.
+func (m *windowOverlayManager) unmountOverlaysAbove(target overlay.Overlay) {
+	list := m.window.overlays.List()
+	for i := len(list) - 1; i >= 0; i-- {
+		widget.UnmountTree(list[i])
+		if list[i] == target {
+			return
 		}
 	}
 }
@@ -1363,6 +1807,8 @@ func widgetCursorToPlatform(c widget.CursorType) gpucontext.CursorShape {
 // This populates the flat dirty boundary set used by HasDirtyBoundaries
 // for O(1) frame skip decisions, replacing O(n) NeedsRedrawInTreeNonBoundary.
 func (w *Window) AddDirtyBoundary(key uint64) {
+	w.dirtyMu.Lock()
+	defer w.dirtyMu.Unlock()
 	if w.dirtyBoundaries == nil {
 		w.dirtyBoundaries = make(map[uint64]dirtyBoundaryEntry)
 	}
@@ -1372,11 +1818,15 @@ func (w *Window) AddDirtyBoundary(key uint64) {
 // HasDirtyBoundaries reports whether any RepaintBoundary has been marked
 // dirty since the last paint pass.
 func (w *Window) HasDirtyBoundaries() bool {
+	w.dirtyMu.Lock()
+	defer w.dirtyMu.Unlock()
 	return len(w.dirtyBoundaries) > 0
 }
 
 // DirtyBoundaryCount returns the number of dirty RepaintBoundary instances.
 func (w *Window) DirtyBoundaryCount() int {
+	w.dirtyMu.Lock()
+	defer w.dirtyMu.Unlock()
 	return len(w.dirtyBoundaries)
 }
 
@@ -1384,6 +1834,8 @@ func (w *Window) DirtyBoundaryCount() int {
 // Each boundary's ClearBoundaryDirty is NOT called here — that is the
 // responsibility of the PaintDirtyBoundaries method.
 func (w *Window) ClearDirtyBoundaries() {
+	w.dirtyMu.Lock()
+	defer w.dirtyMu.Unlock()
 	// Clear map efficiently: delete all entries but keep the allocated map.
 	for k := range w.dirtyBoundaries {
 		delete(w.dirtyBoundaries, k)

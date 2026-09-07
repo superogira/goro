@@ -6,6 +6,7 @@ import (
 	"github.com/gogpu/ui/a11y"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -26,6 +27,9 @@ type Widget struct {
 	widget.WidgetBase
 	cfg     config
 	painter Painter
+
+	// Gesture recognizer for row click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
 
 	// Flattened visible rows (rebuilt on expand/collapse).
 	rows []flatRow
@@ -62,6 +66,35 @@ func New(opts ...Option) *Widget {
 
 	// Build initial flattened rows.
 	w.rebuildRows()
+
+	// Create ClickRecognizer for row click handling (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			idx := w.hitTestRow(details.LocalPosition)
+			if idx < 0 || idx >= len(w.rows) {
+				return
+			}
+			row := w.rows[idx]
+			bounds := w.Bounds()
+			rowBounds := w.rowBounds(idx, bounds)
+			// Check if click is on the expand icon area.
+			if !row.node.IsLeaf() {
+				iconBounds := w.expandIconBounds(row.depth, rowBounds)
+				if iconBounds.Contains(details.LocalPosition) {
+					w.toggleNode(row.node)
+					return
+				}
+			}
+			// Click on the row — select the node.
+			if w.cfg.selectionMode == SelectionSingle {
+				w.setSelectedNodeIDDirect(row.node.ID)
+			}
+		},
+	})
 
 	return w
 }
@@ -203,10 +236,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 
 	// Bind root signals.
 	if w.cfg.readonlyRootSignal != nil {
-		b := state.BindToScheduler(w.cfg.readonlyRootSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyRootSignal, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.rootSignal != nil {
-		b := state.BindToScheduler(w.cfg.rootSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.rootSignal, w, sched)
 		w.AddBinding(b)
 	}
 
@@ -232,7 +265,21 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the tree view is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.clickRec != nil {
+		w.clickRec.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// TreeView is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
 }
 
 // --- Public API ---
@@ -443,8 +490,34 @@ func (w *Widget) setSelectedNodeID(ctx widget.Context, id string) {
 	ctx.InvalidateRect(w.Bounds())
 }
 
+// setSelectedNodeIDDirect updates the selected node without requiring a widget.Context.
+// Used by gesture recognizer callbacks.
+func (w *Widget) setSelectedNodeIDDirect(id string) {
+	current := w.cfg.ResolvedSelectedNodeID()
+	if id == current {
+		return
+	}
+
+	if w.cfg.selectedNodeIDSignal != nil {
+		w.cfg.selectedNodeIDSignal.Set(id)
+	} else {
+		w.cfg.selectedNodeID = id
+	}
+
+	w.SetNeedsRedraw(true)
+
+	if w.cfg.onSelect != nil {
+		root := w.cfg.ResolvedRoot()
+		if root != nil {
+			if node := findNodeByID(root, id); node != nil {
+				w.cfg.onSelect(node)
+			}
+		}
+	}
+}
+
 // toggleNode toggles the expanded state of the given node.
-func (w *Widget) toggleNode(ctx widget.Context, node *TreeNode) {
+func (w *Widget) toggleNode(node *TreeNode) {
 	if node.IsLeaf() {
 		return
 	}
@@ -457,8 +530,8 @@ func (w *Widget) toggleNode(ctx widget.Context, node *TreeNode) {
 		w.cfg.onToggle(node, node.Expanded)
 	}
 
-	// ADR-028: layout change — expand/collapse changes row count and tree height.
-	ctx.Invalidate()
+	// ADR-032: layout change — expand/collapse changes row count and tree height.
+	w.MarkNeedsLayout()
 }
 
 // buildConnectorState builds the connector state for the row at index i.
@@ -521,8 +594,9 @@ const noHoveredIndex = -1
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
-	_ a11y.Accessible  = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ a11y.Accessible      = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

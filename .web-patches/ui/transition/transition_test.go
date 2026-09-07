@@ -1,7 +1,6 @@
 package transition
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 	"time"
@@ -84,7 +83,7 @@ func (c *mockCanvas) PopTransform() {
 func (c *mockCanvas) TransformOffset() geometry.Point  { return geometry.Point{} }
 func (c *mockCanvas) ScreenOriginBase() geometry.Point { return geometry.Point{} }
 func (c *mockCanvas) ClipBounds() geometry.Rect        { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *mockCanvas) ReplayScene(_ *scene.Scene)       {}
+func (c *mockCanvas) ReplayScene(_ widget.SceneCache)  {}
 
 // opacityCanvas extends mockCanvas with OpacityPusher support.
 type opacityCanvas struct {
@@ -304,6 +303,7 @@ func TestWrapNilChild(t *testing.T) {
 	ctx := newMockContext(time.Now())
 	canvas := &mockCanvas{}
 	_ = tr.Layout(ctx, geometry.Constraints{MaxWidth: 100, MaxHeight: 100})
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if tr.Event(ctx, &event.MouseEvent{}) {
 		t.Error("Event should return false for nil child")
@@ -428,6 +428,7 @@ func TestDrawHiddenDoesNothing(t *testing.T) {
 
 	ctx := newMockContext(time.Now())
 	canvas := &mockCanvas{}
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
 	if child.drawn != 0 {
@@ -441,6 +442,7 @@ func TestDrawVisibleDrawsChild(t *testing.T) {
 
 	ctx := newMockContext(time.Now())
 	canvas := &mockCanvas{}
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
 	if child.drawn != 1 {
@@ -462,6 +464,7 @@ func TestDrawFadeEnterWithOpacityCanvas(t *testing.T) {
 	tr.Show()
 
 	// First draw: initializes start time, progress = 0.
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if child.drawn != 1 {
 		t.Errorf("draw count: got %d, want 1", child.drawn)
@@ -469,6 +472,7 @@ func TestDrawFadeEnterWithOpacityCanvas(t *testing.T) {
 
 	// Advance halfway.
 	ctx.now = now.Add(100 * time.Millisecond)
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if child.drawn != 2 {
 		t.Errorf("draw count: got %d, want 2", child.drawn)
@@ -479,6 +483,7 @@ func TestDrawFadeEnterWithOpacityCanvas(t *testing.T) {
 
 	// Advance past duration.
 	ctx.now = now.Add(300 * time.Millisecond)
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if tr.IsAnimating() {
 		t.Error("should stop animating after duration")
@@ -501,10 +506,12 @@ func TestDrawFadeExitHidesAfterComplete(t *testing.T) {
 	// Still "shown" during exit animation; we check after draw completes below.
 
 	// First draw.
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
 	// Advance past duration.
 	ctx.now = now.Add(200 * time.Millisecond)
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if tr.IsAnimating() {
 		t.Error("should stop animating after exit duration")
@@ -515,6 +522,7 @@ func TestDrawFadeExitHidesAfterComplete(t *testing.T) {
 
 	// Further draws should not draw child.
 	child.drawn = 0
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if child.drawn != 0 {
 		t.Error("hidden transition should not draw child")
@@ -538,6 +546,7 @@ func TestDrawSlideEnter(t *testing.T) {
 	tr.Show()
 
 	// Draw at t=0: full offset.
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 	if child.drawn != 1 {
 		t.Errorf("draw count: got %d, want 1", child.drawn)
@@ -562,6 +571,7 @@ func TestDrawScaleEnter(t *testing.T) {
 	tr.Layout(ctx, geometry.Constraints{MaxWidth: 200, MaxHeight: 200})
 
 	tr.Show()
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
 	if child.drawn != 1 {
@@ -580,6 +590,7 @@ func TestDrawWithCanvasWithoutOpacity(t *testing.T) {
 	canvas := &mockCanvas{} // no OpacityPusher
 
 	tr.Show()
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
 	// Should still draw child even without opacity support.
@@ -654,14 +665,16 @@ func TestAnimationInvalidatesOnProgress(t *testing.T) {
 	canvas := &mockCanvas{}
 
 	tr.Show()
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
-	// Mid-animation should have invalidated.
+	// Mid-animation: TickAnimation should mark widget for redraw.
 	ctx.now = now.Add(50 * time.Millisecond)
-	ctx.invalidated = false
+	tr.SetNeedsRedraw(false)
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
-	if !ctx.invalidated {
-		t.Error("should invalidate during animation")
+	if !tr.NeedsRedraw() {
+		t.Error("should set NeedsRedraw during animation")
 	}
 }
 
@@ -677,6 +690,7 @@ func TestAnimationSetsNeedsRedraw(t *testing.T) {
 
 	tr.Show()
 	tr.SetNeedsRedraw(false)
+	tr.TickAnimation(ctx)
 	tr.Draw(ctx, canvas)
 
 	// After first draw (still animating), should set needs redraw.

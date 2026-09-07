@@ -15,6 +15,9 @@ import (
 // Backend implements hal.Backend for Metal.
 type Backend struct{}
 
+// NewBackend returns a Metal backend instance.
+func NewBackend() Backend { return Backend{} }
+
 // Variant returns the backend type identifier.
 func (Backend) Variant() gputypes.Backend {
 	return gputypes.BackendMetal
@@ -32,11 +35,12 @@ func (Backend) CreateInstance(desc *hal.InstanceDescriptor) (hal.Instance, error
 // Instance implements hal.Instance for Metal.
 type Instance struct{}
 
-// CreateSurface creates a rendering surface from platform handles.
-func (i *Instance) CreateSurface(displayHandle, windowHandle uintptr) (hal.Surface, error) {
-	// On macOS, windowHandle is typically NSView* or CAMetalLayer*
-	// We need to get or create a CAMetalLayer from the view
-	layer := ID(windowHandle)
+// CreateSurface creates a rendering surface from a CAMetalLayer target.
+func (i *Instance) CreateSurface(target hal.SurfaceTarget) (hal.Surface, error) {
+	if err := target.RequireKind(hal.SurfaceTargetMetalLayer); err != nil {
+		return nil, fmt.Errorf("metal: %w", err)
+	}
+	layer := ID(target.WindowHandle)
 	if layer == 0 {
 		return nil, fmt.Errorf("metal: window handle is nil")
 	}
@@ -146,10 +150,19 @@ func (i *Instance) EnumerateAdapters(surfaceHint hal.Surface) []hal.ExposedAdapt
 					BufferCopyOffset: 4,
 					BufferCopyPitch:  256,
 				},
-				DownlevelCapabilities: hal.DownlevelCapabilities{
-					ShaderModel: 60,
-					Flags:       0,
-				},
+				// DefaultDownlevelCapabilities (all 27 flags) is correct for Metal.
+				// Rust wgpu-hal Metal conditionally sets 8 flags from feature sets
+				// (adapter.rs:1337-1371), but ALL of those checks pass on our minimum
+				// targets (macOS 15.0+ / iOS 18.0+):
+				//   FRAGMENT_WRITABLE_STORAGE — macOS 10.12+ (available!(macos=10.12))
+				//   CUBE_ARRAY_TEXTURES       — macOS_GPUFamily1_v1 (macOS 10.11+)
+				//   COMPARISON_SAMPLERS        — macOS_GPUFamily1_v1 (macOS 10.11+)
+				//   INDIRECT_EXECUTION         — macOS_GPUFamily1_v1 (macOS 10.11+)
+				//   BASE_VERTEX               — same as INDIRECT_EXECUTION
+				//   ANISOTROPIC_FILTERING      — always true in Rust
+				//   MSL2_1                    — MSL 2.1 requires macOS 10.14+
+				//   TEXTURE_COMPRESSION        — macOS always has BC; iOS has EAC+ASTC
+				DownlevelCapabilities: gputypes.DefaultDownlevelCapabilities(),
 			},
 		})
 	}

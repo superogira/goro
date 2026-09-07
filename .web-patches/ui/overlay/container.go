@@ -70,7 +70,7 @@ func (c *Container) Layout(ctx widget.Context, constraints geometry.Constraints)
 
 	if c.content != nil {
 		// Content is laid out with loose constraints so it can take its natural size.
-		c.content.Layout(ctx, geometry.Loose(size))
+		widget.LayoutChild(c.content, ctx, geometry.Loose(size))
 	}
 	return size
 }

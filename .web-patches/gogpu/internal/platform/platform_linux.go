@@ -5,6 +5,7 @@ package platform
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
@@ -43,7 +44,8 @@ type waylandWindow struct {
 	height      int
 	shouldClose bool
 	configured  bool
-	activated   bool // xdg_toplevel Activated state (window manager focus)
+	activated   bool    // xdg_toplevel Activated state (window manager focus)
+	lastScale   float64 // DPI scale change detection (ADR-059)
 
 	// eventMu guards window state fields (shouldClose, maximized, fullscreen,
 	// width, height, savedWidth, savedHeight). The event queue has its own
@@ -52,6 +54,15 @@ type waylandWindow struct {
 
 	// Event queue — ring buffer (ADR-031: fixed capacity, zero allocs, drops oldest).
 	events *eventqueue.Queue[Event]
+
+	// winID identifies this window (primary or secondary) so queueEvent can
+	// stamp every event with the right WindowID — without it, App's
+	// getByPlatformID lookup in dispatchKeyEvent/dispatchPointerEvent/
+	// dispatchScrollEvent/dispatchCharEvent always resolves to nil for
+	// events whose WindowID defaults to zero, so per-window callbacks
+	// (SetOnKeyPress etc.) are silently never invoked for anything but the
+	// events that separately set WindowID by hand (Close/Expose/Focus).
+	winID WindowID
 
 	savedWidth  int // pre-maximize size for restore
 	savedHeight int
@@ -147,6 +158,18 @@ type waylandPlatform struct {
 	menu *linuxMenuState
 }
 
+// secondaryX11Conn holds an independent X11 connection for a secondary
+// gogpu window. X11 supports multiple client connections per process
+// trivially, and x11.Platform is already a fully self-contained
+// single-connection/single-window abstraction (its own atoms, XKB state,
+// cursor cache, event queue) — so a secondary window is just another
+// *x11.Platform instance with its own Init() call, no protocol-level code
+// duplication needed. Mirrors secondaryWaylandConn's role for Wayland.
+type secondaryX11Conn struct {
+	platform *x11.Platform
+	winID    WindowID
+}
+
 // x11Platform wraps x11.Platform to implement the Platform interface.
 type x11Platform struct {
 	inner *x11.Platform
@@ -156,6 +179,10 @@ type x11Platform struct {
 	// net.Conn (Go runtime netpoller vs kernel poll on dup'd fd).
 	wakeCh          chan struct{}
 	primaryWindowID WindowID
+
+	// Secondary windows — each with its own independent X11 connection.
+	secondaries []*secondaryX11Conn
+	secondaryMu sync.RWMutex
 
 	// menu manages the D-Bus AppMenu server (com.canonical.dbusmenu).
 	// Nil-safe; all methods no-op when DBUS_SESSION_BUS_ADDRESS is absent.
@@ -211,18 +238,36 @@ func (p *x11Platform) Init() error {
 // CreateWindow creates an X11 window.
 func (p *x11Platform) CreateWindow(config Config) (PlatformWindow, error) {
 	x11Config := x11.Config{
-		Title:      config.Title,
-		Width:      config.Width,
-		Height:     config.Height,
-		Resizable:  config.Resizable,
-		Fullscreen: config.Fullscreen,
-		Frameless:  config.Frameless,
-		MinWidth:   config.MinWidth,
-		MinHeight:  config.MinHeight,
-		MaxWidth:   config.MaxWidth,
-		MaxHeight:  config.MaxHeight,
-		Icon:       config.Icon,
+		Title:       config.Title,
+		Width:       config.Width,
+		Height:      config.Height,
+		Resizable:   config.Resizable,
+		Fullscreen:  config.Fullscreen,
+		Frameless:   config.Frameless,
+		Transparent: config.Transparent,
+		MinWidth:    config.MinWidth,
+		MinHeight:   config.MinHeight,
+		MaxWidth:    config.MaxWidth,
+		MaxHeight:   config.MaxHeight,
+		Icon:        config.Icon,
 	}
+
+	if p.primaryWindowID != 0 {
+		// Secondary window: open an independent X11 connection rather than
+		// reinitializing the primary's — mirrors waylandPlatform.CreateWindow's
+		// secondary branch.
+		inner := x11.NewPlatform()
+		if err := inner.Init(x11Config); err != nil {
+			return nil, fmt.Errorf("x11: secondary window: %w", err)
+		}
+		id := NewWindowID()
+		sec := &secondaryX11Conn{platform: inner, winID: id}
+		p.secondaryMu.Lock()
+		p.secondaries = append(p.secondaries, sec)
+		p.secondaryMu.Unlock()
+		return &x11PlatformWindow{platform: p, id: id, secondary: sec}, nil
+	}
+
 	if err := p.inner.Init(x11Config); err != nil {
 		return nil, err
 	}
@@ -237,17 +282,25 @@ func (p *x11Platform) CreateWindow(config Config) (PlatformWindow, error) {
 	return win, nil
 }
 
-// PollEvents processes pending X11 events.
-func (p *x11Platform) PollEvents() Event {
-	event := p.inner.PollEvents()
+// translateX11Event converts a raw x11.PlatformEvent read from inner's
+// connection into our Event type, stamping windowID on every case (not just
+// Close/Expose as before) — App's dispatchKeyEvent/dispatchPointerEvent/
+// dispatchScrollEvent/dispatchCharEvent route via getByPlatformID, which
+// only resolves a specific *Window for a nonzero, registered WindowID; a
+// zero-value WindowID (the previous default for Key/Focus/Pointer/Scroll/
+// Char) always misses that lookup, so per-window callbacks — for the
+// primary window as much as any secondary one — were silently never
+// invoked on Linux. Resize is unaffected either way: classifyEvent treats
+// WindowID==0 or ==primaryWindow.platformID as equally "primary".
+func translateX11Event(event x11.PlatformEvent, inner *x11.Platform, windowID WindowID) Event {
 	switch event.Type {
 	case x11.EventTypeClose:
-		return Event{Type: EventClose, WindowID: p.primaryWindowID}
+		return Event{Type: EventClose, WindowID: windowID}
 	case x11.EventTypeResize:
 		// X11 reports physical pixel dimensions. Compute logical size from scale factor.
 		physW := event.Width
 		physH := event.Height
-		scale := p.inner.ScaleFactor()
+		scale := inner.ScaleFactor()
 		logW := physW
 		logH := physH
 		if scale > 1.0 {
@@ -256,37 +309,71 @@ func (p *x11Platform) PollEvents() Event {
 		}
 		return Event{
 			Type:           EventResize,
+			WindowID:       windowID,
 			Width:          logW,
 			Height:         logH,
 			PhysicalWidth:  physW,
 			PhysicalHeight: physH,
 		}
 	case x11.EventTypeFocus:
-		return Event{Type: EventFocus, Focused: event.Focused}
+		return Event{Type: EventFocus, Focused: event.Focused, WindowID: windowID}
 	case x11.EventTypeKeyDown:
-		return Event{Type: EventKeyDown, Key: event.Key, Mods: event.Mods}
+		return Event{Type: EventKeyDown, Key: event.Key, Mods: event.Mods, WindowID: windowID}
 	case x11.EventTypeKeyUp:
-		return Event{Type: EventKeyUp, Key: event.Key, Mods: event.Mods}
+		return Event{Type: EventKeyUp, Key: event.Key, Mods: event.Mods, WindowID: windowID}
 	case x11.EventTypeChar:
-		return Event{Type: EventChar, Char: event.Char}
+		return Event{Type: EventChar, Char: event.Char, WindowID: windowID}
 	case x11.EventTypePointerDown:
-		return Event{Type: EventPointerDown, Pointer: event.Pointer}
+		return Event{Type: EventPointerDown, Pointer: event.Pointer, WindowID: windowID}
 	case x11.EventTypePointerUp:
-		return Event{Type: EventPointerUp, Pointer: event.Pointer}
+		return Event{Type: EventPointerUp, Pointer: event.Pointer, WindowID: windowID}
 	case x11.EventTypePointerMove:
-		return Event{Type: EventPointerMove, Pointer: event.Pointer}
+		return Event{Type: EventPointerMove, Pointer: event.Pointer, WindowID: windowID}
 	case x11.EventTypePointerEnter:
-		return Event{Type: EventPointerEnter, Pointer: event.Pointer}
+		return Event{Type: EventPointerEnter, Pointer: event.Pointer, WindowID: windowID}
 	case x11.EventTypePointerLeave:
-		return Event{Type: EventPointerLeave, Pointer: event.Pointer}
+		return Event{Type: EventPointerLeave, Pointer: event.Pointer, WindowID: windowID}
 	case x11.EventTypeScroll:
-		return Event{Type: EventScroll, Scroll: event.Scroll}
+		return Event{Type: EventScroll, Scroll: event.Scroll, WindowID: windowID}
 	case x11.EventTypeExpose:
-		return Event{Type: EventExpose, WindowID: p.primaryWindowID}
+		return Event{Type: EventExpose, WindowID: windowID}
+	case x11.EventTypeDragEnter:
+		return Event{Type: EventDragEnter, DragPaths: event.DragPaths, DragX: event.DragX, DragY: event.DragY, WindowID: windowID}
+	case x11.EventTypeDragMove:
+		return Event{Type: EventDragMove, DragX: event.DragX, DragY: event.DragY, WindowID: windowID}
+	case x11.EventTypeDragDrop:
+		return Event{Type: EventDragDrop, DragPaths: event.DragPaths, DragX: event.DragX, DragY: event.DragY, WindowID: windowID}
+	case x11.EventTypeDragLeave:
+		return Event{Type: EventDragLeave, WindowID: windowID}
 	default:
 		return Event{Type: EventNone}
 	}
 }
+
+// PollEvents processes pending X11 events from the primary connection first,
+// then — non-blocking, one at a time — each secondary window's independent
+// connection (mirrors waylandPlatform.PollEvents' secondary drain loop).
+func (p *x11Platform) PollEvents() Event {
+	if e := translateX11Event(p.inner.PollEvents(), p.inner, p.primaryWindowID); e.Type != EventNone {
+		return e
+	}
+
+	p.secondaryMu.RLock()
+	secs := make([]*secondaryX11Conn, len(p.secondaries))
+	copy(secs, p.secondaries)
+	p.secondaryMu.RUnlock()
+	for _, sec := range secs {
+		if e := translateX11Event(sec.platform.PollEvents(), sec.platform, sec.winID); e.Type != EventNone {
+			return e
+		}
+	}
+
+	return Event{Type: EventNone}
+}
+
+// waitEventsBudget is the total per-loop-turn time WaitEvents spends polling
+// the primary and secondary connections combined, before re-checking wakeCh.
+const waitEventsBudget = 100 * time.Millisecond
 
 // WaitEvents blocks until at least one OS event is available or WakeUp is called.
 // Uses PollEventTimeout on the X11 net.Conn (Go runtime netpoller) with periodic
@@ -300,7 +387,23 @@ func (p *x11Platform) WaitEvents() {
 		default:
 		}
 
-		event, err := p.inner.PollEventTimeout(100 * time.Millisecond)
+		p.secondaryMu.RLock()
+		secs := make([]*secondaryX11Conn, len(p.secondaries))
+		copy(secs, p.secondaries)
+		p.secondaryMu.RUnlock()
+
+		// Split the fixed total budget across the primary plus every secondary
+		// connection, rather than giving the primary a full fixed slice and
+		// each secondary its own fixed slice on top. That keeps the worst-case
+		// added latency per loop turn constant as window count grows, instead
+		// of scaling with N (nothing here consumes/discards events —
+		// PollEventTimeout only reads from the wire and queues).
+		slice := waitEventsBudget / time.Duration(len(secs)+1)
+		if slice < time.Millisecond {
+			slice = time.Millisecond
+		}
+
+		event, err := p.inner.PollEventTimeout(slice)
 		if err != nil {
 			return
 		}
@@ -309,6 +412,19 @@ func (p *x11Platform) WaitEvents() {
 				p.inner.QueueEvent(pe)
 			}
 			return
+		}
+
+		for _, sec := range secs {
+			sevent, serr := sec.platform.PollEventTimeout(slice)
+			if serr != nil {
+				continue
+			}
+			if sevent != nil {
+				if pe := sec.platform.HandleEvent(sevent); pe.Type != x11.EventTypeNone {
+					sec.platform.QueueEvent(pe)
+				}
+				return
+			}
 		}
 	}
 }
@@ -344,6 +460,16 @@ func (p *x11Platform) SubpixelLayout() gpucontext.SubpixelLayout {
 	return gpucontext.SubpixelNone
 }
 
+// FontSmoothing returns the OS text anti-aliasing mode.
+// Delegates to the X11 platform which reads Xft.antialias and Xft.rgba
+// from RESOURCE_MANAGER.
+func (p *x11Platform) FontSmoothing() gpucontext.FontSmoothing {
+	if p.inner != nil {
+		return p.inner.FontSmoothing()
+	}
+	return gpucontext.FontSmoothingGrayscale
+}
+
 // DarkMode returns true if the system dark mode is active.
 func (p *x11Platform) DarkMode() bool { return detectDarkMode() }
 
@@ -361,6 +487,13 @@ func (p *x11Platform) SetAppName(name string) {}
 // Destroy closes all windows and releases resources.
 func (p *x11Platform) Destroy() {
 	p.menu.close()
+	p.secondaryMu.Lock()
+	secs := p.secondaries
+	p.secondaries = nil
+	p.secondaryMu.Unlock()
+	for _, sec := range secs {
+		sec.platform.Destroy()
+	}
 	p.inner.Destroy()
 }
 
@@ -368,88 +501,143 @@ func (p *x11Platform) Destroy() {
 
 // x11PlatformWindow wraps x11Platform to implement PlatformWindow.
 type x11PlatformWindow struct {
-	platform *x11Platform
-	id       WindowID
+	platform  *x11Platform
+	id        WindowID
+	secondary *secondaryX11Conn // non-nil for secondary windows
+	lastScale float64           // DPI scale change detection (ADR-059)
+}
+
+// inner returns the *x11.Platform connection backing this window: the
+// secondary's own independent connection if this is a secondary window,
+// otherwise the shared primary connection. Every method below goes through
+// this instead of w.platform.inner directly, so — unlike Wayland's
+// waylandPlatformWindow — every operation (not just Close/input/Destroy) is
+// correctly scoped to the window it was called on.
+func (w *x11PlatformWindow) inner() *x11.Platform {
+	if w.secondary != nil {
+		return w.secondary.platform
+	}
+	return w.platform.inner
 }
 
 func (w *x11PlatformWindow) ID() WindowID                  { return w.id }
-func (w *x11PlatformWindow) GetHandle() (uintptr, uintptr) { return w.platform.inner.GetHandle() }
+func (w *x11PlatformWindow) GetHandle() (uintptr, uintptr) { return w.inner().GetHandle() }
 
 // LogicalSize returns the window size in logical units (DIP/platform points).
 // On HiDPI, divides physical pixels by the scale factor.
 func (w *x11PlatformWindow) LogicalSize() (int, int) {
-	return w.platform.inner.LogicalSize()
+	return w.inner().LogicalSize()
 }
 
 // PhysicalSize returns the window size in physical device pixels (what the GPU sees).
-func (w *x11PlatformWindow) PhysicalSize() (int, int)       { return w.platform.inner.GetSize() }
-func (w *x11PlatformWindow) ScaleFactor() float64           { return w.platform.inner.ScaleFactor() }
-func (w *x11PlatformWindow) ShouldClose() bool              { return w.platform.inner.ShouldClose() }
+func (w *x11PlatformWindow) PhysicalSize() (int, int)       { return w.inner().GetSize() }
+func (w *x11PlatformWindow) ScaleFactor() float64           { return w.inner().ScaleFactor() }
+func (w *x11PlatformWindow) ShouldClose() bool              { return w.inner().ShouldClose() }
 func (w *x11PlatformWindow) InSizeMove() bool               { return false }
-func (w *x11PlatformWindow) SetTitle(title string)          { w.platform.inner.SetTitle(title) }
-func (w *x11PlatformWindow) SetMinSize(width, height int)   { w.platform.inner.SetMinSize(width, height) }
-func (w *x11PlatformWindow) SetMaxSize(width, height int)   { w.platform.inner.SetMaxSize(width, height) }
-func (w *x11PlatformWindow) SetCursor(cursorID int)         { w.platform.inner.SetCursor(cursorID) }
-func (w *x11PlatformWindow) SetCursorMode(mode int)         { w.platform.inner.SetCursorMode(mode) }
-func (w *x11PlatformWindow) CursorMode() int                { return w.platform.inner.GetCursorMode() }
+func (w *x11PlatformWindow) SetTitle(title string)          { w.inner().SetTitle(title) }
+func (w *x11PlatformWindow) SetMinSize(width, height int)   { w.inner().SetMinSize(width, height) }
+func (w *x11PlatformWindow) SetMaxSize(width, height int)   { w.inner().SetMaxSize(width, height) }
+func (w *x11PlatformWindow) RequestSize(width, height int)  { w.inner().RequestSize(width, height) }
+func (w *x11PlatformWindow) SetCursor(cursorID int)         { w.inner().SetCursor(cursorID) }
+func (w *x11PlatformWindow) SetCursorMode(mode int)         { w.inner().SetCursorMode(mode) }
+func (w *x11PlatformWindow) CursorMode() int                { return w.inner().GetCursorMode() }
 func (w *x11PlatformWindow) SyncFrame()                     {}
 func (w *x11PlatformWindow) SetModalFrameCallback(_ func()) {}
 
 func (w *x11PlatformWindow) PrepareFrame() PrepareFrameResult {
-	pw, ph := w.platform.inner.GetSize()
+	pw, ph := w.inner().GetSize()
+	scale := w.inner().ScaleFactor()
+	scaleChanged := w.lastScale != 0 && w.lastScale != scale
+	w.lastScale = scale
 	return PrepareFrameResult{
-		ScaleFactor:    w.platform.inner.ScaleFactor(),
+		ScaleChanged:   scaleChanged,
+		ScaleFactor:    scale,
 		PhysicalWidth:  uint32(pw),
 		PhysicalHeight: uint32(ph),
 	}
 }
 
 func (w *x11PlatformWindow) SetFrameless(frameless bool) {
-	w.platform.inner.SetFrameless(frameless)
+	w.inner().SetFrameless(frameless)
 }
 
 func (w *x11PlatformWindow) IsFrameless() bool {
-	return w.platform.inner.IsFrameless()
+	return w.inner().IsFrameless()
 }
 
 func (w *x11PlatformWindow) SetHitTestCallback(fn func(x, y float64) gpucontext.HitTestResult) {
-	w.platform.inner.SetHitTestCallback(fn)
+	w.inner().SetHitTestCallback(fn)
 }
 
-func (w *x11PlatformWindow) Minimize()         { w.platform.inner.Minimize() }
-func (w *x11PlatformWindow) Maximize()         { w.platform.inner.Maximize() }
-func (w *x11PlatformWindow) IsMaximized() bool { return w.platform.inner.IsMaximized() }
+func (w *x11PlatformWindow) Minimize()         { w.inner().Minimize() }
+func (w *x11PlatformWindow) Maximize()         { w.inner().Maximize() }
+func (w *x11PlatformWindow) IsMaximized() bool { return w.inner().IsMaximized() }
 
 func (w *x11PlatformWindow) SetFullscreen(fullscreen bool) {
-	w.platform.inner.SetFullscreen(fullscreen)
+	w.inner().SetFullscreen(fullscreen)
 }
 
 func (w *x11PlatformWindow) IsFullscreen() bool {
-	return w.platform.inner.IsFullscreen()
+	return w.inner().IsFullscreen()
 }
 
 func (w *x11PlatformWindow) SetHeaderAlignment(_ int) {} // X11 title bar is compositor-controlled
 
-func (w *x11PlatformWindow) Close() { w.platform.inner.CloseWindow() }
+func (w *x11PlatformWindow) Close() { w.inner().CloseWindow() }
 
 func (w *x11PlatformWindow) Show() {
-	if err := w.platform.inner.MapWindow(); err != nil {
+	if err := w.inner().MapWindow(); err != nil {
 		logger().Warn("x11: MapWindow failed in Show", "err", err)
 	}
 }
 
-// BlitPixels copies RGBA pixel data to the window using X11 PutImage.
-func (w *x11PlatformWindow) BlitPixels(pixels []byte, width, height int) error {
-	return w.platform.inner.BlitPixels(pixels, width, height)
+func (w *x11PlatformWindow) Hide() {
+	w.inner().Hide()
 }
 
+func (w *x11PlatformWindow) SetPosition(x, y int) {
+	w.inner().SetPosition(x, y)
+}
+
+// BlitPixels copies RGBA pixel data to the window using X11 PutImage.
+func (w *x11PlatformWindow) BlitPixels(pixels []byte, width, height int) error {
+	return w.inner().BlitPixels(pixels, width, height)
+}
+
+// StartDrag initiates an outgoing drag-and-drop via the XDND protocol.
+func (w *x11PlatformWindow) StartDrag(paths []string, done func(DragResult)) {
+	startXDNDDrag(w.inner(), paths, done)
+}
+
+// Destroy tears down a secondary window's independent connection and
+// unregisters it. Primary destruction is handled by platform.Destroy().
 func (w *x11PlatformWindow) Destroy() {
-	// Destruction handled by platform.Destroy()
+	if w.secondary == nil {
+		return
+	}
+	p := w.platform
+	p.secondaryMu.Lock()
+	for i, s := range p.secondaries {
+		if s == w.secondary {
+			p.secondaries = append(p.secondaries[:i], p.secondaries[i+1:]...)
+			break
+		}
+	}
+	p.secondaryMu.Unlock()
+	w.secondary.platform.Destroy()
+	w.secondary = nil
 }
 
 // --- waylandPlatformWindow implements PlatformWindow ---
 
 // waylandPlatformWindow wraps waylandPlatform to implement PlatformWindow.
+//
+// Known gap: Minimize/Maximize/IsMaximized/SetFullscreen/IsFullscreen/
+// SetCursor/SetCursorMode/CursorMode/SetFrameless/IsFrameless/
+// SetHitTestCallback all delegate unconditionally to w.platform (the
+// primary connection) rather than branching on w.secondary — calling any
+// of them on a secondary window silently affects window 1 instead. Close(),
+// input dispatch, and Destroy() are secondary-aware (fixed); these are not.
 type waylandPlatformWindow struct {
 	platform  *waylandPlatform
 	id        WindowID
@@ -549,14 +737,81 @@ func (w *waylandPlatformWindow) SetMaxSize(width, height int) {
 	}
 }
 
+// RequestSize requests the compositor to resize the window's content area.
+// This is advisory — the compositor may reject it for maximized, fullscreen,
+// or tiled windows. On Wayland the client cannot force a window size; only
+// the compositor decides the final geometry via xdg_toplevel.configure.
+func (w *waylandPlatformWindow) RequestSize(width, height int) {
+	var wp *waylandWindow
+	if w.secondary != nil {
+		wp = &w.secondary.state
+	} else {
+		wp = w.platform.primary
+	}
+
+	wp.eventMu.Lock()
+	isMax := wp.maximized
+	isFS := wp.fullscreen
+	if !isMax && !isFS {
+		wp.width = width
+		wp.height = height
+	}
+	wp.eventMu.Unlock()
+
+	// Compositor owns the size in maximized/fullscreen — skip.
+	if isMax || isFS {
+		return
+	}
+
+	// Temporarily set min==max==desired to signal the compositor. Then
+	// restore 0,0 so the window remains freely resizable after the
+	// compositor applies the requested size.
+	if libwl := w.libwayland(); libwl != nil {
+		libwl.SetMinSize(int32(width), int32(height))
+		libwl.SetMaxSize(int32(width), int32(height))
+		_ = libwl.Flush()
+		libwl.SetMinSize(0, 0)
+		libwl.SetMaxSize(0, 0)
+		_ = libwl.Flush()
+	}
+}
+
 func (w *waylandPlatformWindow) PrepareFrame() PrepareFrameResult {
 	scale := w.ScaleFactor()
 	if libwl := w.libwayland(); libwl != nil && scale > 1.0 {
 		lw, lh := w.LogicalSize()
 		libwl.SetViewportDestination(int32(lw), int32(lh))
 	}
+
+	// Detect scale change (ADR-059).
+	var wp *waylandWindow
+	if w.secondary != nil {
+		wp = &w.secondary.state
+	} else {
+		wp = w.platform.primary
+	}
+	wp.eventMu.Lock()
+	scaleChanged := wp.lastScale != 0 && wp.lastScale != scale
+	if scaleChanged {
+		// Read size under the same lock. Do NOT call LogicalSize() here:
+		// LogicalSize also acquires eventMu, and sync.Mutex is not reentrant —
+		// that self-deadlocks the render thread on multi-display fractional
+		// scale transitions (issue #448; confirmed via goroutine dump).
+		lw, lh := wp.width, wp.height
+		wp.events.Push(Event{
+			WindowID:    wp.winID,
+			Type:        EventScaleChanged,
+			ScaleFactor: scale,
+			Width:       lw,
+			Height:      lh,
+		})
+	}
+	wp.lastScale = scale
+	wp.eventMu.Unlock()
+
 	pw, ph := w.PhysicalSize()
 	return PrepareFrameResult{
+		ScaleChanged:   scaleChanged,
 		ScaleFactor:    scale,
 		PhysicalWidth:  uint32(pw),
 		PhysicalHeight: uint32(ph),
@@ -576,12 +831,30 @@ func (w *waylandPlatformWindow) CursorMode() int {
 }
 
 // SyncFrame on Wayland requests the next frame callback from the compositor.
-// Called after present on the render thread. The frame callback gates the
+// Called before present on the render thread. The frame callback gates the
 // next render: FrameCallbackReady() returns false until the compositor fires
 // the done event (FRAME-001 / BUG-WL-006, winit pattern).
 func (w *waylandPlatformWindow) SyncFrame() {
-	if libwl := w.libwayland(); libwl != nil && wayland.FrameCallbackEnabled() {
-		libwl.RequestFrameCallback()
+	w.PrepareFrameSync(false)
+}
+
+// PrepareFrameSync requests compositor acknowledgement before the next surface
+// commit. A forced request bypasses GOGPU_WAYLAND_FRAME_CALLBACK=0 for one
+// presentation. The bool reports whether this call created a callback that can
+// be canceled if presentation fails.
+func (w *waylandPlatformWindow) PrepareFrameSync(force bool) bool {
+	if !force && !wayland.FrameCallbackEnabled() {
+		return false
+	}
+	libwl := w.libwayland()
+	return libwl != nil && libwl.RequestFrameCallback()
+}
+
+// CancelFrameSync rolls back a callback prepared for a presentation that did
+// not commit successfully.
+func (w *waylandPlatformWindow) CancelFrameSync() {
+	if libwl := w.libwayland(); libwl != nil {
+		libwl.CancelFrameCallback()
 	}
 }
 
@@ -609,9 +882,31 @@ func (w *waylandPlatformWindow) IsFullscreen() bool {
 	return w.platform.IsFullscreen()
 }
 
-func (w *waylandPlatformWindow) Close() { w.platform.CloseWindow() }
+// Close requests this window close. For a secondary window this must not
+// go through platform.CloseWindow(), which only ever targets the primary
+// connection — a secondary Close() would otherwise silently close window 1
+// instead of itself.
+func (w *waylandPlatformWindow) Close() {
+	if w.secondary != nil {
+		w.secondary.state.eventMu.Lock()
+		w.secondary.state.shouldClose = true
+		w.secondary.state.eventMu.Unlock()
+		w.secondary.state.queueEvent(Event{Type: EventClose})
+		return
+	}
+	w.platform.CloseWindow()
+}
 
 func (w *waylandPlatformWindow) Show() {}
+
+// Hide is a no-op on Wayland: the compositor controls window visibility and
+// clients cannot unmap a toplevel (winit limitation). Use Minimize for the
+// closest supported behavior.
+func (w *waylandPlatformWindow) Hide() {}
+
+// SetPosition is a no-op on Wayland: xdg_toplevel placement is owned by the
+// compositor.
+func (w *waylandPlatformWindow) SetPosition(x, y int) {}
 
 func (w *waylandPlatformWindow) SetModalFrameCallback(_ func()) {}
 
@@ -637,9 +932,12 @@ func (w *waylandPlatformWindow) DisplayUnlock() {
 // event (FRAME-001 / BUG-WL-006, winit 3-state pattern).
 func (w *waylandPlatformWindow) FrameCallbackReady() bool {
 	libwl := w.libwayland()
-	if libwl == nil || !wayland.FrameCallbackEnabled() {
-		return true // Not initialized or gating disabled
+	if libwl == nil {
+		return true
 	}
+	// Usually no callback exists when continuous gating is disabled, so the
+	// state is ready. A one-shot presentation sync must still gate while its
+	// callback is pending.
 	return libwl.FrameCallbackReady()
 }
 
@@ -652,6 +950,35 @@ func (w *waylandPlatformWindow) SetHeaderAlignment(alignment int) {
 	}
 	if w.platform.libwl != nil {
 		w.platform.libwl.SetCSDTitleAlignment(alignment)
+	}
+}
+
+// StartDrag initiates an outgoing drag-and-drop via Wayland wl_data_device.start_drag.
+func (w *waylandPlatformWindow) StartDrag(paths []string, done func(DragResult)) {
+	libwl := w.libwayland()
+	if libwl == nil {
+		if done != nil {
+			done(DragCancelled)
+		}
+		return
+	}
+	if err := libwl.StartDragSource(paths, func(result int) {
+		if done == nil {
+			return
+		}
+		switch result {
+		case 1:
+			done(DragCopied)
+		case 2:
+			done(DragMoved)
+		default:
+			done(DragCancelled)
+		}
+	}); err != nil {
+		slog.Warn("wayland: StartDrag failed", "err", err)
+		if done != nil {
+			done(DragCancelled)
+		}
 	}
 }
 
@@ -712,6 +1039,10 @@ func (p *waylandPlatform) Init() error {
 // The first call initializes the primary connection. Subsequent calls create
 // secondary windows each with their own independent Wayland connection and surface.
 func (p *waylandPlatform) CreateWindow(config Config) (PlatformWindow, error) {
+	// TODO(#361, ADR-060): Wayland transparency — explicitly call
+	// wl_surface_set_opaque_region(NULL) when config.Transparent is set.
+	// For now Config.Transparent is silently ignored: Wayland surfaces have
+	// no opaque region by default, so surface alpha already composites.
 	if p.libwl != nil {
 		// Secondary window: open a new independent Wayland connection.
 		sec, err := p.createSecondaryConn(config)
@@ -729,6 +1060,7 @@ func (p *waylandPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 	}
 	id := NewWindowID()
 	p.primaryWindowID = id
+	p.primary.winID = id
 	win := &waylandPlatformWindow{platform: p, id: id}
 	p.menu.window = win
 	p.menu.attachWindow(0)
@@ -959,13 +1291,41 @@ func (p *waylandPlatform) initSingleConnection(config Config) error { //nolint:g
 		}
 	}
 
-	// Bind wl_data_device_manager for clipboard (optional, for copy/paste)
+	// Bind wl_data_device_manager for clipboard + DnD (optional)
 	ddmGlobal := registry.GetGlobalByInterface(wayland.InterfaceWlDataDeviceManager)
 	if ddmGlobal != nil {
 		if err := libwl.SetupClipboard(ddmGlobal.Name, ddmGlobal.Version); err != nil {
 			logger().Warn("clipboard setup failed (copy/paste unavailable)", "err", err)
 		} else {
 			logger().Debug("clipboard protocol bound (wl_data_device_manager)")
+
+			// Register drag-and-drop callbacks on the same data_device.
+			// DnD events come through wl_data_device (enter, leave, motion, drop)
+			// which is already set up by SetupClipboard.
+			libwl.SetDnDCallbacks(&wayland.DnDCallbacks{
+				OnDragEnter: func(surface uintptr, x, y float64) {
+					w := p.findWaylandWindowBySurface(surface)
+					if w == nil {
+						w = p.primary
+					}
+					w.queueEvent(Event{Type: EventDragEnter, DragX: x, DragY: y})
+					p.WakeUp()
+				},
+				OnDragMove: func(x, y float64) {
+					// Motion events don't carry surface — use same window as enter.
+					w := p.primary
+					w.queueEvent(Event{Type: EventDragMove, DragX: x, DragY: y})
+				},
+				OnDragDrop: func(paths []string, x, y float64) {
+					w := p.primary
+					w.queueEvent(Event{Type: EventDragDrop, DragPaths: paths, DragX: x, DragY: y})
+					p.WakeUp()
+				},
+				OnDragLeave: func() {
+					w := p.primary
+					w.queueEvent(Event{Type: EventDragLeave})
+				},
+			})
 		}
 	}
 
@@ -1095,6 +1455,7 @@ func (p *waylandPlatform) createSecondaryConn(config Config) (*secondaryWaylandC
 			repeatFd:  -1,
 			width:     config.Width,
 			height:    config.Height,
+			winID:     id,
 		},
 	}
 
@@ -1393,6 +1754,11 @@ func (p *waylandPlatform) setupInputCallbacks() {
 			})
 		},
 		OnPointerButton: func(serial, timeMs, button, state uint32) {
+			// Store the serial for outgoing drag source (start_drag requires it).
+			if state == wayland.PointerButtonStatePressed {
+				p.libwl.SetLastButtonSerial(serial)
+			}
+
 			w.pointerMu.Lock()
 			if !w.pointerIn {
 				w.pointerMu.Unlock()
@@ -1841,8 +2207,12 @@ func (w *waylandWindow) dispatchKeyEvent(key gpucontext.Key, mods gpucontext.Mod
 	w.queueEvent(Event{Type: evType, Key: key, Mods: mods})
 }
 
-// queueEvent pushes a platform event to the window's ring buffer queue.
+// queueEvent pushes a platform event to the window's ring buffer queue,
+// stamping it with this window's WindowID (see the winID field doc comment)
+// so App's dispatch* methods route it to the right window's callbacks
+// instead of only ever the primary window's.
 func (w *waylandWindow) queueEvent(event Event) {
+	event.WindowID = w.winID
 	w.events.Push(event)
 }
 
@@ -2664,12 +3034,15 @@ func (p *waylandPlatform) PollEvents() Event {
 			}
 		}
 
-		// FRAME-001: Check if the compositor acked our frame callback.
-		// If so, queue an expose event to trigger a redraw. This ensures
-		// the render loop does not skip the next frame when in IDLE mode
-		// (where WaitEvents blocks until an event arrives).
-		if wayland.FrameCallbackEnabled() && p.libwl.ConsumeFrameCallbackReady() {
-			w.queueEvent(Event{Type: EventExpose, WindowID: p.primaryWindowID})
+		// FRAME-001: Consume frame callback ready state. The done event
+		// already unblocked WaitEvents (data on display fd). The frame
+		// callback acts as a GATE (via frameCallbackReady() in app.go:485),
+		// NOT a TRIGGER. Synthesizing EventExpose here caused a perpetual
+		// 60 FPS render loop even with ContinuousRender=false (#379).
+		// winit separates "compositor ready" (gate) from "app wants to draw"
+		// (redraw request) — we now do the same.
+		if wayland.FrameCallbackEnabled() {
+			p.libwl.ConsumeFrameCallbackReady()
 		}
 	}
 
@@ -2742,6 +3115,19 @@ func (p *waylandPlatform) SubpixelLayout() gpucontext.SubpixelLayout {
 		}
 	}
 	return detectSubpixelLayout()
+}
+
+// FontSmoothing returns the OS text anti-aliasing mode for Wayland.
+// Wayland has no protocol for font smoothing settings. Falls back to
+// fontconfig-based detection via detectSubpixelLayout to infer the mode.
+// Full gsettings/D-Bus integration is Phase 3.
+func (p *waylandPlatform) FontSmoothing() gpucontext.FontSmoothing {
+	// Infer from SubpixelLayout: if subpixel layout is set, subpixel AA is active.
+	layout := p.SubpixelLayout()
+	if layout != gpucontext.SubpixelNone {
+		return gpucontext.FontSmoothingSubpixel
+	}
+	return gpucontext.FontSmoothingGrayscale
 }
 
 // wlOutputSubpixelToLayout maps wl_output_subpixel enum to gpucontext.SubpixelLayout.
@@ -3169,6 +3555,27 @@ func (p *waylandPlatform) CloseWindow() {
 }
 
 func (p *waylandPlatform) SetAppName(name string) {}
+
+// findWaylandWindowBySurface maps a wl_surface* proxy to the waylandWindow
+// that owns it. For DnD, the enter event carries the target surface which may
+// be a secondary window's surface. Returns nil if no match is found.
+func (p *waylandPlatform) findWaylandWindowBySurface(surface uintptr) *waylandWindow {
+	// Check primary window's surface.
+	if p.libwl != nil && p.libwl.Surface() == surface {
+		return p.primary
+	}
+
+	// Check secondary windows.
+	p.secondaryMu.RLock()
+	defer p.secondaryMu.RUnlock()
+	for _, sec := range p.secondaries {
+		if sec.libwl != nil && sec.libwl.Surface() == surface {
+			return &sec.state
+		}
+	}
+
+	return nil
+}
 
 func (p *x11Platform) ShowOpenFileDialog(opts FileDialogOptions) ([]string, error) {
 	return showOpenFileDialog(opts)

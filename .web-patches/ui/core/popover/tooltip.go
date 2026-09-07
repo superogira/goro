@@ -74,7 +74,7 @@ func (t *Tooltip) Layout(ctx widget.Context, constraints geometry.Constraints) g
 	}
 
 	if t.cfg.trigger != nil {
-		return t.cfg.trigger.Layout(ctx, constraints)
+		return widget.LayoutChild(t.cfg.trigger, ctx, constraints)
 	}
 	return constraints.Constrain(geometry.Sz(0, 0))
 }

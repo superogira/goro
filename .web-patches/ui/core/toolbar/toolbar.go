@@ -4,6 +4,7 @@ import (
 	"github.com/gogpu/ui/a11y"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/widget"
 )
 
@@ -88,6 +89,9 @@ type Widget struct {
 	painter    Painter
 	itemStates []itemState
 	focusIndex int // index of the focused item (-1 = none)
+
+	// Gesture recognizer for toolbar item click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
 }
 
 // New creates a new toolbar Widget with the given options.
@@ -124,6 +128,17 @@ func New(opts ...Option) *Widget {
 			}
 		}
 	}
+
+	// Create ClickRecognizer for toolbar item click handling (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			// Item click is handled by handlePress/handleRelease.
+		},
+	})
 
 	return w
 }
@@ -211,7 +226,7 @@ func (w *Widget) layoutItems(ctx widget.Context, available geometry.Size) {
 		case ItemCustom:
 			if item.Widget != nil {
 				childConstraints := geometry.Loose(geometry.Sz(available.Width, available.Height))
-				sz := item.Widget.Layout(ctx, childConstraints)
+				sz := widget.LayoutChild(item.Widget, ctx, childConstraints)
 				fixedWidth += sz.Width
 			}
 		}
@@ -305,15 +320,23 @@ func (w *Widget) Draw(ctx widget.Context, canvas widget.Canvas) {
 
 		switch item.Kind {
 		case ItemButton:
+			// Pre-compute icon/text bounds (ADR-034 Phase 4).
+			iBounds := iconBoundsForItem(itemBounds, item.ShowLabel)
+			var tBounds geometry.Rect
+			if item.ShowLabel && item.Label != "" {
+				tBounds = textBoundsForItem(itemBounds, iBounds)
+			}
 			w.painter.PaintButtonItem(canvas, PaintButtonState{
-				Label:     item.Label,
-				Icon:      item.Icon,
-				ShowLabel: item.ShowLabel,
-				Hovered:   w.itemStates[i].interaction == stateHover,
-				Pressed:   w.itemStates[i].interaction == statePressed,
-				Focused:   w.focusIndex == i,
-				Disabled:  !item.Enabled,
-				Bounds:    itemBounds,
+				Label:      item.Label,
+				Icon:       item.Icon,
+				ShowLabel:  item.ShowLabel,
+				Hovered:    w.itemStates[i].interaction == stateHover,
+				Pressed:    w.itemStates[i].interaction == statePressed,
+				Focused:    w.focusIndex == i,
+				Disabled:   !item.Enabled,
+				Bounds:     itemBounds,
+				IconBounds: iBounds,
+				TextBounds: tBounds,
 			})
 		case ItemSeparator:
 			w.painter.PaintSeparator(canvas, itemBounds)
@@ -678,9 +701,21 @@ func (w *Widget) AccessibilityActions() []a11y.Action {
 // a11yLabel is the accessibility label for the toolbar.
 const a11yLabel = "Toolbar"
 
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// Toolbar is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
+}
+
 // Compile-time interface checks.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ a11y.Accessible  = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ a11y.Accessible      = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

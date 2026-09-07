@@ -48,10 +48,9 @@ type Backend interface {
 // Instance is the entry point for GPU operations.
 // An instance manages adapter enumeration and surface creation.
 type Instance interface {
-	// CreateSurface creates a rendering surface from platform handles.
-	// displayHandle is platform-specific (HDC on Windows, NSWindow* on macOS, etc.).
-	// windowHandle is the window handle (HWND on Windows, NSView* on macOS, etc.).
-	CreateSurface(displayHandle, windowHandle uintptr) (Surface, error)
+	// CreateSurface creates a rendering surface from a typed raw platform target.
+	// The target's native objects remain caller-owned and must outlive the Surface.
+	CreateSurface(target SurfaceTarget) (Surface, error)
 
 	// EnumerateAdapters enumerates available physical GPUs.
 	// surfaceHint is optional - if provided, only adapters compatible with
@@ -248,6 +247,24 @@ type Device interface {
 	// WaitIdle waits for all GPU work to complete.
 	// Call this before destroying resources to ensure the GPU is not using them.
 	WaitIdle() error
+
+	// CreateAccelerationStructure creates an acceleration structure (BLAS or TLAS).
+	// Requires FeatureRayQuery. Returns ErrUnsupported if RT is not available.
+	CreateAccelerationStructure(desc *AccelerationStructureDescriptor) (AccelerationStructure, error)
+
+	// DestroyAccelerationStructure destroys an acceleration structure.
+	DestroyAccelerationStructure(as AccelerationStructure)
+
+	// GetAccelerationStructureBuildSizes returns the sizes needed for building an AS.
+	GetAccelerationStructureBuildSizes(desc *GetAccelerationStructureBuildSizesDescriptor) AccelerationStructureBuildSizes
+
+	// GetAccelerationStructureDeviceAddress returns the GPU device address of an AS.
+	// Used for TLAS instance buffer population (BlasAddress field).
+	GetAccelerationStructureDeviceAddress(as AccelerationStructure) uint64
+
+	// TlasInstanceToBytes converts a TlasInstance to the backend-specific
+	// packed byte representation (64 bytes for Vulkan/DX12/Metal).
+	TlasInstanceToBytes(instance TlasInstance) []byte
 
 	// Destroy releases the device.
 	// All resources created from this device must be destroyed first.

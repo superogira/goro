@@ -5,7 +5,9 @@ package wgpu
 import (
 	"fmt"
 
+	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/core"
+	"github.com/gogpu/wgpu/core/track"
 	"github.com/gogpu/wgpu/hal"
 )
 
@@ -39,6 +41,12 @@ type CommandEncoder struct {
 	// submit-time validation (VAL-A6). At Submit, each texture is checked for
 	// destroyed state.
 	usedTextures map[*Texture]struct{}
+
+	// explicitTextureTransitions records the most recent explicit transition
+	// for each texture. When a following command uses that exact state, its
+	// usage replaces (rather than conflicts with) the pre-transition scope
+	// state because the caller already encoded the intervening barrier.
+	explicitTextureTransitions map[*Texture]gputypes.TextureUsage
 
 	// usedBindGroups tracks bind groups referenced during encoding for
 	// submit-time validation (VAL-B5). At Submit, each bind group is checked
@@ -103,6 +111,200 @@ func (e *CommandEncoder) trackBindGroup(bg *BindGroup) {
 	e.usedBindGroups[bg] = struct{}{}
 }
 
+// copyTextureUsage describes one texture endpoint of a copy command.
+type copyTextureUsage struct {
+	texture *Texture
+	usage   track.TextureUses
+}
+
+type preparedCopyTextureUsage struct {
+	texture *Texture
+	index   track.TrackerIndex
+	usage   track.TextureUses
+}
+
+type copyBufferUsage struct {
+	buffer *core.Buffer
+	usage  track.BufferUses
+}
+
+type preparedCopyBufferUsage struct {
+	index track.TrackerIndex
+	usage track.BufferUses
+}
+
+// recordCopyBufferUsages preflights every buffer endpoint before committing
+// any usage. This keeps failed multi-buffer copies atomic, matching the mixed
+// texture/buffer copy paths below.
+func (e *CommandEncoder) recordCopyBufferUsages(requests []copyBufferUsage) bool {
+	if e.core == nil {
+		return true
+	}
+
+	prepared := make([]preparedCopyBufferUsage, 0, len(requests))
+	positions := make(map[track.TrackerIndex]int, len(requests))
+	for _, request := range requests {
+		if request.buffer == nil {
+			continue
+		}
+		td := request.buffer.TrackingData()
+		if td == nil || !td.Index().IsValid() {
+			continue
+		}
+
+		index := td.Index()
+		if position, exists := positions[index]; exists {
+			existing := prepared[position].usage
+			if !existing.IsCompatible(request.usage) {
+				e.setError(fmt.Errorf("wgpu: buffer usage conflict: %w", &track.UsageConflictError{
+					Index: index, Existing: existing, New: request.usage,
+				}))
+				return false
+			}
+			prepared[position].usage = existing | request.usage
+			continue
+		}
+
+		positions[index] = len(prepared)
+		prepared = append(prepared, preparedCopyBufferUsage{index: index, usage: request.usage})
+	}
+
+	scope := e.core.Mutable().BufferScope()
+	for i := range prepared {
+		request := &prepared[i]
+		if !scope.IsUsed(request.index) {
+			continue
+		}
+		existing := scope.GetUsage(request.index)
+		if !existing.IsCompatible(request.usage) {
+			e.setError(fmt.Errorf("wgpu: buffer usage conflict: %w", &track.UsageConflictError{
+				Index: request.index, Existing: existing, New: request.usage,
+			}))
+			return false
+		}
+		request.usage |= existing
+	}
+
+	for _, request := range prepared {
+		scope.ReplaceUsage(request.index, request.usage)
+	}
+	return true
+}
+
+// recordCopyUsages preflights every resource scope update before committing any
+// of them. Copy commands span multiple independently tracked resources, so a
+// conflict on one endpoint must not leave another endpoint recorded.
+func (e *CommandEncoder) recordCopyUsages(textures []copyTextureUsage, buffer *core.Buffer, bufferUsage track.BufferUses) bool {
+	if e.core == nil {
+		return true
+	}
+	prepared, err := prepareCopyTextureUsages(textures)
+	if err != nil {
+		e.setError(fmt.Errorf("wgpu: texture usage conflict: %w", err))
+		return false
+	}
+	if err := e.preflightCopyTextureUsages(prepared); err != nil {
+		e.setError(fmt.Errorf("wgpu: texture usage conflict: %w", err))
+		return false
+	}
+	bufferIndex, finalBufferUsage, trackedBuffer, err := e.preflightCopyBufferUsage(buffer, bufferUsage)
+	if err != nil {
+		e.setError(fmt.Errorf("wgpu: buffer usage conflict: %w", err))
+		return false
+	}
+
+	// All validation is complete. ReplaceUsage cannot fail, so the commit has no
+	// partial-failure path after the first scope mutation.
+	textureScope := e.core.Mutable().TextureScope()
+	for _, request := range prepared {
+		textureScope.ReplaceUsage(request.index, request.usage)
+	}
+	if trackedBuffer {
+		e.core.Mutable().BufferScope().ReplaceUsage(bufferIndex, finalBufferUsage)
+	}
+	return true
+}
+
+// prepareCopyTextureUsages groups multiple roles for the same texture and
+// rejects incompatible roles before consulting or changing the command scope.
+func prepareCopyTextureUsages(requests []copyTextureUsage) ([]preparedCopyTextureUsage, error) {
+	prepared := make([]preparedCopyTextureUsage, 0, len(requests))
+	positions := make(map[track.TrackerIndex]int, len(requests))
+	for _, request := range requests {
+		if request.texture == nil || request.texture.coreTexture == nil {
+			continue
+		}
+		td := request.texture.coreTexture.TrackingData()
+		if td == nil || !td.Index().IsValid() {
+			continue
+		}
+		index := td.Index()
+		position, exists := positions[index]
+		if !exists {
+			positions[index] = len(prepared)
+			prepared = append(prepared, preparedCopyTextureUsage{
+				texture: request.texture, index: index, usage: request.usage,
+			})
+			continue
+		}
+		existing := prepared[position].usage
+		combined := existing | request.usage
+		if !combined.IsCompatible(combined) {
+			return nil, &track.TextureUsageConflictError{
+				Index: index, Existing: existing, New: request.usage,
+			}
+		}
+		prepared[position].usage = combined
+	}
+	return prepared, nil
+}
+
+func (e *CommandEncoder) preflightCopyTextureUsages(requests []preparedCopyTextureUsage) error {
+	scope := e.core.Mutable().TextureScope()
+	for i := range requests {
+		request := &requests[i]
+		if !scope.IsUsed(request.index) {
+			continue
+		}
+		existing := scope.GetUsage(request.index)
+		combined := existing | request.usage
+		if combined.IsCompatible(combined) {
+			request.usage = combined
+			continue
+		}
+		if transitioned, ok := e.explicitTextureTransitions[request.texture]; ok &&
+			transitioned == request.usage.ToTextureUsage() {
+			continue
+		}
+		return &track.TextureUsageConflictError{
+			Index: request.index, Existing: existing, New: request.usage,
+		}
+	}
+	return nil
+}
+
+func (e *CommandEncoder) preflightCopyBufferUsage(buffer *core.Buffer, usage track.BufferUses) (track.TrackerIndex, track.BufferUses, bool, error) {
+	if buffer == nil {
+		return 0, track.BufferUsesNone, false, nil
+	}
+	td := buffer.TrackingData()
+	if td == nil || !td.Index().IsValid() {
+		return 0, track.BufferUsesNone, false, nil
+	}
+	index := td.Index()
+	scope := e.core.Mutable().BufferScope()
+	if !scope.IsUsed(index) {
+		return index, usage, true, nil
+	}
+	existing := scope.GetUsage(index)
+	if existing.IsCompatible(usage) {
+		return index, existing | usage, true, nil
+	}
+	return 0, track.BufferUsesNone, false, &track.UsageConflictError{
+		Index: index, Existing: existing, New: usage,
+	}
+}
+
 // BeginRenderPass begins a render pass.
 // The returned RenderPassEncoder records draw commands.
 // Call RenderPassEncoder.End() when done.
@@ -110,6 +312,10 @@ func (e *CommandEncoder) BeginRenderPass(desc *RenderPassDescriptor) (*RenderPas
 	if e.released {
 		return nil, ErrReleased
 	}
+	if err := validateRenderPassTextureViews(desc); err != nil {
+		return nil, err
+	}
+	trackRenderPassTextureViews(e, desc)
 
 	coreDesc := convertRenderPassDesc(desc)
 
@@ -155,10 +361,6 @@ func (e *CommandEncoder) CopyBufferToBuffer(src *Buffer, srcOffset uint64, dst *
 		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyBufferToBuffer: destination buffer is nil"))
 		return
 	}
-	e.trackRef(src.core.Ref)
-	e.trackRef(dst.core.Ref)
-	e.trackBuffer(src)
-	e.trackBuffer(dst)
 	raw := e.core.RawEncoder()
 	if raw == nil {
 		return
@@ -166,8 +368,19 @@ func (e *CommandEncoder) CopyBufferToBuffer(src *Buffer, srcOffset uint64, dst *
 	halSrc := src.halBuffer()
 	halDst := dst.halBuffer()
 	if halSrc == nil || halDst == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyBufferToBuffer: source or destination buffer is released: %w", ErrReleased))
 		return
 	}
+	if !e.recordCopyBufferUsages([]copyBufferUsage{
+		{buffer: src.core, usage: track.BufferUsesCopySrc},
+		{buffer: dst.core, usage: track.BufferUsesCopyDst},
+	}) {
+		return
+	}
+	e.trackRef(src.core.Ref)
+	e.trackRef(dst.core.Ref)
+	e.trackBuffer(src)
+	e.trackBuffer(dst)
 	raw.CopyBufferToBuffer(halSrc, halDst, []hal.BufferCopy{
 		{SrcOffset: srcOffset, DstOffset: dstOffset, Size: size},
 	})
@@ -187,21 +400,43 @@ func (e *CommandEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, regions 
 		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToBuffer: destination buffer is nil"))
 		return
 	}
-	e.trackTexture(src)
-	e.trackBuffer(dst)
+	halSrc := src.resolveHAL()
+	if halSrc == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToBuffer: source texture is released: %w", ErrReleased))
+		return
+	}
+	for _, region := range regions {
+		if region.TextureBase.Texture != nil && region.TextureBase.Texture.resolveHAL() == nil {
+			e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToBuffer: region texture is released: %w", ErrReleased))
+			return
+		}
+	}
+	halDst := dst.halBuffer()
+	if halDst == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToBuffer: destination buffer is released: %w", ErrReleased))
+		return
+	}
 	raw := e.core.RawEncoder()
 	if raw == nil {
 		return
 	}
-	halDst := dst.halBuffer()
-	if src.hal == nil || halDst == nil {
+	if !e.recordCopyUsages(
+		[]copyTextureUsage{{texture: src, usage: track.TextureUsesCopySrc}},
+		dst.core, track.BufferUsesCopyDst,
+	) {
 		return
 	}
+	for _, region := range regions {
+		e.trackTexture(region.TextureBase.Texture)
+	}
+	e.trackTexture(src)
+	e.trackBuffer(dst)
+	e.trackRef(dst.core.Ref)
 	halRegions := make([]hal.BufferTextureCopy, len(regions))
 	for i, r := range regions {
 		halRegions[i] = r.toHAL()
 	}
-	raw.CopyTextureToBuffer(src.hal, halDst, halRegions)
+	raw.CopyTextureToBuffer(halSrc, halDst, halRegions)
 }
 
 // CopyTextureToTexture copies data between textures using DMA hardware copy.
@@ -218,20 +453,40 @@ func (e *CommandEncoder) CopyTextureToTexture(src, dst *Texture, regions []Textu
 		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToTexture: destination texture is nil"))
 		return
 	}
-	e.trackTexture(src)
-	e.trackTexture(dst)
+	halSrc := src.resolveHAL()
+	halDst := dst.resolveHAL()
+	if halSrc == nil || halDst == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToTexture: texture is released: %w", ErrReleased))
+		return
+	}
+	for _, region := range regions {
+		if (region.Source.Texture != nil && region.Source.Texture.resolveHAL() == nil) ||
+			(region.Destination.Texture != nil && region.Destination.Texture.resolveHAL() == nil) {
+			e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyTextureToTexture: region texture is released: %w", ErrReleased))
+			return
+		}
+	}
 	raw := e.core.RawEncoder()
 	if raw == nil {
 		return
 	}
-	if src.hal == nil || dst.hal == nil {
+	if !e.recordCopyUsages([]copyTextureUsage{
+		{texture: src, usage: track.TextureUsesCopySrc},
+		{texture: dst, usage: track.TextureUsesCopyDst},
+	}, nil, track.BufferUsesNone) {
 		return
 	}
+	for _, region := range regions {
+		e.trackTexture(region.Source.Texture)
+		e.trackTexture(region.Destination.Texture)
+	}
+	e.trackTexture(src)
+	e.trackTexture(dst)
 	halRegions := make([]hal.TextureCopy, len(regions))
 	for i, r := range regions {
 		halRegions[i] = r.toHAL()
 	}
-	raw.CopyTextureToTexture(src.hal, dst.hal, halRegions)
+	raw.CopyTextureToTexture(halSrc, halDst, halRegions)
 }
 
 // TransitionTextures transitions texture states for synchronization.
@@ -247,27 +502,67 @@ func (e *CommandEncoder) TransitionTextures(barriers []TextureBarrier) {
 		return
 	}
 	halBarriers := make([]hal.TextureBarrier, 0, len(barriers))
+	validBarriers := make([]TextureBarrier, 0, len(barriers))
 	for _, b := range barriers {
-		if b.Texture == nil || b.Texture.hal == nil {
+		if b.Texture != nil && b.Texture.resolveHAL() == nil {
+			e.setError(fmt.Errorf("wgpu: CommandEncoder.TransitionTextures: texture is released: %w", ErrReleased))
+			return
+		}
+		if b.Texture == nil || b.Texture.resolveHAL() == nil {
 			continue
 		}
+		e.trackTexture(b.Texture)
 		halBarriers = append(halBarriers, b.toHAL())
+		validBarriers = append(validBarriers, b)
 	}
 	if len(halBarriers) > 0 {
 		raw.TransitionTextures(halBarriers)
+		if e.explicitTextureTransitions == nil {
+			e.explicitTextureTransitions = make(map[*Texture]gputypes.TextureUsage)
+		}
+		for _, b := range validBarriers {
+			e.explicitTextureTransitions[b.Texture] = b.Usage.NewUsage
+		}
 	}
 }
 
 // CopyBufferToTexture copies data from a buffer to a texture.
 // WebGPU spec: GPUCommandEncoder.copyBufferToTexture.
 func (e *CommandEncoder) CopyBufferToTexture(src *Buffer, dst *Texture, regions []BufferTextureCopy) {
-	if e.released || src == nil || dst == nil {
+	if e.released {
+		return
+	}
+	if src == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyBufferToTexture: source buffer is nil"))
+		return
+	}
+	if dst == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyBufferToTexture: destination texture is nil"))
+		return
+	}
+	halDst := dst.resolveHAL()
+	if halDst == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyBufferToTexture: destination texture is released: %w", ErrReleased))
+		return
+	}
+	halSrc := src.halBuffer()
+	if halSrc == nil {
+		e.setError(fmt.Errorf("wgpu: CommandEncoder.CopyBufferToTexture: source buffer is released: %w", ErrReleased))
 		return
 	}
 	raw := e.core.RawEncoder()
 	if raw == nil {
 		return
 	}
+	if !e.recordCopyUsages(
+		[]copyTextureUsage{{texture: dst, usage: track.TextureUsesCopyDst}},
+		src.core, track.BufferUsesCopySrc,
+	) {
+		return
+	}
+	e.trackTexture(dst)
+	e.trackBuffer(src)
+	e.trackRef(src.core.Ref)
 	halRegions := make([]hal.BufferTextureCopy, len(regions))
 	for i, r := range regions {
 		halRegions[i] = hal.BufferTextureCopy{
@@ -277,14 +572,49 @@ func (e *CommandEncoder) CopyBufferToTexture(src *Buffer, dst *Texture, regions 
 				RowsPerImage: r.BufferLayout.RowsPerImage,
 			},
 			TextureBase: hal.ImageCopyTexture{
-				Texture:  dst.hal,
+				Texture:  halDst,
 				MipLevel: r.TextureBase.MipLevel,
 				Origin:   hal.Origin3D(r.TextureBase.Origin),
 			},
 			Size: hal.Extent3D(r.Size),
 		}
 	}
-	raw.CopyBufferToTexture(src.halBuffer(), dst.hal, halRegions)
+	raw.CopyBufferToTexture(halSrc, halDst, halRegions)
+}
+
+func validateRenderPassTextureViews(desc *RenderPassDescriptor) error {
+	if desc == nil {
+		return nil
+	}
+	for _, attachment := range desc.ColorAttachments {
+		if attachment.View != nil && attachment.View.resolveHAL() == nil {
+			return fmt.Errorf("wgpu: BeginRenderPass: color attachment view is released: %w", ErrReleased)
+		}
+		if attachment.ResolveTarget != nil && attachment.ResolveTarget.resolveHAL() == nil {
+			return fmt.Errorf("wgpu: BeginRenderPass: resolve target view is released: %w", ErrReleased)
+		}
+	}
+	if attachment := desc.DepthStencilAttachment; attachment != nil && attachment.View != nil && attachment.View.resolveHAL() == nil {
+		return fmt.Errorf("wgpu: BeginRenderPass: depth/stencil attachment view is released: %w", ErrReleased)
+	}
+	return nil
+}
+
+func trackRenderPassTextureViews(e *CommandEncoder, desc *RenderPassDescriptor) {
+	if e == nil || desc == nil {
+		return
+	}
+	for _, attachment := range desc.ColorAttachments {
+		if attachment.View != nil {
+			e.trackTexture(attachment.View.texture)
+		}
+		if attachment.ResolveTarget != nil {
+			e.trackTexture(attachment.ResolveTarget.texture)
+		}
+	}
+	if attachment := desc.DepthStencilAttachment; attachment != nil && attachment.View != nil {
+		e.trackTexture(attachment.View.texture)
+	}
 }
 
 // ClearBuffer clears a buffer region to zero.
@@ -387,6 +717,9 @@ func (e *CommandEncoder) Finish() (*CommandBuffer, error) {
 }
 
 // convertRenderPassDesc converts a public descriptor to core descriptor.
+// The conversion wires core.TextureView.Parent from the public TextureView's
+// parent Texture coreTexture, enabling TrackerIndex-based usage tracking in
+// populateTextureScope for submit-time barrier injection.
 func convertRenderPassDesc(desc *RenderPassDescriptor) *core.RenderPassDescriptor {
 	if desc == nil {
 		return &core.RenderPassDescriptor{}
@@ -403,10 +736,10 @@ func convertRenderPassDesc(desc *RenderPassDescriptor) *core.RenderPassDescripto
 			ClearValue: ca.ClearValue,
 		}
 		if ca.View != nil {
-			coreCA.View = &core.TextureView{HAL: ca.View.hal}
+			coreCA.View = coreTextureViewFrom(ca.View)
 		}
 		if ca.ResolveTarget != nil {
-			coreCA.ResolveTarget = &core.TextureView{HAL: ca.ResolveTarget.hal}
+			coreCA.ResolveTarget = coreTextureViewFrom(ca.ResolveTarget)
 		}
 		coreDesc.ColorAttachments = append(coreDesc.ColorAttachments, coreCA)
 	}
@@ -424,12 +757,24 @@ func convertRenderPassDesc(desc *RenderPassDescriptor) *core.RenderPassDescripto
 			StencilReadOnly:   ds.StencilReadOnly,
 		}
 		if ds.View != nil {
-			coreDSA.View = &core.TextureView{HAL: ds.View.hal}
+			coreDSA.View = coreTextureViewFrom(ds.View)
 		}
 		coreDesc.DepthStencilAttachment = coreDSA
 	}
 
 	return coreDesc
+}
+
+// coreTextureViewFrom creates a core.TextureView from a public TextureView,
+// wiring the Parent to the texture's coreTexture for TrackerIndex access.
+// The Parent reference enables populateTextureScope to record per-texture
+// usage in the command buffer's TextureUsageScope.
+func coreTextureViewFrom(v *TextureView) *core.TextureView {
+	cv := &core.TextureView{HAL: v.resolveHAL()}
+	if v.texture != nil && v.texture.coreTexture != nil {
+		cv.Parent = v.texture.coreTexture
+	}
+	return cv
 }
 
 // CommandBuffer holds recorded GPU commands ready for submission.
@@ -496,8 +841,10 @@ func (cb *CommandBuffer) Release() {
 		return
 	}
 	// Return encoder to pool (reset native allocator).
+	// For multi-CB encoders, pass all HAL command buffers to ResetAll
+	// so the underlying pool/allocator can reclaim them.
 	if cb.halEncoder != nil && cb.device != nil && cb.device.cmdEncoderPool != nil {
-		cb.halEncoder.ResetAll(nil)
+		cb.halEncoder.ResetAll(cb.halBufferList())
 		cb.device.cmdEncoderPool.release(cb.halEncoder)
 		cb.halEncoder = nil
 	}
@@ -506,12 +853,29 @@ func (cb *CommandBuffer) Release() {
 		ref.Drop()
 	}
 	cb.trackedRefs = nil
+	cb.dropUsedSets()
 }
 
-// halBuffer returns the underlying HAL command buffer.
-func (cb *CommandBuffer) halBuffer() hal.CommandBuffer {
+// dropUsedSets releases the encode-time validation sets. usedBuffers,
+// usedTextures and usedBindGroups exist only for
+// validateCommandBufferForSubmit; once a command buffer is spent — submitted
+// or released — they are hard references pinning every resource the frame
+// touched for as long as the command buffer stays reachable.
+func (cb *CommandBuffer) dropUsedSets() {
+	cb.usedBuffers = nil
+	cb.usedTextures = nil
+	cb.usedBindGroups = nil
+}
+
+// halBufferList returns all HAL command buffers in submission order.
+// For single-CB recording (the common case), returns a single-element slice.
+// For multi-CB recording (via OpenPass/CloseCB/CloseAndSwap/CloseAndPushFront),
+// returns all accumulated CBs.
+//
+// Reference: Rust wgpu-core BakedCommands.encoder.list (command/mod.rs:742-749)
+func (cb *CommandBuffer) halBufferList() []hal.CommandBuffer {
 	if cb.core == nil {
 		return nil
 	}
-	return cb.core.Raw()
+	return cb.core.HalBufferList()
 }

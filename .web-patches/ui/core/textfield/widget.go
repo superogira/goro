@@ -3,6 +3,8 @@ package textfield
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
+	"github.com/gogpu/ui/internal/textmetrics"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -28,15 +30,35 @@ type Widget struct {
 	sel     selection
 	painter Painter
 
+	// Gesture recognizer for tap/drag/multi-click text selection.
+	// Handles single-click (cursor placement), double-click (word selection),
+	// triple-click (select all), and drag (selection extension).
+	// Replaces ad-hoc dragging field and MouseDrag/MouseDoubleClick handling.
+	tapDrag *gesture.TapAndDragRecognizer
+
 	// Interaction state.
-	hovered  bool
-	dragging bool
+	hovered bool
 
 	// Validation state.
 	errorMsg string
 
 	// Styling overrides set via fluent methods.
 	padding float32
+
+	// Horizontal scroll offset (always <= 0). When text exceeds the visible
+	// content area, this shifts the text left so the cursor stays visible.
+	// Enterprise references: Flutter RenderEditable._showCaretOnScreen(),
+	// Qt QLineEdit d->hscroll, HTML input.scrollLeft.
+	scrollOffsetX float32
+
+	// Cached text metrics from last Draw call, used by gesture handlers
+	// (positionFromGlobal) that don't have access to canvas.
+	cachedMetrics *textmetrics.Metrics
+	// Cached layout values from last Draw call.
+	cachedContentRect geometry.Rect
+	cachedDisplayText string
+	cachedFontSize    float32
+	gestureHandledTap bool
 }
 
 // New creates a new text field Widget with the given options.
@@ -73,6 +95,15 @@ func New(opts ...Option) *Widget {
 	if len(w.cfg.validation) > 0 {
 		w.errorMsg = runValidation(w.cfg.validation, w.cfg.value)
 	}
+
+	// Create TapAndDragRecognizer for unified click/drag/multi-click handling.
+	// This replaces ad-hoc MousePress, MouseDrag, and MouseDoubleClick handlers
+	// with gesture system callbacks (ADR-049 Phase 3, #225).
+	w.tapDrag = gesture.NewTapAndDragRecognizer(gesture.TapAndDragConfig{
+		OnTapDown:    w.handleGestureTapDown,
+		OnDragStart:  w.handleGestureDragStart,
+		OnDragUpdate: w.handleGestureDragUpdate,
+	})
 
 	return w
 }
@@ -195,20 +226,165 @@ func (w *Widget) Draw(_ widget.Context, canvas widget.Canvas) {
 		}
 	}
 
-	w.painter.PaintTextField(canvas, PaintState{
-		Text:        w.resolvedText(),
+	// Query LayoutMetrics from painter (type assert with default fallback).
+	lm := resolveLayoutMetrics(w.painter)
+
+	// Compute pre-computed fields.
+	text := w.resolvedText()
+	bounds := w.Bounds()
+	focused := w.IsFocused()
+	disabled := w.cfg.ResolvedDisabled()
+	hasSelection := w.sel.anchor != w.sel.cursor
+
+	displayText := text
+	if w.cfg.inputType == TypePassword {
+		displayText = maskText(len([]rune(text)))
+	}
+
+	hPad, vPad := lm.ContentPadding()
+	contentRect := geometry.Rect{
+		Min: geometry.Pt(bounds.Min.X+hPad, bounds.Min.Y+vPad),
+		Max: geometry.Pt(bounds.Max.X-hPad, bounds.Max.Y-vPad),
+	}
+
+	fontSize := lm.TextFieldFontSize()
+	cw := lm.TextFieldCursorWidth()
+
+	// Build text metrics for cursor/selection computation.
+	tm := &textmetrics.Metrics{Canvas: canvas, FontSize: fontSize}
+
+	// Ensure cursor is visible within the content rect (adjusts scrollOffsetX).
+	w.ensureCursorVisible(tm, contentRect, displayText)
+
+	// TextRect: text rendering area shifted by scroll offset.
+	// ContentRect stays unshifted for clipping (PushClip).
+	scrolledRect := contentRect
+	scrolledRect.Min.X += w.scrollOffsetX
+	scrolledRect.Max.X += w.scrollOffsetX
+
+	// Cache for gesture handlers (positionFromGlobal).
+	w.cachedMetrics = tm
+	w.cachedContentRect = contentRect
+	w.cachedDisplayText = displayText
+	w.cachedFontSize = fontSize
+
+	// Flutter/Qt pattern: compute cursor/selection in UNSHIFTED content rect
+	// (text-local coordinates), then apply scrollOffsetX uniformly.
+	// This ensures cursor and text share the same offset — they never drift apart.
+	showCursor := focused && !disabled && !hasSelection
+	var cursorRect geometry.Rect
+	if showCursor {
+		cursorRect = tm.CursorRect(contentRect, displayText, w.sel.cursor, cw)
+		cursorRect.Min.X += w.scrollOffsetX
+		cursorRect.Max.X += w.scrollOffsetX
+	}
+
+	showSelection := hasSelection
+	var selectionRect geometry.Rect
+	if showSelection {
+		selectionRect = tm.SelectionRect(contentRect, displayText, w.sel.anchor, w.sel.cursor)
+		selectionRect.Min.X += w.scrollOffsetX
+		selectionRect.Max.X += w.scrollOffsetX
+	}
+
+	w.painter.PaintTextField(canvas, &PaintState{
+		// Legacy fields.
+		Text:        text,
 		Placeholder: w.cfg.placeholder,
-		Focused:     w.IsFocused(),
+		Focused:     focused,
 		Hovered:     w.hovered,
-		Disabled:    w.cfg.ResolvedDisabled(),
+		Disabled:    disabled,
 		HasError:    w.errorMsg != "",
 		ErrorMsg:    w.errorMsg,
 		CursorPos:   w.sel.cursor,
 		SelectStart: w.sel.anchor,
 		SelectEnd:   w.sel.cursor,
 		InputType:   w.cfg.inputType,
-		Bounds:      w.Bounds(),
+		Bounds:      bounds,
+
+		// Pre-computed fields.
+		DisplayText:   displayText,
+		ContentRect:   contentRect,
+		TextRect:      scrolledRect,
+		CursorRect:    cursorRect,
+		SelectionRect: selectionRect,
+		ShowCursor:    showCursor,
+		ShowSelection: showSelection,
+		FontSize:      fontSize,
 	})
+}
+
+// scrollMargin is the horizontal margin in pixels to keep between the cursor
+// and the visible edge when scrolling. Prevents the cursor from sitting
+// exactly at the boundary, matching Flutter's _kCaretGap behavior.
+const scrollMargin float32 = 2
+
+// ensureCursorVisible adjusts scrollOffsetX so the cursor stays within the
+// visible content rect. Called during Draw() after layout metrics are resolved.
+//
+// scrollOffsetX is always <= 0 (text shifts left when overflowing right).
+// When text fits entirely within contentRect, scrollOffsetX is clamped to 0.
+func (w *Widget) ensureCursorVisible(tm *textmetrics.Metrics, contentRect geometry.Rect, displayText string) {
+	// Measure the full text width.
+	fullTextWidth := tm.Canvas.MeasureText(displayText, tm.FontSize, false)
+	contentWidth := contentRect.Width()
+
+	// If text fits, no scrolling needed.
+	if fullTextWidth <= contentWidth {
+		w.scrollOffsetX = 0
+		return
+	}
+
+	// Compute cursor X offset from content origin using MeasureText directly
+	// (NOT CursorX, which clamps to contentRect.Max.X and would hide overflow).
+	runes := []rune(displayText)
+	runePos := w.sel.cursor
+	if runePos > len(runes) {
+		runePos = len(runes)
+	}
+	var cursorRelative float32
+	if runePos > 0 {
+		cursorRelative = tm.Canvas.MeasureText(string(runes[:runePos]), tm.FontSize, false)
+	}
+
+	// Apply current scroll offset to get the visual cursor position.
+	visualCursorX := cursorRelative + w.scrollOffsetX
+
+	// If cursor is past the right edge, scroll left to reveal it.
+	if visualCursorX > contentWidth-scrollMargin {
+		w.scrollOffsetX = contentWidth - scrollMargin - cursorRelative
+	}
+
+	// If cursor is past the left edge, scroll right to reveal it.
+	if visualCursorX < scrollMargin {
+		w.scrollOffsetX = scrollMargin - cursorRelative
+	}
+
+	// Clamp: never scroll right of origin (would show empty space on left).
+	if w.scrollOffsetX > 0 {
+		w.scrollOffsetX = 0
+	}
+
+	// Clamp: never scroll so far left that right side shows empty space.
+	maxScroll := -(fullTextWidth - contentWidth)
+	if w.scrollOffsetX < maxScroll {
+		w.scrollOffsetX = maxScroll
+	}
+}
+
+// ScrollOffsetX returns the current horizontal scroll offset.
+// This value is always <= 0. A value of 0 means no scrolling.
+func (w *Widget) ScrollOffsetX() float32 {
+	return w.scrollOffsetX
+}
+
+// resolveLayoutMetrics returns the LayoutMetrics from the painter if it
+// implements that interface, otherwise returns DefaultPainter metrics.
+func resolveLayoutMetrics(p Painter) LayoutMetrics {
+	if lm, ok := p.(LayoutMetrics); ok {
+		return lm
+	}
+	return DefaultPainter{}
 }
 
 // Event handles an input event and returns true if consumed.
@@ -355,6 +531,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the text field is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	// Dispose recognizer to release arena references.
+	if w.tapDrag != nil {
+		w.tapDrag.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
 	// A focused field can leave the tree without anyone calling
 	// SetFocused(false) (window closed, screen switched) — drop it from the
@@ -370,9 +550,138 @@ func (w *Widget) Unmount() {
 	}
 }
 
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// TextField is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.tapDrag == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.tapDrag}
+}
+
+// handleGestureTapDown is the OnTapDown callback for the TapAndDragRecognizer.
+// Handles cursor placement (single), word selection (double), and select-all (triple).
+func (w *Widget) handleGestureTapDown(details gesture.TapDragDownDetails) {
+	if details.Button != event.ButtonLeft {
+		return
+	}
+
+	// Request focus on any tap.
+	// The context is not available here directly, so we defer focus
+	// request to the Event handler (MousePress derived from PointerDown
+	// still calls RequestFocus). The cursor placement happens immediately.
+
+	runes := w.textRunes()
+	pos := positionFromGlobal(w, details.LocalPosition)
+
+	switch details.ConsecutiveTapCount {
+	case 1:
+		// Single click: place cursor, optionally extend selection with Shift.
+		if details.Modifiers.IsShift() {
+			w.sel.SetCursorKeepSelection(pos)
+		} else {
+			w.sel.SetCursor(pos)
+		}
+	case 2:
+		// Double click: select word at position.
+		start, end := wordBoundsAt(runes, pos)
+		w.sel.anchor = start
+		w.sel.cursor = end
+		w.gestureHandledTap = true
+	default:
+		// Triple click (or more): select all text.
+		w.sel.selectAll(len(runes))
+		w.gestureHandledTap = true
+	}
+
+	// ADR-028: visual only.
+	w.SetNeedsRedraw(true)
+}
+
+// handleGestureDragStart is the OnDragStart callback. Begins selection drag.
+func (w *Widget) handleGestureDragStart(_ gesture.TapDragStartDetails) {
+	// Drag started — selection extension will happen in handleGestureDragUpdate.
+	// No action needed on start; anchor was set in handleGestureTapDown.
+}
+
+// handleGestureDragUpdate is the OnDragUpdate callback. Extends selection
+// based on the consecutive tap count:
+//   - 1 = character-by-character selection
+//   - 2 = word-by-word selection
+//   - 3 = line-by-line (select-all for single-line TextField)
+func (w *Widget) handleGestureDragUpdate(details gesture.TapDragUpdateDetails) {
+	runes := w.textRunes()
+	pos := positionFromGlobal(w, details.LocalPosition)
+
+	switch details.ConsecutiveTapCount {
+	case 1:
+		// Character selection: extend cursor without moving anchor.
+		w.sel.SetCursorKeepSelection(pos)
+	case 2:
+		// Word-by-word selection: snap to word boundaries.
+		_, end := wordBoundsAt(runes, pos)
+		w.sel.SetCursorKeepSelection(end)
+	default:
+		// Line/all selection: snap to full text.
+		w.sel.selectAll(len(runes))
+	}
+
+	// ADR-028: visual only.
+	w.SetNeedsRedraw(true)
+}
+
+// positionFromLocal converts a draw-local position (the coordinate space used
+// by derived MouseEvents after Box dispatch translation) to a rune index.
+// This is the position relative to the widget's parent, matching the coordinate
+// space of Bounds() and cachedContentRect.
+func positionFromLocal(w *Widget, localPos geometry.Point) int {
+	runes := w.textRunes()
+
+	// Use cached metrics from last Draw if available.
+	if w.cachedMetrics != nil {
+		adjustedX := localPos.X - w.scrollOffsetX
+		return w.cachedMetrics.RuneIndexFromX(
+			w.cachedContentRect,
+			w.cachedDisplayText,
+			adjustedX,
+		)
+	}
+
+	// Fallback: approximate using layout metrics padding.
+	lm := resolveLayoutMetrics(w.painter)
+	hPad, _ := lm.ContentPadding()
+	bounds := w.Bounds()
+	localX := localPos.X - bounds.Min.X - hPad - w.scrollOffsetX
+
+	if localX <= 0 {
+		return 0
+	}
+
+	fontSize := lm.TextFieldFontSize()
+	charW := fontSize * 0.55
+	pos := int(localX / charW)
+	return clampPos(pos, len(runes))
+}
+
+// positionFromGlobal converts a window-coordinate (global) position to a rune
+// index. Used by gesture recognizer callbacks where positions are in window
+// coordinates (gesture.PointerEvent.GlobalPosition).
+//
+// Converts global to draw-local by subtracting the widget's ScreenOrigin
+// (accumulated parent transforms) and adding Bounds().Min (parent-local offset).
+// This produces the same coordinate space as derived MouseEvent positions.
+func positionFromGlobal(w *Widget, globalPos geometry.Point) int {
+	so := w.ScreenOrigin()
+	localPos := globalPos.Sub(so).Add(w.Bounds().Min)
+	return positionFromLocal(w, localPos)
+}
+
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/core"
 )
 
@@ -41,10 +42,10 @@ type RenderPassEncoder struct {
 	// indexBufferFormat stores the format passed to the most recent SetIndexBuffer call.
 	// Used to validate against the pipeline's StripIndexFormat at DrawIndexed/DrawIndexedIndirect time.
 	// Matches Rust wgpu-core State.index.buffer_format (render.rs:568-582).
-	indexBufferFormat IndexFormat
+	indexBufferFormat gputypes.IndexFormat
 	// currentStripIndexFormat stores the pipeline's StripIndexFormat for draw-time validation.
 	// Set by SetPipeline from RenderPipeline.stripIndexFormat.
-	currentStripIndexFormat *IndexFormat
+	currentStripIndexFormat *gputypes.IndexFormat
 	// blendConstantRequired is true if the current pipeline uses
 	// BlendFactorConstant or BlendFactorOneMinusConstant.
 	// Set by SetPipeline from RenderPipeline.blendConstantRequired.
@@ -103,15 +104,10 @@ func (p *RenderPassEncoder) SetBindGroup(index uint32, group *BindGroup, offsets
 			p.trackRef(buf.core.Ref)
 		}
 	}
-	// Track bind group itself for submit-time validation (VAL-B5).
+	// Track bind group itself for submit-time validation (VAL-B5 and, via
+	// group.boundBuffers/boundTextures, VAL-A6). The group's own slices are
+	// walked at Submit, so there is nothing to fan out here.
 	p.encoder.trackBindGroup(group)
-	// Track bind group resources for submit-time validation (VAL-A6).
-	for _, buf := range group.boundBuffers {
-		p.encoder.trackBuffer(buf)
-	}
-	for _, tex := range group.boundTextures {
-		p.encoder.trackTexture(tex)
-	}
 	raw := p.core.RawPass()
 	if raw != nil && group.hal != nil {
 		raw.SetBindGroup(index, group.hal, offsets)
@@ -133,7 +129,7 @@ func (p *RenderPassEncoder) SetVertexBuffer(slot uint32, buffer *Buffer, offset 
 }
 
 // SetIndexBuffer sets the index buffer.
-func (p *RenderPassEncoder) SetIndexBuffer(buffer *Buffer, format IndexFormat, offset uint64) {
+func (p *RenderPassEncoder) SetIndexBuffer(buffer *Buffer, format gputypes.IndexFormat, offset uint64) {
 	if buffer == nil {
 		p.encoder.setError(fmt.Errorf("wgpu: RenderPass.SetIndexBuffer: buffer is nil"))
 		return
@@ -146,17 +142,17 @@ func (p *RenderPassEncoder) SetIndexBuffer(buffer *Buffer, format IndexFormat, o
 }
 
 // SetViewport sets the viewport transformation.
-func (p *RenderPassEncoder) SetViewport(x, y, width, height, minDepth, maxDepth float32) {
-	p.core.SetViewport(x, y, width, height, minDepth, maxDepth)
+func (p *RenderPassEncoder) SetViewport(vp gputypes.Viewport) {
+	p.core.SetViewport(vp)
 }
 
 // SetScissorRect sets the scissor rectangle for clipping.
-func (p *RenderPassEncoder) SetScissorRect(x, y, width, height uint32) {
-	p.core.SetScissorRect(x, y, width, height)
+func (p *RenderPassEncoder) SetScissorRect(rect gputypes.ScissorRect) {
+	p.core.SetScissorRect(rect)
 }
 
 // SetBlendConstant sets the blend constant color.
-func (p *RenderPassEncoder) SetBlendConstant(color *Color) {
+func (p *RenderPassEncoder) SetBlendConstant(color *gputypes.Color) {
 	p.blendConstantSet = true
 	p.core.SetBlendConstant(color)
 }
@@ -216,15 +212,26 @@ func (p *RenderPassEncoder) validateDrawState(method string) bool {
 }
 
 // Draw draws primitives.
-func (p *RenderPassEncoder) Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32) {
+func (p *RenderPassEncoder) Draw(args gputypes.DrawArgs) {
 	if !p.validateDrawState("Draw") {
 		return
 	}
-	p.core.Draw(vertexCount, instanceCount, firstVertex, firstInstance)
+	// VAL-C3: firstInstance != 0 requires FeatureIndirectFirstInstance.
+	if args.FirstInstance != 0 {
+		if err := core.RequireFeature(
+			p.encoder.device.Features(),
+			gputypes.FeatureIndirectFirstInstance,
+			"Draw",
+		); err != nil {
+			p.encoder.setError(err)
+			return
+		}
+	}
+	p.core.Draw(args)
 }
 
 // DrawIndexed draws indexed primitives.
-func (p *RenderPassEncoder) DrawIndexed(indexCount, instanceCount, firstIndex uint32, baseVertex int32, firstInstance uint32) {
+func (p *RenderPassEncoder) DrawIndexed(args gputypes.DrawIndexedArgs) {
 	if !p.validateDrawState("DrawIndexed") {
 		return
 	}
@@ -241,13 +248,45 @@ func (p *RenderPassEncoder) DrawIndexed(indexCount, instanceCount, firstIndex ui
 			p.indexBufferFormat, *p.currentStripIndexFormat, ErrDrawIndexFormatMismatch))
 		return
 	}
-	p.core.DrawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance)
+	// VAL-C3: firstInstance != 0 requires FeatureIndirectFirstInstance.
+	if args.FirstInstance != 0 {
+		if err := core.RequireFeature(
+			p.encoder.device.Features(),
+			gputypes.FeatureIndirectFirstInstance,
+			"DrawIndexed",
+		); err != nil {
+			p.encoder.setError(err)
+			return
+		}
+	}
+	p.core.DrawIndexed(args)
 }
 
 // DrawIndirect draws primitives with GPU-generated parameters.
 func (p *RenderPassEncoder) DrawIndirect(buffer *Buffer, offset uint64) {
+	p.MultiDrawIndirect(buffer, offset, 1)
+}
+
+// MultiDrawIndirect draws consecutive primitives with GPU-generated parameters.
+// Each argument record is 16 bytes.
+func (p *RenderPassEncoder) MultiDrawIndirect(buffer *Buffer, offset uint64, drawCount uint32) {
+	if drawCount == 0 {
+		return
+	}
 	if !p.validateDrawState("DrawIndirect") {
 		return
+	}
+	// VAL-C1: Multi-draw indirect requires FeatureMultiDrawIndirect when drawCount > 1.
+	// Reference: wgpu-core command/render.rs multi-draw feature check.
+	if drawCount > 1 {
+		if err := core.RequireFeature(
+			p.encoder.device.Features(),
+			gputypes.FeatureMultiDrawIndirect,
+			"MultiDrawIndirect",
+		); err != nil {
+			p.encoder.setError(err)
+			return
+		}
 	}
 	if buffer == nil {
 		p.encoder.setError(fmt.Errorf("wgpu: RenderPass.DrawIndirect: buffer is nil"))
@@ -271,21 +310,42 @@ func (p *RenderPassEncoder) DrawIndirect(buffer *Buffer, offset uint64) {
 	}
 	// VAL-B3: Validate indirect args fit within buffer.
 	// DrawIndirect args: 4 × uint32 = 16 bytes. Matches Rust render.rs:2772-2779.
-	if offset+16 > buffer.Size() {
+	if !drawIndirectRangeFits(buffer.Size(), offset, drawCount) {
 		p.encoder.setError(fmt.Errorf(
-			"wgpu: RenderPass.DrawIndirect: offset %d + 16 bytes exceeds buffer size %d: %w",
-			offset, buffer.Size(), ErrDrawIndirectBufferOverrun))
+			"wgpu: RenderPass.MultiDrawIndirect: offset %d + %d draw(s) exceeds buffer size %d: %w",
+			offset, drawCount, buffer.Size(), ErrDrawIndirectBufferOverrun))
 		return
 	}
 	p.trackRef(buffer.core.Ref)
 	p.encoder.trackBuffer(buffer)
-	p.core.DrawIndirect(buffer.coreBuffer(), offset)
+	p.core.MultiDrawIndirect(buffer.coreBuffer(), offset, drawCount)
 }
 
 // DrawIndexedIndirect draws indexed primitives with GPU-generated parameters.
 func (p *RenderPassEncoder) DrawIndexedIndirect(buffer *Buffer, offset uint64) {
+	p.MultiDrawIndexedIndirect(buffer, offset, 1)
+}
+
+// MultiDrawIndexedIndirect draws consecutive indexed primitives with
+// GPU-generated parameters. Each argument record is 20 bytes.
+func (p *RenderPassEncoder) MultiDrawIndexedIndirect(buffer *Buffer, offset uint64, drawCount uint32) {
+	if drawCount == 0 {
+		return
+	}
 	if !p.validateDrawState("DrawIndexedIndirect") {
 		return
+	}
+	// VAL-C1: Multi-draw indexed indirect requires FeatureMultiDrawIndirect when drawCount > 1.
+	// Reference: wgpu-core command/render.rs multi-draw feature check.
+	if drawCount > 1 {
+		if err := core.RequireFeature(
+			p.encoder.device.Features(),
+			gputypes.FeatureMultiDrawIndirect,
+			"MultiDrawIndexedIndirect",
+		); err != nil {
+			p.encoder.setError(err)
+			return
+		}
 	}
 	if !p.indexBufferSet {
 		p.encoder.setError(fmt.Errorf("wgpu: RenderPass.DrawIndexedIndirect: no index buffer set (call SetIndexBuffer first): %w",
@@ -320,17 +380,115 @@ func (p *RenderPassEncoder) DrawIndexedIndirect(buffer *Buffer, offset uint64) {
 			offset, ErrDrawIndirectOffsetAlignment))
 		return
 	}
-	// VAL-B3: Validate indirect args fit within buffer.
-	// DrawIndexedIndirect args: 5 × uint32 = 20 bytes. Matches Rust render.rs:2772-2779.
-	if offset+20 > buffer.Size() {
+	// VAL-B3: Validate all indirect args fit within the buffer without allowing
+	// offset+drawCount*20 to wrap around uint64.
+	if !indexedIndirectRangeFits(buffer.Size(), offset, drawCount) {
 		p.encoder.setError(fmt.Errorf(
-			"wgpu: RenderPass.DrawIndexedIndirect: offset %d + 20 bytes exceeds buffer size %d: %w",
-			offset, buffer.Size(), ErrDrawIndirectBufferOverrun))
+			"wgpu: RenderPass.MultiDrawIndexedIndirect: offset %d + %d draw(s) exceeds buffer size %d: %w",
+			offset, drawCount, buffer.Size(), ErrDrawIndirectBufferOverrun))
 		return
 	}
 	p.trackRef(buffer.core.Ref)
 	p.encoder.trackBuffer(buffer)
-	p.core.DrawIndexedIndirect(buffer.coreBuffer(), offset)
+	p.core.MultiDrawIndexedIndirect(buffer.coreBuffer(), offset, drawCount)
+}
+
+// MultiDrawIndirectCount draws primitives with a GPU-provided draw count.
+// countBuffer must hold a uint32 count at countOffset. VAL-C2: requires FeatureMultiDrawIndirectCount.
+func (p *RenderPassEncoder) MultiDrawIndirectCount(
+	indirectBuffer *Buffer, indirectOffset uint64,
+	countBuffer *Buffer, countOffset uint64, maxDrawCount uint32,
+) {
+	p.executeIndirectCountDraw(indirectCountDrawConfig{
+		validateDrawOp:  "DrawIndirect",
+		featureResource: "MultiDrawIndirectCount",
+		indirectBuffer:  indirectBuffer,
+		indirectOffset:  indirectOffset,
+		countBuffer:     countBuffer,
+		countOffset:     countOffset,
+		maxDrawCount:    maxDrawCount,
+		recordStride:    drawIndirectRecordSize,
+		record: func() {
+			p.core.DrawIndirectCount(
+				indirectBuffer.coreBuffer(), indirectOffset,
+				countBuffer.coreBuffer(), countOffset, maxDrawCount,
+			)
+		},
+	})
+}
+
+// MultiDrawIndexedIndirectCount draws indexed primitives with a GPU-provided draw count.
+func (p *RenderPassEncoder) MultiDrawIndexedIndirectCount(
+	indirectBuffer *Buffer, indirectOffset uint64,
+	countBuffer *Buffer, countOffset uint64, maxDrawCount uint32,
+) {
+	p.executeIndirectCountDraw(indirectCountDrawConfig{
+		validateDrawOp:  "DrawIndexedIndirect",
+		featureResource: "MultiDrawIndexedIndirectCount",
+		indirectBuffer:  indirectBuffer,
+		indirectOffset:  indirectOffset,
+		countBuffer:     countBuffer,
+		countOffset:     countOffset,
+		maxDrawCount:    maxDrawCount,
+		recordStride:    drawIndexedIndirectRecordSize,
+		preValidate:     p.validateIndexedIndirectCountPreconditions,
+		record: func() {
+			p.core.DrawIndexedIndirectCount(
+				indirectBuffer.coreBuffer(), indirectOffset,
+				countBuffer.coreBuffer(), countOffset, maxDrawCount,
+			)
+		},
+	})
+}
+
+func (p *RenderPassEncoder) validateIndirectCountBuffers(
+	indirectBuffer *Buffer, indirectOffset uint64,
+	countBuffer *Buffer, countOffset uint64,
+	maxDrawCount uint32, recordStride uint64,
+) error {
+	if indirectBuffer == nil {
+		return fmt.Errorf("wgpu: RenderPass.DrawIndirect: indirect buffer is nil")
+	}
+	if countBuffer == nil {
+		return fmt.Errorf("wgpu: RenderPass.DrawIndirect: count buffer is nil")
+	}
+	if indirectBuffer.Usage()&BufferUsageIndirect == 0 {
+		return fmt.Errorf(
+			"wgpu: RenderPass.DrawIndirect: buffer %q missing BufferUsageIndirect usage: %w",
+			indirectBuffer.Label(), ErrDrawIndirectBufferUsage)
+	}
+	if countBuffer.Usage()&BufferUsageIndirect == 0 {
+		return fmt.Errorf(
+			"wgpu: RenderPass.DrawIndirect: count buffer %q missing BufferUsageIndirect usage: %w",
+			countBuffer.Label(), ErrDrawIndirectBufferUsage)
+	}
+	if indirectOffset%4 != 0 {
+		return fmt.Errorf(
+			"wgpu: RenderPass.DrawIndirect: offset %d is not 4-byte aligned: %w",
+			indirectOffset, ErrDrawIndirectOffsetAlignment)
+	}
+	if countOffset%4 != 0 {
+		return fmt.Errorf(
+			"wgpu: RenderPass.DrawIndirect: count offset %d is not 4-byte aligned: %w",
+			countOffset, ErrDrawIndirectOffsetAlignment)
+	}
+	if countOffset+4 > countBuffer.Size() {
+		return fmt.Errorf(
+			"wgpu: RenderPass.DrawIndirect: count offset %d + 4 exceeds count buffer size %d: %w",
+			countOffset, countBuffer.Size(), ErrDrawIndirectBufferOverrun)
+	}
+	if recordStride == drawIndirectRecordSize {
+		if !drawIndirectRangeFits(indirectBuffer.Size(), indirectOffset, maxDrawCount) {
+			return fmt.Errorf(
+				"wgpu: RenderPass.MultiDrawIndirectCount: offset %d + max %d draw(s) exceeds buffer size %d: %w",
+				indirectOffset, maxDrawCount, indirectBuffer.Size(), ErrDrawIndirectBufferOverrun)
+		}
+	} else if !indexedIndirectRangeFits(indirectBuffer.Size(), indirectOffset, maxDrawCount) {
+		return fmt.Errorf(
+			"wgpu: RenderPass.MultiDrawIndexedIndirectCount: offset %d + max %d draw(s) exceeds buffer size %d: %w",
+			indirectOffset, maxDrawCount, indirectBuffer.Size(), ErrDrawIndirectBufferOverrun)
+	}
+	return nil
 }
 
 // End ends the render pass.

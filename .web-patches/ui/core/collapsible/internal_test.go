@@ -1,7 +1,6 @@
 package collapsible
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 	"time"
@@ -546,7 +545,7 @@ func TestTickAnimation_NilCtrl(t *testing.T) {
 	w.animCtrl = nil
 	ctx := widget.NewContext()
 	// Should not panic.
-	w.tickAnimation(ctx)
+	w.TickAnimation(ctx)
 }
 
 // --- Draw Content With Non-Settable Bounds Widget ---
@@ -693,7 +692,7 @@ func (c *internalMockCanvas) PopTransform()                                {}
 func (c *internalMockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *internalMockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *internalMockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *internalMockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *internalMockCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 // --- Granular Invalidation Tests (TASK-UI-INVAL-001g) ---
 //
@@ -771,10 +770,13 @@ func TestGranularInvalidation_Press_NoFullInvalidate(t *testing.T) {
 	}
 }
 
-func TestGranularInvalidation_Release_KeepsFullInvalidation(t *testing.T) {
+func TestGranularInvalidation_Release_KeepsLayoutInvalidation(t *testing.T) {
 	w := New(Title("Test"), Animated(false))
 	w.SetBounds(geometry.NewRect(0, 0, 200, 36))
 	ctx := widget.NewContext()
+
+	// Populate the layout cache so MarkNeedsLayout's guard passes.
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(200, 300)))
 
 	// Press first.
 	press := event.NewMouseEvent(event.MousePress, event.ButtonLeft, event.ButtonStateLeft,
@@ -790,8 +792,8 @@ func TestGranularInvalidation_Release_KeepsFullInvalidation(t *testing.T) {
 		geometry.Pt(100, 18), geometry.Pt(100, 18), event.ModNone)
 	handleEvent(w, ctx, release)
 
-	if !ctx.IsInvalidated() {
-		t.Error("MouseRelease with Toggle MUST trigger full invalidation (structural change)")
+	if w.IsLayoutCacheValid() {
+		t.Error("MouseRelease with Toggle MUST invalidate layout cache (structural change)")
 	}
 }
 
@@ -814,10 +816,13 @@ func TestGranularInvalidation_KeyPress_NoFullInvalidate(t *testing.T) {
 	}
 }
 
-func TestGranularInvalidation_KeyRelease_KeepsFullInvalidation(t *testing.T) {
+func TestGranularInvalidation_KeyRelease_KeepsLayoutInvalidation(t *testing.T) {
 	w := New(Title("Test"), Animated(false))
 	w.SetFocused(true)
 	ctx := widget.NewContext()
+
+	// Populate the layout cache so MarkNeedsLayout's guard passes.
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(200, 300)))
 
 	// Press first.
 	press := event.NewKeyEvent(event.KeyPress, event.KeySpace, 0, event.ModNone)
@@ -831,8 +836,8 @@ func TestGranularInvalidation_KeyRelease_KeepsFullInvalidation(t *testing.T) {
 	release := event.NewKeyEvent(event.KeyRelease, event.KeySpace, 0, event.ModNone)
 	handleEvent(w, ctx, release)
 
-	if !ctx.IsInvalidated() {
-		t.Error("Key release MUST trigger full invalidation (Toggle is structural)")
+	if w.IsLayoutCacheValid() {
+		t.Error("Key release MUST invalidate layout cache (Toggle is structural)")
 	}
 }
 

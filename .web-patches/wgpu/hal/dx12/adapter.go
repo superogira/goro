@@ -54,6 +54,13 @@ type AdapterCapabilities struct {
 
 	// SupportsROVs indicates rasterizer ordered views support.
 	SupportsROVs bool
+
+	// IsUMA indicates Unified Memory Architecture (integrated GPU).
+	IsUMA bool
+
+	// IsCacheCoherentUMA indicates cache-coherent UMA (GPU snoops CPU cache).
+	// Used for memory pool selection: D3D12_MEMORY_POOL_L0 (UMA) vs L1 (non-UMA).
+	IsCacheCoherentUMA bool
 }
 
 // probeCapabilities probes the adapter's capabilities by creating a temporary device.
@@ -90,6 +97,9 @@ func (a *Adapter) probeCapabilities() error {
 
 	// Query D3D12 options
 	a.queryD3D12Options(tempDevice)
+
+	// Query architecture (UMA)
+	a.queryArchitecture(tempDevice)
 
 	// Set default texture limits based on feature level
 	a.setTextureLimits()
@@ -158,6 +168,27 @@ func (a *Adapter) queryD3D12Options(device *d3d12.ID3D12Device) {
 	)
 }
 
+// queryArchitecture queries the adapter's architecture (UMA).
+func (a *Adapter) queryArchitecture(device *d3d12.ID3D12Device) {
+	var arch d3d12.D3D12_FEATURE_DATA_ARCHITECTURE
+
+	err := device.CheckFeatureSupport(
+		d3d12.D3D12_FEATURE_ARCHITECTURE,
+		unsafe.Pointer(&arch),
+		uint32(unsafe.Sizeof(arch)),
+	)
+	if err == nil {
+		a.capabilities.IsUMA = arch.UMA != 0
+		a.capabilities.IsCacheCoherentUMA = arch.CacheCoherentUMA != 0
+	}
+
+	hal.Logger().Info("dx12: adapter architecture",
+		"uma", a.capabilities.IsUMA,
+		"cacheCoherentUMA", a.capabilities.IsCacheCoherentUMA,
+		"tileBasedRenderer", arch.TileBasedRenderer != 0,
+	)
+}
+
 // setTextureLimits sets texture dimension limits based on feature level.
 func (a *Adapter) setTextureLimits() {
 	// D3D12 limits based on feature level
@@ -208,6 +239,9 @@ func (a *Adapter) Info() gputypes.AdapterInfo {
 // Features returns supported WebGPU features.
 func (a *Adapter) Features() gputypes.Features {
 	var features gputypes.Features
+	// ExecuteIndirect supports counted draws natively. This feature is a
+	// performance hint; the public MultiDraw APIs do not gate on it.
+	features |= gputypes.Features(gputypes.FeatureMultiDrawIndirect)
 
 	// Map D3D12 capabilities to WebGPU features
 	// Feature level 11.0+ guarantees basic compute and texture compression
@@ -236,10 +270,7 @@ func (a *Adapter) Capabilities() hal.Capabilities {
 			BufferCopyOffset: 512, // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT
 			BufferCopyPitch:  256, // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
 		},
-		DownlevelCapabilities: hal.DownlevelCapabilities{
-			ShaderModel: uint32(a.capabilities.ShaderModel),
-			Flags:       hal.DownlevelFlagsComputeShaders | hal.DownlevelFlagsAnisotropicFiltering,
-		},
+		DownlevelCapabilities: gputypes.DefaultDownlevelCapabilities(),
 	}
 }
 
@@ -274,32 +305,19 @@ func (a *Adapter) limits() gputypes.Limits {
 	return limits
 }
 
-// deviceType determines the device type from the adapter flags and dedicated memory.
+// deviceType determines the device type from the adapter flags and UMA.
 func (a *Adapter) deviceType() gputypes.DeviceType {
 	// Check for software adapter (WARP)
 	if a.desc.Flags&dxgi.DXGI_ADAPTER_FLAG_SOFTWARE != 0 {
 		return gputypes.DeviceTypeCPU
 	}
 
-	// Check for dedicated video memory to distinguish discrete from integrated
-	if a.desc.DedicatedVideoMemory > 0 {
-		// Heuristic: >512MB dedicated VRAM is likely discrete
-		if a.desc.DedicatedVideoMemory > 512*1024*1024 {
-			return gputypes.DeviceTypeDiscreteGPU
-		}
-	}
-
-	// If there's no dedicated video memory, it's likely integrated
-	if a.desc.DedicatedVideoMemory == 0 && a.desc.SharedSystemMemory > 0 {
+	// UMA means integrated GPU (shares system memory)
+	if a.capabilities.IsUMA {
 		return gputypes.DeviceTypeIntegratedGPU
 	}
 
-	// Assume discrete if there's any dedicated memory
-	if a.desc.DedicatedVideoMemory > 0 {
-		return gputypes.DeviceTypeDiscreteGPU
-	}
-
-	return gputypes.DeviceTypeOther
+	return gputypes.DeviceTypeDiscreteGPU
 }
 
 // Open opens a logical device with the requested features and limits.
@@ -311,7 +329,7 @@ func (a *Adapter) Open(features gputypes.Features, limits gputypes.Limits) (hal.
 	}
 
 	// Create device using the adapter
-	device, err := newDevice(a.instance, unsafe.Pointer(a.raw), a.capabilities.FeatureLevel)
+	device, err := newDevice(a.instance, unsafe.Pointer(a.raw), &a.desc, a.capabilities.FeatureLevel)
 	if err != nil {
 		return hal.OpenDevice{}, err
 	}
@@ -359,6 +377,17 @@ func (a *Adapter) TextureFormatCapabilities(format gputypes.TextureFormat) hal.T
 
 // SurfaceCapabilities returns surface capabilities.
 func (a *Adapter) SurfaceCapabilities(surface hal.Surface) *hal.SurfaceCapabilities {
+	// Opaque is always supported via CreateSwapChainForHwnd.
+	// Premultiplied alpha requires DirectComposition (dcomp.dll, Windows 8+).
+	// Rust wgpu reports Premultiplied only for VisualFromWndHandle targets;
+	// we simplify by checking DComp DLL availability at runtime.
+	alphaModes := []gputypes.CompositeAlphaMode{
+		hal.CompositeAlphaModeOpaque,
+	}
+	if dcompAvailable() {
+		alphaModes = append(alphaModes, hal.CompositeAlphaModePremultiplied)
+	}
+
 	// D3D12 supports these formats for swap chains
 	return &hal.SurfaceCapabilities{
 		Formats: []gputypes.TextureFormat{
@@ -369,16 +398,13 @@ func (a *Adapter) SurfaceCapabilities(surface hal.Surface) *hal.SurfaceCapabilit
 			gputypes.TextureFormatRGBA16Float,
 		},
 		PresentModes: a.presentModes(),
-		AlphaModes: []hal.CompositeAlphaMode{
-			hal.CompositeAlphaModeOpaque,
-			hal.CompositeAlphaModePremultiplied,
-		},
+		AlphaModes:   alphaModes,
 	}
 }
 
 // presentModes returns supported present modes.
-func (a *Adapter) presentModes() []hal.PresentMode {
-	modes := []hal.PresentMode{
+func (a *Adapter) presentModes() []gputypes.PresentMode {
+	modes := []gputypes.PresentMode{
 		hal.PresentModeFifo, // Always supported (vsync)
 	}
 
@@ -502,6 +528,23 @@ func (a *AdapterLegacy) probeCapabilities() error {
 	}
 	defer tempDevice.Release()
 
+	// Query architecture (UMA)
+	var arch d3d12.D3D12_FEATURE_DATA_ARCHITECTURE
+	if err := tempDevice.CheckFeatureSupport(
+		d3d12.D3D12_FEATURE_ARCHITECTURE,
+		unsafe.Pointer(&arch),
+		uint32(unsafe.Sizeof(arch)),
+	); err == nil {
+		a.capabilities.IsUMA = arch.UMA != 0
+		a.capabilities.IsCacheCoherentUMA = arch.CacheCoherentUMA != 0
+	}
+
+	hal.Logger().Info("dx12: legacy adapter architecture",
+		"uma", a.capabilities.IsUMA,
+		"cacheCoherentUMA", a.capabilities.IsCacheCoherentUMA,
+		"tileBasedRenderer", arch.TileBasedRenderer != 0,
+	)
+
 	// Set default texture limits based on feature level
 	a.setTextureLimits()
 
@@ -553,6 +596,7 @@ func (a *AdapterLegacy) toExposedAdapter() hal.ExposedAdapter {
 // Features returns supported WebGPU features for legacy adapter.
 func (a *AdapterLegacy) Features() gputypes.Features {
 	var features gputypes.Features
+	features |= gputypes.Features(gputypes.FeatureMultiDrawIndirect)
 	if a.capabilities.FeatureLevel >= d3d12.D3D_FEATURE_LEVEL_11_0 {
 		features |= gputypes.Features(gputypes.FeatureTextureCompressionBC)
 	}
@@ -574,28 +618,19 @@ func (a *AdapterLegacy) Capabilities() hal.Capabilities {
 			BufferCopyOffset: 512,
 			BufferCopyPitch:  256,
 		},
-		DownlevelCapabilities: hal.DownlevelCapabilities{
-			ShaderModel: uint32(a.capabilities.ShaderModel),
-			Flags:       hal.DownlevelFlagsComputeShaders | hal.DownlevelFlagsAnisotropicFiltering,
-		},
+		DownlevelCapabilities: gputypes.DefaultDownlevelCapabilities(),
 	}
 }
 
-// deviceType determines the device type from the adapter flags and dedicated memory.
+// deviceType determines the device type from the adapter flags and UMA.
 func (a *AdapterLegacy) deviceType() gputypes.DeviceType {
 	if a.desc.Flags&dxgi.DXGI_ADAPTER_FLAG_SOFTWARE != 0 {
 		return gputypes.DeviceTypeCPU
 	}
-	if a.desc.DedicatedVideoMemory > 512*1024*1024 {
-		return gputypes.DeviceTypeDiscreteGPU
-	}
-	if a.desc.DedicatedVideoMemory == 0 && a.desc.SharedSystemMemory > 0 {
+	if a.capabilities.IsUMA {
 		return gputypes.DeviceTypeIntegratedGPU
 	}
-	if a.desc.DedicatedVideoMemory > 0 {
-		return gputypes.DeviceTypeDiscreteGPU
-	}
-	return gputypes.DeviceTypeOther
+	return gputypes.DeviceTypeDiscreteGPU
 }
 
 // Open opens a logical device with the requested features and limits.
@@ -607,7 +642,7 @@ func (a *AdapterLegacy) Open(features gputypes.Features, limits gputypes.Limits)
 	}
 
 	// Create device using the legacy adapter
-	device, err := newDevice(a.instance, unsafe.Pointer(a.raw), a.capabilities.FeatureLevel)
+	device, err := newDevice(a.instance, unsafe.Pointer(a.raw), &a.desc, a.capabilities.FeatureLevel)
 	if err != nil {
 		return hal.OpenDevice{}, err
 	}
@@ -638,13 +673,19 @@ func (a *AdapterLegacy) TextureFormatCapabilities(format gputypes.TextureFormat)
 
 // SurfaceCapabilities returns surface capabilities.
 func (a *AdapterLegacy) SurfaceCapabilities(surface hal.Surface) *hal.SurfaceCapabilities {
+	// Opaque is always supported. Premultiplied requires DirectComposition.
+	alphaModes := []gputypes.CompositeAlphaMode{hal.CompositeAlphaModeOpaque}
+	if dcompAvailable() {
+		alphaModes = append(alphaModes, hal.CompositeAlphaModePremultiplied)
+	}
+
 	return &hal.SurfaceCapabilities{
 		Formats: []gputypes.TextureFormat{
 			gputypes.TextureFormatBGRA8Unorm,
 			gputypes.TextureFormatRGBA8Unorm,
 		},
-		PresentModes: []hal.PresentMode{hal.PresentModeFifo},
-		AlphaModes:   []hal.CompositeAlphaMode{hal.CompositeAlphaModeOpaque},
+		PresentModes: []gputypes.PresentMode{hal.PresentModeFifo},
+		AlphaModes:   alphaModes,
 	}
 }
 

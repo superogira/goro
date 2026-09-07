@@ -8,8 +8,25 @@ import (
 	"image"
 	"syscall/js"
 
+	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/internal/browser"
 )
+
+// Compile-time assertion: Surface must implement all public API methods (ADR-047).
+var _ interface {
+	Configure(*Device, *SurfaceConfiguration) error
+	Unconfigure()
+	GetCurrentTexture() (*SurfaceTexture, bool, error)
+	Present(*SurfaceTexture) error
+	PresentWithDamage(*SurfaceTexture, []image.Rectangle) error
+	PresentPixels([]byte, uint32, uint32, []image.Rectangle) error
+	WritePixels([]byte, uint32, uint32) error
+	ReadPixels() ([]byte, error)
+	ActualExtent() (uint32, uint32)
+	DiscardTexture()
+	SetPresentsWithTransaction(bool)
+	Release()
+} = (*Surface)(nil)
 
 // Surface represents a platform rendering surface.
 // On browser, this wraps an HTMLCanvasElement + GPUCanvasContext.
@@ -21,11 +38,16 @@ type Surface struct {
 	device   *Device
 	released bool
 
+	// targetSource is retained only for CreateSurfaceFromTarget.
+	targetSource SurfaceTarget
+
 	// Cached configuration for GetCurrentTexture texture creation.
-	configFormat TextureFormat
+	configFormat gputypes.TextureFormat
 }
 
-// CreateSurface creates a rendering surface from an HTML canvas element.
+// CreateSurface creates a rendering surface from a legacy numeric canvas
+// handle. New code should prefer CreateSurfaceFromTarget,
+// CreateSurfaceUnsafe, or CreateSurfaceFromCanvas.
 //
 // On browser, displayHandle is ignored and windowHandle is treated as a
 // numeric canvas element ID (data-raw-handle attribute lookup). If windowHandle
@@ -36,6 +58,42 @@ type Surface struct {
 // Matches Rust wgpu InstanceInterface::create_surface for WebSurface which
 // uses RawWindowHandle::Web to query the DOM by data-raw-handle attribute.
 func (i *Instance) CreateSurface(displayHandle, windowHandle uintptr) (*Surface, error) {
+	return i.createSurfaceFromCanvasID(windowHandle, nil)
+}
+
+// CreateSurfaceFromTarget samples a provider once and retains it until the
+// surface is released.
+func (i *Instance) CreateSurfaceFromTarget(target SurfaceTarget) (*Surface, error) {
+	if i == nil || i.released {
+		return nil, ErrReleased
+	}
+	rawTarget, err := resolveSurfaceTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	return i.createSurfaceFromTarget(rawTarget, target)
+}
+
+// CreateSurfaceUnsafe creates a browser surface from a raw numeric canvas ID
+// without retaining an ownership source.
+func (i *Instance) CreateSurfaceUnsafe(target SurfaceTargetUnsafe) (*Surface, error) {
+	if i == nil || i.released {
+		return nil, ErrReleased
+	}
+	if err := target.validate(); err != nil {
+		return nil, err
+	}
+	return i.createSurfaceFromTarget(target, nil)
+}
+
+func (i *Instance) createSurfaceFromTarget(target SurfaceTargetUnsafe, targetSource SurfaceTarget) (*Surface, error) {
+	if target.kind != surfaceTargetWebCanvasID {
+		return nil, fmt.Errorf("%w: browser backend requires a Web canvas ID", ErrUnsupportedSurfaceTarget)
+	}
+	return i.createSurfaceFromCanvasID(target.windowHandle, targetSource)
+}
+
+func (i *Instance) createSurfaceFromCanvasID(windowHandle uintptr, targetSource SurfaceTarget) (*Surface, error) {
 	if i.released {
 		return nil, ErrReleased
 	}
@@ -57,7 +115,12 @@ func (i *Instance) CreateSurface(displayHandle, windowHandle uintptr) (*Surface,
 		return nil, fmt.Errorf("wgpu: no canvas element found for handle %d", windowHandle)
 	}
 
-	return i.createSurfaceFromCanvas(canvas)
+	surface, err := i.createSurfaceFromCanvas(canvas)
+	if err != nil {
+		return nil, err
+	}
+	surface.targetSource = targetSource
+	return surface, nil
 }
 
 // CreateSurfaceFromCanvas creates a rendering surface from a js.Value canvas.
@@ -181,6 +244,18 @@ func (s *Surface) PresentWithDamage(st *SurfaceTexture, _ []image.Rectangle) err
 	return s.Present(st)
 }
 
+// ReadPixels is not supported by browser WebGPU surfaces.
+// Headless surface readback is a Pure-Go software-backend extension.
+func (s *Surface) ReadPixels() ([]byte, error) {
+	if s == nil || s.released {
+		return nil, ErrReleased
+	}
+	if s.device == nil {
+		return nil, fmt.Errorf("wgpu: surface not configured")
+	}
+	return nil, fmt.Errorf("wgpu: ReadPixels not supported on this backend")
+}
+
 // ActualExtent returns the configured surface dimensions.
 // On browser, the canvas dimensions are always used as-is (no driver clamping).
 // Returns (0, 0) if the surface is not configured.
@@ -200,6 +275,26 @@ func (s *Surface) DiscardTexture() {
 	// No-op on browser. Cannot discard the texture.
 }
 
+// PresentPixels is not supported on browser backend.
+// Software-backend extension for direct pixel presentation.
+func (s *Surface) PresentPixels(_ []byte, _, _ uint32, _ []image.Rectangle) error {
+	return errors.New("wgpu: PresentPixels is not supported on the browser backend")
+}
+
+// WritePixels is not supported on browser backend.
+// Software-backend extension for direct framebuffer write.
+func (s *Surface) WritePixels(_ []byte, _, _ uint32) error {
+	return errors.New("wgpu: WritePixels is not supported on the browser backend")
+}
+
+// SetPrepareFrame is a no-op on browser backend.
+// Browser surfaces use requestAnimationFrame for frame timing.
+func (s *Surface) SetPrepareFrame(_ any) {}
+
+// SetPresentsWithTransaction is a no-op on browser backend.
+// Core Animation transactions are macOS-only.
+func (s *Surface) SetPresentsWithTransaction(_ bool) {}
+
 // Release releases the surface.
 func (s *Surface) Release() {
 	if s.released {
@@ -209,6 +304,7 @@ func (s *Surface) Release() {
 	if s.browser != nil {
 		s.browser.Destroy()
 	}
+	s.targetSource = nil
 }
 
 // SurfaceTexture is a texture acquired from a surface for rendering.
@@ -254,10 +350,4 @@ func (st *SurfaceTexture) CreateView(desc *TextureViewDescriptor) (*TextureView,
 // need direct texture access (e.g., creating additional views).
 func (st *SurfaceTexture) Texture() *Texture {
 	return st.texture
-}
-
-// PresentPixels is unsupported on the browser backend. It exists so that
-// packages calling it unconditionally still compile under js/wasm.
-func (s *Surface) PresentPixels(_ []byte, _ uint32, _ uint32, _ []image.Rectangle) error {
-	return errors.New("wgpu: PresentPixels is not supported on the browser backend")
 }

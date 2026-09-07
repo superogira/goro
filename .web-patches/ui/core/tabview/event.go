@@ -11,7 +11,7 @@ func handleEvent(w *Widget, ctx widget.Context, e event.Event) bool {
 	case *event.MouseEvent:
 		return handleMouseEvent(w, ctx, ev)
 	case *event.KeyEvent:
-		return handleKeyEvent(w, ctx, ev)
+		return handleKeyEvent(w, ev)
 	default:
 		return false
 	}
@@ -54,8 +54,8 @@ func handleMousePress(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 			if w.cfg.onClose != nil {
 				w.cfg.onClose(i)
 			}
-			// ADR-028: layout change — tab removal changes tab strip layout.
-			ctx.Invalidate()
+			// ADR-032: layout change — tab removal changes tab strip layout.
+			w.MarkNeedsLayout()
 			return true
 		}
 	}
@@ -67,7 +67,7 @@ func handleMousePress(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 			continue
 		}
 		if ts.Bounds.Contains(e.Position) {
-			w.selectTab(ctx, i)
+			w.selectTab(i)
 			return true
 		}
 	}
@@ -113,7 +113,7 @@ func handleMouseLeave(w *Widget, ctx widget.Context) bool {
 }
 
 // handleKeyEvent processes keyboard events for tab navigation.
-func handleKeyEvent(w *Widget, ctx widget.Context, e *event.KeyEvent) bool {
+func handleKeyEvent(w *Widget, e *event.KeyEvent) bool {
 	if !w.IsFocused() {
 		return false
 	}
@@ -123,26 +123,26 @@ func handleKeyEvent(w *Widget, ctx widget.Context, e *event.KeyEvent) bool {
 
 	switch e.Key {
 	case event.KeyLeft:
-		return navigatePrev(w, ctx)
+		return navigatePrev(w)
 	case event.KeyRight:
-		return navigateNext(w, ctx)
+		return navigateNext(w)
 	case event.KeyHome:
-		return navigateFirst(w, ctx)
+		return navigateFirst(w)
 	case event.KeyEnd:
-		return navigateLast(w, ctx)
+		return navigateLast(w)
 	default:
 		return false
 	}
 }
 
 // navigatePrev selects the previous enabled tab.
-func navigatePrev(w *Widget, ctx widget.Context) bool {
+func navigatePrev(w *Widget) bool {
 	current := w.cfg.ResolvedSelected()
 	tabCount := len(w.cfg.tabs)
 	for i := 1; i < tabCount; i++ {
 		idx := (current - i + tabCount) % tabCount
 		if !w.cfg.tabs[idx].Disabled {
-			w.selectTab(ctx, idx)
+			w.selectTab(idx)
 			return true
 		}
 	}
@@ -150,13 +150,13 @@ func navigatePrev(w *Widget, ctx widget.Context) bool {
 }
 
 // navigateNext selects the next enabled tab.
-func navigateNext(w *Widget, ctx widget.Context) bool {
+func navigateNext(w *Widget) bool {
 	current := w.cfg.ResolvedSelected()
 	tabCount := len(w.cfg.tabs)
 	for i := 1; i < tabCount; i++ {
 		idx := (current + i) % tabCount
 		if !w.cfg.tabs[idx].Disabled {
-			w.selectTab(ctx, idx)
+			w.selectTab(idx)
 			return true
 		}
 	}
@@ -164,10 +164,10 @@ func navigateNext(w *Widget, ctx widget.Context) bool {
 }
 
 // navigateFirst selects the first enabled tab.
-func navigateFirst(w *Widget, ctx widget.Context) bool {
+func navigateFirst(w *Widget) bool {
 	for i := range w.cfg.tabs {
 		if !w.cfg.tabs[i].Disabled {
-			w.selectTab(ctx, i)
+			w.selectTab(i)
 			return true
 		}
 	}
@@ -175,10 +175,10 @@ func navigateFirst(w *Widget, ctx widget.Context) bool {
 }
 
 // navigateLast selects the last enabled tab.
-func navigateLast(w *Widget, ctx widget.Context) bool {
+func navigateLast(w *Widget) bool {
 	for i := len(w.cfg.tabs) - 1; i >= 0; i-- {
 		if !w.cfg.tabs[i].Disabled {
-			w.selectTab(ctx, i)
+			w.selectTab(i)
 			return true
 		}
 	}
@@ -186,14 +186,15 @@ func navigateLast(w *Widget, ctx widget.Context) bool {
 }
 
 // selectTab sets the selected tab index and fires callbacks.
-func (w *Widget) selectTab(ctx widget.Context, idx int) {
+func (w *Widget) selectTab(idx int) {
 	if idx == w.cfg.ResolvedSelected() {
 		return
 	}
+	widget.PlaySound(widget.SoundClick)
 	w.cfg.setSelected(idx)
 	if w.cfg.onSelect != nil {
 		w.cfg.onSelect(idx)
 	}
-	// ADR-028: layout change — tab switch changes content panel.
-	ctx.Invalidate()
+	// ADR-032: layout change — tab switch changes content panel.
+	w.MarkNeedsLayout()
 }

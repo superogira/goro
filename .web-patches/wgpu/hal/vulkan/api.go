@@ -8,6 +8,7 @@ package vulkan
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -15,8 +16,16 @@ import (
 	"github.com/gogpu/wgpu/hal/vulkan/vk"
 )
 
+const (
+	extensionWaylandSurface = "VK_KHR_wayland_surface\x00"
+	extensionXlibSurface    = "VK_KHR_xlib_surface\x00"
+)
+
 // Backend implements hal.Backend for Vulkan.
 type Backend struct{}
+
+// NewBackend returns a Vulkan backend instance.
+func NewBackend() Backend { return Backend{} }
 
 // Variant returns the backend type identifier.
 func (Backend) Variant() gputypes.Backend {
@@ -25,6 +34,11 @@ func (Backend) Variant() gputypes.Backend {
 
 // CreateInstance creates a new Vulkan instance.
 func (Backend) CreateInstance(desc *hal.InstanceDescriptor) (hal.Instance, error) {
+	platform, err := newPlatformInstanceState(desc)
+	if err != nil {
+		return nil, err
+	}
+
 	// Initialize Vulkan library
 	if err := vk.Init(); err != nil {
 		return nil, fmt.Errorf("vulkan: failed to initialize: %w", err)
@@ -54,8 +68,14 @@ func (Backend) CreateInstance(desc *hal.InstanceDescriptor) (hal.Instance, error
 		"VK_KHR_surface\x00",
 	}
 
-	// Platform-specific surface extension
-	extensions = append(extensions, platformSurfaceExtension())
+	// Enable every platform WSI extension that this loader exposes. Linux can
+	// legitimately use Xlib and Wayland in the same process (for example
+	// XWayland), so ambient session variables must not select the instance ABI.
+	availableExtensions, err := enumerateInstanceExtensions(cmds)
+	if err != nil {
+		return nil, fmt.Errorf("vulkan: enumerate instance extensions: %w", err)
+	}
+	extensions = append(extensions, selectAvailableExtensions(platformSurfaceExtensions(), availableExtensions)...)
 
 	// Optional: validation layers for debug (only if available)
 	var layers []string
@@ -123,6 +143,7 @@ func (Backend) CreateInstance(desc *hal.InstanceDescriptor) (hal.Instance, error
 		handle:       instance,
 		cmds:         *cmds,
 		debugEnabled: validationEnabled,
+		platform:     platform,
 	}
 
 	// Create debug messenger when validation layers are active.
@@ -145,6 +166,7 @@ type Instance struct {
 	cmds           vk.Commands
 	debugMessenger vk.DebugUtilsMessengerEXT
 	debugEnabled   bool
+	platform       platformInstanceState
 }
 
 // EnumerateAdapters returns available Vulkan adapters (physical devices).
@@ -171,17 +193,6 @@ func (i *Instance) EnumerateAdapters(surfaceHint hal.Surface) []hal.ExposedAdapt
 		var features vk.PhysicalDeviceFeatures
 		i.cmds.GetPhysicalDeviceFeatures(device, &features)
 
-		// Check surface support if surface hint provided
-		if surfaceHint != nil {
-			if s, ok := surfaceHint.(*Surface); ok && s.handle != 0 {
-				var supported vk.Bool32
-				i.cmds.GetPhysicalDeviceSurfaceSupportKHR(device, 0, s.handle, &supported)
-				if supported == 0 {
-					continue // Skip devices that don't support this surface
-				}
-			}
-		}
-
 		// Convert device type
 		deviceType := gputypes.DeviceTypeOther
 		switch props.DeviceType {
@@ -205,6 +216,16 @@ func (i *Instance) EnumerateAdapters(surfaceHint hal.Surface) []hal.ExposedAdapt
 			features:       features,
 		}
 
+		adapterForExpose := hal.Adapter(adapter)
+		if surfaceHint != nil {
+			qualified, err := adapter.QualifySurface(surfaceHint)
+			if err != nil {
+				hal.Logger().Debug("vulkan: adapter rejected surface hint", "name", deviceName, "error", err)
+				continue
+			}
+			adapterForExpose = qualified
+		}
+
 		hal.Logger().Info("vulkan: adapter found",
 			"name", deviceName,
 			"type", deviceType,
@@ -213,7 +234,7 @@ func (i *Instance) EnumerateAdapters(surfaceHint hal.Surface) []hal.ExposedAdapt
 		)
 
 		adapters = append(adapters, hal.ExposedAdapter{
-			Adapter: adapter,
+			Adapter: adapterForExpose,
 			Info: gputypes.AdapterInfo{
 				Name:       deviceName,
 				Vendor:     vendorIDToName(props.VendorID),
@@ -227,17 +248,14 @@ func (i *Instance) EnumerateAdapters(surfaceHint hal.Surface) []hal.ExposedAdapt
 					vkVersionPatch(props.ApiVersion)),
 				Backend: gputypes.BackendVulkan,
 			},
-			Features: featuresFromPhysicalDevice(&features),
+			Features: featuresFromPhysicalDevice(&features, props.ApiVersion),
 			Capabilities: hal.Capabilities{
 				Limits: limitsFromProps(&props),
 				AlignmentsMask: hal.Alignments{
 					BufferCopyOffset: 4,
 					BufferCopyPitch:  256,
 				},
-				DownlevelCapabilities: hal.DownlevelCapabilities{
-					ShaderModel: 60, // SM6.0 equivalent
-					Flags:       0,
-				},
+				DownlevelCapabilities: downlevelCapabilitiesFromFeatures(&features),
 			},
 		})
 	}
@@ -272,6 +290,12 @@ type Surface struct {
 // This commonly happens when the window is minimized or not yet fully visible.
 // Wait until the window has valid dimensions before calling Configure again.
 func (s *Surface) Configure(device hal.Device, config *hal.SurfaceConfiguration) error {
+	if s == nil {
+		return fmt.Errorf("vulkan: surface is nil")
+	}
+	if config == nil {
+		return fmt.Errorf("vulkan: surface configuration is nil")
+	}
 	// Validate dimensions first (before any side effects).
 	// This matches wgpu-core behavior which returns ConfigureSurfaceError::ZeroArea.
 	if config.Width == 0 || config.Height == 0 {
@@ -291,9 +315,9 @@ func (s *Surface) Configure(device hal.Device, config *hal.SurfaceConfiguration)
 	return s.createSwapchain(vkDevice, config)
 }
 
-// ActualExtent returns the actual swapchain dimensions after driver clamping.
-// On Vulkan, the driver may clamp the requested extent to its supported range
-// (e.g., on X11 HiDPI). Returns (0, 0) if no swapchain is configured.
+// ActualExtent returns the dimensions selected for the swapchain. A defined
+// Vulkan CurrentExtent is compositor-owned; otherwise the requested extent is
+// clamped to the supported range. Returns (0, 0) if no swapchain is configured.
 func (s *Surface) ActualExtent() (width, height uint32) {
 	if s.swapchain == nil {
 		return 0, 0
@@ -301,11 +325,35 @@ func (s *Surface) ActualExtent() (width, height uint32) {
 	return s.swapchain.extent.Width, s.swapchain.extent.Height
 }
 
+func (s *Surface) detachSwapchainFromQueue(swapchain *Swapchain) {
+	if s.device == nil || s.device.queue == nil {
+		return
+	}
+	queue := s.device.queue
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.activeSwapchain != swapchain {
+		return
+	}
+	queue.activeSwapchain = nil
+	queue.acquireUsed = false
+}
+
 // Unconfigure removes surface configuration.
 func (s *Surface) Unconfigure(_ hal.Device) {
+	if s == nil {
+		return
+	}
 	if s.swapchain != nil {
-		s.swapchain.Destroy()
+		swapchain := s.swapchain
+		if err := swapchain.destroyWithError(); err != nil {
+			hal.Logger().Error("vulkan: failed to destroy swapchain during unconfigure", "error", err)
+		}
+		s.detachSwapchainFromQueue(swapchain)
 		s.swapchain = nil
+	}
+	if s.device != nil {
+		s.device.unregisterConfiguredSurface(s)
 	}
 	s.device = nil
 }
@@ -313,6 +361,9 @@ func (s *Surface) Unconfigure(_ hal.Device) {
 // AcquireTexture acquires the next surface texture for rendering.
 // Returns hal.ErrNotReady if no image is available (non-blocking mode).
 func (s *Surface) AcquireTexture(_ hal.Fence) (*hal.AcquiredSurfaceTexture, error) {
+	if s == nil {
+		return nil, fmt.Errorf("vulkan: surface is nil")
+	}
 	if s.swapchain == nil {
 		return nil, fmt.Errorf("vulkan: surface not configured")
 	}
@@ -331,8 +382,10 @@ func (s *Surface) AcquireTexture(_ hal.Fence) (*hal.AcquiredSurfaceTexture, erro
 	// This ensures the queue waits for image acquisition before rendering
 	// and signals completion before present.
 	if s.device != nil && s.device.queue != nil {
+		s.device.queue.mu.Lock()
 		s.device.queue.activeSwapchain = s.swapchain
 		s.device.queue.acquireUsed = false // Reset for new frame
+		s.device.queue.mu.Unlock()
 	}
 
 	return &hal.AcquiredSurfaceTexture{
@@ -343,16 +396,34 @@ func (s *Surface) AcquireTexture(_ hal.Fence) (*hal.AcquiredSurfaceTexture, erro
 
 // DiscardTexture discards a surface texture without presenting it.
 func (s *Surface) DiscardTexture(_ hal.SurfaceTexture) {
-	if s.swapchain != nil {
+	if s == nil {
+		return
+	}
+	if s.swapchain != nil && s.swapchain.imageAcquired {
+		// Discarding an acquired texture is a normal lifecycle operation during
+		// resize or minimization. Match Rust wgpu-hal: release the acquisition
+		// without poisoning the swapchain and let the next frame continue.
 		s.swapchain.imageAcquired = false
+		s.detachSwapchainFromQueue(s.swapchain)
 	}
 }
 
 // Destroy releases the surface.
 func (s *Surface) Destroy() {
+	if s == nil {
+		return
+	}
 	if s.swapchain != nil {
-		s.swapchain.Destroy()
+		swapchain := s.swapchain
+		if err := swapchain.destroyWithError(); err != nil {
+			hal.Logger().Error("vulkan: failed to destroy swapchain", "error", err)
+		}
+		s.detachSwapchainFromQueue(swapchain)
 		s.swapchain = nil
+	}
+	if s.device != nil {
+		s.device.unregisterConfiguredSurface(s)
+		s.device = nil
 	}
 	if s.handle != 0 && s.instance != nil {
 		s.instance.cmds.DestroySurfaceKHR(s.instance.handle, s.handle, nil)
@@ -360,8 +431,28 @@ func (s *Surface) Destroy() {
 	}
 }
 
+// releaseConfiguredDevice detaches the swapchain while VkDevice is still
+// alive. Device.Destroy calls this after one device-wide idle operation.
+func (s *Surface) releaseConfiguredDevice(device *Device, drained bool) {
+	if s == nil || s.device != device {
+		return
+	}
+	if s.swapchain != nil {
+		if drained {
+			s.swapchain.destroyAfterIdle()
+		} else {
+			s.swapchain.abandonDeviceResources()
+		}
+		s.swapchain = nil
+	}
+	s.device = nil
+}
+
 // Helper functions
 
+// vkMakeVersion packs Vulkan version components (major.minor.patch).
+//
+//nolint:unparam,nolintlint // patch exercised in tests; unparam fires on Linux only (cross-GOOS).
 func vkMakeVersion(major, minor, patch uint32) uint32 {
 	return (major << 22) | (minor << 12) | patch
 }
@@ -418,7 +509,7 @@ func vendorIDToName(id uint32) string {
 
 // featuresFromPhysicalDevice maps Vulkan physical device features to WebGPU features.
 // Reference: wgpu-hal/src/vulkan/adapter.rs:584-829
-func featuresFromPhysicalDevice(features *vk.PhysicalDeviceFeatures) gputypes.Features {
+func featuresFromPhysicalDevice(features *vk.PhysicalDeviceFeatures, apiVersion uint32) gputypes.Features {
 	var result gputypes.Features
 
 	// Texture compression features
@@ -440,6 +531,11 @@ func featuresFromPhysicalDevice(features *vk.PhysicalDeviceFeatures) gputypes.Fe
 		result |= gputypes.Features(gputypes.FeatureMultiDrawIndirect)
 	}
 
+	// DrawIndirectCount is core in Vulkan 1.2+ (FeatureMultiDrawIndirectCount).
+	if supportsDrawIndirectCountFeature(apiVersion) {
+		result |= gputypes.Features(gputypes.FeatureMultiDrawIndirectCount)
+	}
+
 	// Depth/clipping features
 	if features.DepthClamp != 0 {
 		result |= gputypes.Features(gputypes.FeatureDepthClipControl)
@@ -459,6 +555,80 @@ func featuresFromPhysicalDevice(features *vk.PhysicalDeviceFeatures) gputypes.Fe
 	result |= gputypes.Features(gputypes.FeatureDepth32FloatStencil8)
 
 	return result
+}
+
+// downlevelCapabilitiesFromFeatures builds DownlevelCapabilities by querying
+// VkPhysicalDeviceFeatures instead of assuming all flags.
+// Reference: wgpu-hal/src/vulkan/adapter.rs:662-719 (PhysicalDeviceFeatures::to_wgpu)
+//
+// Vulkan unconditionally supports 17 downlevel flags (compute, base vertex,
+// depth copies, etc.). Eight flags depend on actual physical device features
+// and are set conditionally from VkPhysicalDeviceFeatures fields.
+//
+// Note: SURFACE_VIEW_FORMATS depends on VK_KHR_swapchain_mutable_format
+// extension support. We currently don't enumerate device extensions at adapter
+// discovery time (only during Device creation in Open). Since all Vulkan
+// implementations that lack the extension still support swapchains, and wgpu
+// Rust sets the flag to true when the swapchain extension is absent, we default
+// to true here. This matches Rust: the flag is only false when the driver has
+// VK_KHR_swapchain but NOT VK_KHR_swapchain_mutable_format, which is rare.
+func downlevelCapabilitiesFromFeatures(features *vk.PhysicalDeviceFeatures) gputypes.DownlevelCapabilities {
+	// Start with the 17 unconditional flags (Rust adapter.rs:684-700).
+	flags := gputypes.DownlevelFlagsComputeShaders |
+		gputypes.DownlevelFlagsBaseVertex |
+		gputypes.DownlevelFlagsReadOnlyDepthStencil |
+		gputypes.DownlevelFlagsNonPowerOfTwoMipmappedTextures |
+		gputypes.DownlevelFlagsComparisonSamplers |
+		gputypes.DownlevelFlagsVertexStorage |
+		gputypes.DownlevelFlagsFragmentStorage |
+		gputypes.DownlevelFlagsDepthTextureAndBufferCopies |
+		gputypes.DownlevelFlagsBufferBindingsNot16ByteAligned |
+		gputypes.DownlevelFlagsUnrestrictedIndexBuffer |
+		gputypes.DownlevelFlagsIndirectExecution |
+		gputypes.DownlevelFlagsViewFormats |
+		gputypes.DownlevelFlagsUnrestrictedExternalTextureCopies |
+		gputypes.DownlevelFlagsNonblockingQueryResolve |
+		gputypes.DownlevelFlagsShaderF16InF32 |
+		gputypes.DownlevelFlagsMSL21 |
+		gputypes.DownlevelFlagsLinearInterpolation
+
+	// SURFACE_VIEW_FORMATS: true unless driver has VK_KHR_swapchain but not
+	// VK_KHR_swapchain_mutable_format. We default to true (see comment above).
+	flags |= gputypes.DownlevelFlagsSurfaceViewFormats
+
+	// 8 conditional flags from VkPhysicalDeviceFeatures (Rust adapter.rs:702-719).
+	if features.ImageCubeArray != 0 {
+		flags |= gputypes.DownlevelFlagsCubeArrayTextures
+	}
+	if features.SamplerAnisotropy != 0 {
+		flags |= gputypes.DownlevelFlagsAnisotropicFiltering
+	}
+	if features.FragmentStoresAndAtomics != 0 {
+		flags |= gputypes.DownlevelFlagsFragmentWritableStorage
+	}
+	if features.SampleRateShading != 0 {
+		flags |= gputypes.DownlevelFlagsMultisampledShading
+	}
+	if features.IndependentBlend != 0 {
+		flags |= gputypes.DownlevelFlagsIndependentBlend
+	}
+	if features.FullDrawIndexUint32 != 0 {
+		flags |= gputypes.DownlevelFlagsFullDrawIndexUint32
+	}
+	if features.DepthBiasClamp != 0 {
+		flags |= gputypes.DownlevelFlagsDepthBiasClamp
+	}
+	// TEXTURE_COMPRESSION: BC || (ETC2 && ASTC) per W3C WebGPU spec.
+	if features.TextureCompressionBC != 0 ||
+		(features.TextureCompressionETC2 != 0 && features.TextureCompressionASTC_LDR != 0) {
+		flags |= gputypes.DownlevelFlagsTextureCompression
+	}
+
+	return gputypes.DownlevelCapabilities{
+		Flags:       flags,
+		Limits:      gputypes.DownlevelLimits{},
+		ShaderModel: gputypes.ShaderModelSm5,
+	}
 }
 
 // limitsFromProps maps Vulkan physical device limits to WebGPU limits.
@@ -532,4 +702,43 @@ func isLayerAvailable(cmds *vk.Commands, layerName string) bool {
 		}
 	}
 	return false
+}
+
+func enumerateInstanceExtensions(cmds *vk.Commands) (map[string]struct{}, error) {
+	for range 3 {
+		var count uint32
+		result := cmds.EnumerateInstanceExtensionProperties(0, &count, nil)
+		if result != vk.Success && result != vk.Incomplete {
+			return nil, fmt.Errorf("vkEnumerateInstanceExtensionProperties(count) failed: %d", result)
+		}
+		if count == 0 {
+			return map[string]struct{}{}, nil
+		}
+
+		properties := make([]vk.ExtensionProperties, count)
+		result = cmds.EnumerateInstanceExtensionProperties(0, &count, &properties[0])
+		if result == vk.Incomplete {
+			continue
+		}
+		if result != vk.Success {
+			return nil, fmt.Errorf("vkEnumerateInstanceExtensionProperties(list) failed: %d", result)
+		}
+		available := make(map[string]struct{}, count)
+		for index := range count {
+			available[cStringToGo(properties[index].ExtensionName[:])] = struct{}{}
+		}
+		return available, nil
+	}
+	return nil, fmt.Errorf("vkEnumerateInstanceExtensionProperties remained incomplete")
+}
+
+func selectAvailableExtensions(candidates []string, available map[string]struct{}) []string {
+	selected := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		name := strings.TrimSuffix(candidate, "\x00")
+		if _, ok := available[name]; ok {
+			selected = append(selected, candidate)
+		}
+	}
+	return selected
 }

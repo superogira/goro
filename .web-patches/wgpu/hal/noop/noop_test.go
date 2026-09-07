@@ -16,7 +16,7 @@ import (
 
 // TestNoopBackendVariant tests the backend variant identification.
 func TestNoopBackendVariant(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	if api.Variant() != gputypes.BackendEmpty {
 		t.Errorf("expected BackendEmpty, got %v", api.Variant())
 	}
@@ -24,7 +24,7 @@ func TestNoopBackendVariant(t *testing.T) {
 
 // TestNoopCreateInstance tests instance creation.
 func TestNoopCreateInstance(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	desc := &hal.InstanceDescriptor{
 		Backends: gputypes.BackendsPrimary,
 		Flags:    0,
@@ -44,7 +44,7 @@ func TestNoopCreateInstance(t *testing.T) {
 
 // TestNoopCreateInstance_NilDescriptor tests that nil descriptor is handled.
 func TestNoopCreateInstance_NilDescriptor(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance with nil descriptor failed: %v", err)
@@ -57,7 +57,7 @@ func TestNoopCreateInstance_NilDescriptor(t *testing.T) {
 
 // TestNoopEnumerateAdapters tests adapter enumeration.
 func TestNoopEnumerateAdapters(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -87,7 +87,7 @@ func TestNoopEnumerateAdapters(t *testing.T) {
 
 // TestNoopEnumerateAdapters_WithSurfaceHint tests enumeration with surface hint.
 func TestNoopEnumerateAdapters_WithSurfaceHint(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -95,7 +95,7 @@ func TestNoopEnumerateAdapters_WithSurfaceHint(t *testing.T) {
 	defer instance.Destroy()
 
 	// Create a surface
-	surface, err := instance.CreateSurface(0, 0)
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("CreateSurface failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestNoopEnumerateAdapters_WithSurfaceHint(t *testing.T) {
 
 // TestNoopCreateSurface tests surface creation.
 func TestNoopCreateSurface(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -128,7 +128,11 @@ func TestNoopCreateSurface(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			surface, err := instance.CreateSurface(tt.displayHandle, tt.windowHandle)
+			surface, err := instance.CreateSurface(hal.SurfaceTarget{
+				Kind:          hal.SurfaceTargetHeadless,
+				DisplayHandle: tt.displayHandle,
+				WindowHandle:  tt.windowHandle,
+			})
 			if err != nil {
 				t.Fatalf("CreateSurface failed: %v", err)
 			}
@@ -142,7 +146,7 @@ func TestNoopCreateSurface(t *testing.T) {
 
 // TestNoopAdapterOpen tests opening a device from an adapter.
 func TestNoopAdapterOpen(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -181,7 +185,7 @@ func TestNoopAdapterOpen(t *testing.T) {
 
 // TestNoopAdapterCapabilities tests adapter capability queries.
 func TestNoopAdapterCapabilities(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -198,7 +202,7 @@ func TestNoopAdapterCapabilities(t *testing.T) {
 	}
 
 	// Test surface capabilities
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	surfaceCaps := adapter.SurfaceCapabilities(surface)
@@ -696,9 +700,9 @@ func TestNoopRenderPass(t *testing.T) {
 	})
 
 	// Test render pass commands
-	renderPass.SetViewport(0, 0, 256, 256, 0, 1)
-	renderPass.SetScissorRect(0, 0, 256, 256)
-	renderPass.Draw(3, 1, 0, 0)
+	renderPass.SetViewport(gputypes.Viewport{X: 0, Y: 0, Width: 256, Height: 256, MinDepth: 0, MaxDepth: 1})
+	renderPass.SetScissorRect(gputypes.ScissorRect{X: 0, Y: 0, Width: 256, Height: 256})
+	renderPass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 	renderPass.End()
 
 	_, _ = encoder.EndEncoding()
@@ -951,11 +955,11 @@ func TestNoopWriteReadBufferWithOffset(t *testing.T) {
 
 // TestNoopSurfaceConfigure tests surface configuration.
 func TestNoopSurfaceConfigure(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, _ := api.CreateInstance(nil)
 	defer instance.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	adapters := instance.EnumerateAdapters(nil)
@@ -982,11 +986,11 @@ func TestNoopSurfaceConfigure(t *testing.T) {
 
 // TestNoopSurfaceAcquireTexture tests surface texture acquisition.
 func TestNoopSurfaceAcquireTexture(t *testing.T) {
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, _ := api.CreateInstance(nil)
 	defer instance.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	adapters := instance.EnumerateAdapters(nil)
@@ -1095,7 +1099,7 @@ func TestNoopFenceWait(t *testing.T) {
 // TestNoopFullLifecycle tests complete workflow from instance to rendering.
 func TestNoopFullLifecycle(t *testing.T) {
 	// Create instance
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -1103,7 +1107,7 @@ func TestNoopFullLifecycle(t *testing.T) {
 	defer instance.Destroy()
 
 	// Create surface
-	surface, err := instance.CreateSurface(0, 0)
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("CreateSurface failed: %v", err)
 	}
@@ -1193,7 +1197,7 @@ func TestNoopFullLifecycle(t *testing.T) {
 	})
 	renderPass.SetPipeline(pipeline)
 	renderPass.SetVertexBuffer(0, buffer, 0)
-	renderPass.Draw(3, 1, 0, 0)
+	renderPass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 	renderPass.End()
 
 	cmdBuffer, _ := encoder.EndEncoding()
@@ -1556,14 +1560,14 @@ func TestNoopRenderPassEncoder(t *testing.T) {
 	pass.SetBindGroup(1, nil, []uint32{0, 256})
 	pass.SetVertexBuffer(0, buf, 0)
 	pass.SetIndexBuffer(buf, gputypes.IndexFormatUint16, 0)
-	pass.SetViewport(0, 0, 800, 600, 0, 1)
-	pass.SetScissorRect(0, 0, 800, 600)
+	pass.SetViewport(gputypes.Viewport{X: 0, Y: 0, Width: 800, Height: 600, MinDepth: 0, MaxDepth: 1})
+	pass.SetScissorRect(gputypes.ScissorRect{X: 0, Y: 0, Width: 800, Height: 600})
 	pass.SetBlendConstant(&gputypes.Color{R: 1, G: 0, B: 0, A: 1})
 	pass.SetStencilReference(0xFF)
-	pass.Draw(6, 1, 0, 0)
-	pass.DrawIndexed(6, 1, 0, 0, 0)
-	pass.DrawIndirect(buf, 0)
-	pass.DrawIndexedIndirect(buf, 0)
+	pass.Draw(gputypes.DrawArgs{VertexCount: 6, InstanceCount: 1})
+	pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: 6, InstanceCount: 1})
+	pass.DrawIndirect(buf, 0, 1)
+	pass.DrawIndexedIndirect(buf, 0, 1)
 	pass.ExecuteBundle(nil)
 	pass.End()
 }
@@ -1636,7 +1640,7 @@ func TestNoopDestroyMethods(t *testing.T) {
 func createTestDevice(t *testing.T) (hal.Device, func()) {
 	t.Helper()
 
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)
@@ -1660,7 +1664,7 @@ func createTestDevice(t *testing.T) (hal.Device, func()) {
 func createTestDeviceAndQueue(t *testing.T) (hal.Device, hal.Queue, func()) {
 	t.Helper()
 
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance failed: %v", err)

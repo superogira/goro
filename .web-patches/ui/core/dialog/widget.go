@@ -79,6 +79,8 @@ func (w *Widget) Show(ctx widget.Context) {
 		return
 	}
 
+	widget.PlaySound(widget.SoundAlert)
+
 	w.visible = true
 	w.SetVisible(true)
 
@@ -176,9 +178,12 @@ func (w *Widget) Unmount() {
 // computeDialogBounds calculates the centered dialog surface bounds
 // within the given window size.
 func (w *Widget) computeDialogBounds(windowSize geometry.Size) geometry.Rect {
+	// Query LayoutMetrics from painter (type assert with default fallback).
+	lm := resolveDialogLayoutMetrics(w.painter)
+
 	maxW := w.cfg.maxWidth
 	if maxW <= 0 {
-		maxW = defaultMaxWidth
+		maxW = lm.DialogMaxWidth()
 	}
 
 	// Constrain to window bounds.
@@ -214,6 +219,48 @@ func (w *Widget) computeDialogBounds(windowSize geometry.Size) geometry.Rect {
 	y := (windowSize.Height - dialogH) / 2
 
 	return geometry.NewRect(x, y, maxW, dialogH)
+}
+
+// computeActionRects pre-computes action button rects using MeasureText for
+// accurate text measurement. This is the preferred path when a canvas is
+// available (during Draw). Buttons are laid out right-to-left.
+func computeActionRects(canvas widget.Canvas, dialogBounds geometry.Rect, actions []Action) []geometry.Rect {
+	if len(actions) == 0 {
+		return nil
+	}
+
+	rects := make([]geometry.Rect, len(actions))
+	x := dialogBounds.Max.X - dialogPadding
+	y := dialogBounds.Max.Y - dialogPadding - actionHeight
+
+	for i := len(actions) - 1; i >= 0; i-- {
+		textW := canvas.MeasureText(actions[i].Label, actionFontSize, false)
+		btnWidth := textW + actionPaddingX*2
+		x -= btnWidth
+		rects[i] = geometry.NewRect(x, y, btnWidth, actionHeight)
+		x -= actionSpacing
+	}
+	return rects
+}
+
+// computeActionRectsLegacy computes action button rects using the character
+// count estimate. Used for hit-testing when no canvas is available.
+func computeActionRectsLegacy(dialogBounds geometry.Rect, actions []Action) []geometry.Rect {
+	if len(actions) == 0 {
+		return nil
+	}
+
+	rects := make([]geometry.Rect, len(actions))
+	x := dialogBounds.Max.X - dialogPadding
+	y := dialogBounds.Max.Y - dialogPadding - actionHeight
+
+	for i := len(actions) - 1; i >= 0; i-- {
+		btnWidth := float32(len(actions[i].Label))*actionCharWidth + actionPaddingX*2
+		x -= btnWidth
+		rects[i] = geometry.NewRect(x, y, btnWidth, actionHeight)
+		x -= actionSpacing
+	}
+	return rects
 }
 
 // Compile-time interface checks.
@@ -279,13 +326,17 @@ func (s *surfaceWidget) Draw(ctx widget.Context, canvas widget.Canvas) {
 	windowSize := ctx.WindowSize()
 	dialogBounds := d.computeDialogBounds(windowSize)
 
+	// Pre-compute action button rects using MeasureText (ADR-034 Phase 4).
+	actionRects := computeActionRects(canvas, dialogBounds, d.cfg.actions)
+
 	// Delegate to painter for the dialog surface.
 	d.painter.PaintDialog(canvas, PaintState{
-		Title:      d.cfg.ResolvedTitle(),
-		HasContent: d.cfg.content != nil,
-		Actions:    d.cfg.actions,
-		Focused:    s.focusIndex >= 0,
-		Bounds:     dialogBounds,
+		Title:       d.cfg.ResolvedTitle(),
+		HasContent:  d.cfg.content != nil,
+		Actions:     d.cfg.actions,
+		Focused:     s.focusIndex >= 0,
+		Bounds:      dialogBounds,
+		ActionRects: actionRects,
 	})
 
 	// Draw content widget if present.
@@ -403,17 +454,12 @@ func (s *surfaceWidget) handleActionClick(ctx widget.Context, e *event.MouseEven
 		return
 	}
 
-	// Action buttons are right-aligned at the bottom.
-	x := dialogBounds.Max.X - dialogPadding
-	y := dialogBounds.Max.Y - dialogPadding - actionHeight
+	// Use the same pre-computed rects as painting (ADR-034 Phase 4).
+	// Fall back to legacy charWidth estimate if no canvas available.
+	actionRects := computeActionRectsLegacy(dialogBounds, d.cfg.actions)
 
-	for i := len(d.cfg.actions) - 1; i >= 0; i-- {
-		label := d.cfg.actions[i].Label
-		btnWidth := float32(len(label))*actionCharWidth + actionPaddingX*2
-		x -= btnWidth
-
-		btnBounds := geometry.NewRect(x, y, btnWidth, actionHeight)
-		if btnBounds.Contains(e.Position) {
+	for i, rect := range actionRects {
+		if rect.Contains(e.Position) {
 			action := d.cfg.actions[i]
 			if action.OnClick != nil {
 				action.OnClick()
@@ -421,8 +467,6 @@ func (s *surfaceWidget) handleActionClick(ctx widget.Context, e *event.MouseEven
 			d.doClose(ctx)
 			return
 		}
-
-		x -= actionSpacing
 	}
 }
 

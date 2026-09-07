@@ -107,6 +107,9 @@ type LibwaylandHandle struct {
 	// Prevents render loop from outrunning the compositor's presentation rate.
 	// 0=None, 1=Requested, 2=Received. Atomic — no mutex needed for reads.
 	frameCallbackState int32
+	// frameCallbackProxy is the in-flight wl_callback, or zero. It lets a
+	// failed presentation cancel a request that was prepared before commit.
+	frameCallbackProxy atomic.Uintptr
 	// frameCallbackReady is set to true when the compositor fires done.
 	// Consumed by ConsumeFrameCallbackReady to trigger RequestRedraw.
 	frameCallbackReady atomic.Bool
@@ -190,6 +193,20 @@ type LibwaylandHandle struct {
 	ownsClipboard         bool       // true if our source is the active clipboard
 	clipboardOfferHasText bool       // true if current offer advertised text/plain mime
 	clipboardMu           sync.Mutex // protects clipboard state
+
+	// Drag-and-drop (wl_data_device DnD events, same manager/device as clipboard)
+	dndOffer      uintptr // current DnD wl_data_offer* (or 0, valid between enter and leave/drop)
+	dndHasURIList bool    // true if the DnD offer advertised text/uri-list
+	dndSerial     uint32  // serial from enter event (for accept)
+	dndSurface    uintptr // wl_surface* where drag entered (for multi-window routing)
+	dndX          float64 // current drag position (surface-local, physical pixels)
+	dndY          float64 // current drag position (surface-local, physical pixels)
+	dndMu         sync.Mutex
+	dndCallbacks  *DnDCallbacks // Go callbacks for DnD events (set by platform layer)
+
+	// Outgoing drag source state
+	lastButtonSerial uint32     // serial from last wl_pointer.button press (for start_drag)
+	dragMu           sync.Mutex // protects lastButtonSerial
 
 	// Data symbols (interface descriptors — pointers to static C structs)
 	registryInterface      unsafe.Pointer // &wl_registry_interface
@@ -370,6 +387,8 @@ func (h *LibwaylandHandle) Close() {
 	if h == nil {
 		return
 	}
+
+	h.CancelFrameCallback()
 
 	// Remove from per-proxy callback maps before destroying proxies.
 	h.UnregisterXdgProxies()

@@ -18,11 +18,18 @@ import (
 const defaultEntryPoint = "main"
 
 // CreateRenderPipeline creates a render pipeline.
-//
-//nolint:maintidx // Pipeline creation is inherently complex due to all the state it configures.
 func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.RenderPipeline, error) {
 	if desc == nil {
 		return nil, fmt.Errorf("BUG: render pipeline descriptor is nil in Vulkan.CreateRenderPipeline — core validation gap")
+	}
+	// Vulkan requires a valid pipeline layout whenever a graphics pipeline has
+	// shader stages. Unlike WebGPU's browser/Rust implementations, this native
+	// HAL does not derive automatic layouts from shader reflection. Rejecting a
+	// nil layout here prevents forwarding VK_NULL_HANDLE to
+	// VkGraphicsPipelineCreateInfo, which is invalid and can crash drivers
+	// (notably lavapipe and MoltenVK) instead of returning a VkResult.
+	if desc.Layout == nil {
+		return nil, fmt.Errorf("vulkan: render pipeline layout is required (automatic layouts are not supported)")
 	}
 
 	// Get pipeline layout
@@ -256,31 +263,36 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 
 	// Create compatible render pass for pipeline (not dynamic rendering).
 	// This is required for Intel drivers that don't properly support VK_KHR_dynamic_rendering.
-	var depthFormat vk.Format
-	if desc.DepthStencil != nil {
-		depthFormat = textureFormatToVk(desc.DepthStencil.Format)
-	}
-
-	// Build render pass key for pipeline-compatible render pass
-	var colorFormat vk.Format
-	if len(colorFormats) > 0 {
-		colorFormat = colorFormats[0]
-	}
-
+	//
+	// Build a RenderPassKey with one entry per fragment target so that the
+	// pipeline render pass has the correct number of color attachments.
+	// This is critical for MRT: the pipeline and render pass must agree on
+	// the number and format of color attachments (Vulkan spec VUID-VkGraphicsPipelineCreateInfo).
 	rpKey := RenderPassKey{
-		ColorFormat:      colorFormat,
-		ColorLoadOp:      vk.AttachmentLoadOpClear,
-		ColorStoreOp:     vk.AttachmentStoreOpStore,
-		SampleCount:      vk.SampleCountFlagBits(sampleCount),
-		ColorFinalLayout: vk.ImageLayoutPresentSrcKhr,
-		HasResolve:       sampleCount > 1, // MSAA pipelines need resolve attachment
+		ColorCount:  len(colorFormats),
+		SampleCount: vk.SampleCountFlagBits(sampleCount),
 	}
-	if depthFormat != vk.FormatUndefined {
-		rpKey.DepthFormat = depthFormat
-		rpKey.DepthLoadOp = vk.AttachmentLoadOpClear
-		rpKey.DepthStoreOp = vk.AttachmentStoreOpDontCare
-		rpKey.StencilLoadOp = vk.AttachmentLoadOpDontCare
-		rpKey.StencilStoreOp = vk.AttachmentStoreOpDontCare
+	for i, cf := range colorFormats {
+		if i >= hal.MaxColorAttachments {
+			break
+		}
+		rpKey.Colors[i] = ColorAttachmentKeyEntry{
+			Format:      cf,
+			LoadOp:      vk.AttachmentLoadOpClear,
+			StoreOp:     vk.AttachmentStoreOpStore,
+			FinalLayout: vk.ImageLayoutColorAttachmentOptimal, // ADR-059: pipelines use COLOR_ATTACHMENT_OPTIMAL for compatibility
+			HasResolve:  sampleCount > 1,                      // MSAA pipelines need resolve attachment
+		}
+	}
+	if desc.DepthStencil != nil {
+		depthFormat := textureFormatToVk(desc.DepthStencil.Format)
+		if depthFormat != vk.FormatUndefined {
+			rpKey.DepthFormat = depthFormat
+			rpKey.DepthLoadOp = vk.AttachmentLoadOpClear
+			rpKey.DepthStoreOp = vk.AttachmentStoreOpDontCare
+			rpKey.StencilLoadOp = vk.AttachmentLoadOpDontCare
+			rpKey.StencilStoreOp = vk.AttachmentStoreOpDontCare
+		}
 	}
 
 	// Get or create compatible render pass
@@ -309,7 +321,7 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 	}
 
 	var pipeline vk.Pipeline
-	result := vkCreateGraphicsPipelines(d.cmds, d.handle, 0, 1, &createInfo, nil, &pipeline)
+	result := vkCreateGraphicsPipelines(d.cmds, d.handle, d.pipelineCache, 1, &createInfo, nil, &pipeline)
 
 	// Keep all data structures alive until after the Vulkan call completes.
 	// This is critical because unsafe.Pointer→uintptr conversions break GC tracking.
@@ -378,6 +390,9 @@ func (d *Device) CreateComputePipeline(desc *hal.ComputePipelineDescriptor) (hal
 	if desc == nil {
 		return nil, fmt.Errorf("BUG: compute pipeline descriptor is nil in Vulkan.CreateComputePipeline — core validation gap")
 	}
+	if desc.Layout == nil {
+		return nil, fmt.Errorf("vulkan: compute pipeline layout is required (automatic layouts are not supported)")
+	}
 
 	// Get pipeline layout
 	var pipelineLayout vk.PipelineLayout
@@ -418,7 +433,7 @@ func (d *Device) CreateComputePipeline(desc *hal.ComputePipelineDescriptor) (hal
 	}
 
 	var pipeline vk.Pipeline
-	result := vkCreateComputePipelines(d.cmds, d.handle, 0, 1, &createInfo, nil, &pipeline)
+	result := vkCreateComputePipelines(d.cmds, d.handle, d.pipelineCache, 1, &createInfo, nil, &pipeline)
 	if result != vk.Success {
 		return nil, fmt.Errorf("vulkan: vkCreateComputePipelines failed: %d", result)
 	}

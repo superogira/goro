@@ -6,10 +6,23 @@
 package metal
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gogpu/gputypes"
+	"github.com/gogpu/naga/ir"
 )
+
+func TestCommandEncoderRecordingErrorKeepsFirstFailure(t *testing.T) {
+	first := errors.New("first")
+	encoder := &CommandEncoder{}
+	encoder.failRecording(first)
+	encoder.failRecording(errors.New("second"))
+	if !errors.Is(encoder.recordErr, first) {
+		t.Fatalf("recording error = %v, want first failure", encoder.recordErr)
+	}
+}
 
 // TestCommandEncoder_RecordingState is a regression test for Issue #24.
 // The IsRecording() method returns cmdBuffer != 0.
@@ -99,6 +112,151 @@ func TestCommandEncoder_IsRecordingMethod(t *testing.T) {
 	enc.cmdBuffer = 0
 	if enc.IsRecording() != (enc.cmdBuffer != 0) {
 		t.Error("IsRecording() should equal (cmdBuffer != 0)")
+	}
+}
+
+func TestRenderPassDeferredStateKeepsLatestValues(t *testing.T) {
+	firstPipeline := &RenderPipeline{}
+	latestPipeline := &RenderPipeline{}
+	firstGroup := &BindGroup{}
+	latestGroup := &BindGroup{}
+	firstVertex := &Buffer{}
+	latestVertex := &Buffer{}
+	index := &Buffer{}
+	state := renderPassPendingState{}
+	pass := &RenderPassEncoder{pending: &state}
+
+	pass.SetPipeline(firstPipeline)
+	pass.SetPipeline(latestPipeline)
+	pass.SetBindGroup(1, firstGroup, []uint32{4, 8})
+	pass.SetBindGroup(1, latestGroup, []uint32{12})
+	pass.SetVertexBuffer(2, firstVertex, 16)
+	pass.SetVertexBuffer(2, latestVertex, 24)
+	pass.SetIndexBuffer(index, gputypes.IndexFormatUint32, 32)
+	pass.SetViewport(gputypes.Viewport{X: 1, Y: 2, Width: 3, Height: 4, MinDepth: 0.25, MaxDepth: 0.75})
+	pass.SetScissorRect(gputypes.ScissorRect{X: 5, Y: 6, Width: 7, Height: 8})
+	pass.SetBlendConstant(&gputypes.Color{R: 0.1, G: 0.2, B: 0.3, A: 0.4})
+	pass.SetStencilReference(9)
+
+	if pass.pipeline != latestPipeline {
+		t.Fatal("deferred pipeline did not keep latest value")
+	}
+	group := pass.pending.bindGroups[1]
+	if !group.set || group.group != latestGroup || group.offsetCount != 1 || group.offsets[0] != 12 {
+		t.Fatalf("deferred bind group = %#v, want latest group and offsets", group)
+	}
+	vertex := pass.pending.vertexBuffers[2]
+	if !vertex.set || vertex.buffer != latestVertex || vertex.offset != 24 {
+		t.Fatalf("deferred vertex buffer = %#v, want latest buffer and offset", vertex)
+	}
+	if pass.indexBuffer != index || pass.indexFormat != gputypes.IndexFormatUint32 || pass.indexOffset != 32 {
+		t.Fatal("deferred index buffer state was not retained")
+	}
+	if !pass.pending.viewportSet || pass.pending.viewport != (MTLViewport{OriginX: 1, OriginY: 2, Width: 3, Height: 4, ZNear: 0.25, ZFar: 0.75}) {
+		t.Fatalf("deferred viewport = %#v", pass.pending.viewport)
+	}
+	if !pass.pending.scissorSet || pass.pending.scissor != (MTLScissorRect{X: 5, Y: 6, Width: 7, Height: 8}) {
+		t.Fatalf("deferred scissor = %#v", pass.pending.scissor)
+	}
+	if !pass.pending.blendSet || pass.pending.blend != (gputypes.Color{R: 0.1, G: 0.2, B: 0.3, A: 0.4}) {
+		t.Fatalf("deferred blend constant = %#v", pass.pending.blend)
+	}
+	if !pass.pending.stencilSet || pass.pending.stencil != 9 {
+		t.Fatalf("deferred stencil reference = %d", pass.pending.stencil)
+	}
+}
+
+func TestRenderPassDeferredStateUsesBoundedStorage(t *testing.T) {
+	group := &BindGroup{}
+	buffer := &Buffer{}
+	pipeline := &RenderPipeline{}
+	state := renderPassPendingState{}
+	var pass RenderPassEncoder
+	offsets := []uint32{1, 2, 3, 4}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		clear(state.bindGroups[:])
+		clear(state.vertexBuffers[:])
+		pass = RenderPassEncoder{pending: &state}
+		pass.SetPipeline(pipeline)
+		pass.SetBindGroup(0, group, offsets)
+		pass.SetVertexBuffer(0, buffer, 12)
+		pass.SetIndexBuffer(buffer, gputypes.IndexFormatUint16, 4)
+		pass.SetViewport(gputypes.Viewport{X: 0, Y: 0, Width: 10, Height: 10, MinDepth: 0, MaxDepth: 1})
+		pass.SetScissorRect(gputypes.ScissorRect{X: 0, Y: 0, Width: 10, Height: 10})
+		pass.SetBlendConstant(&gputypes.Color{A: 1})
+		pass.SetStencilReference(2)
+	})
+	if allocs != 0 {
+		t.Fatalf("deferred state allocated %.2f objects per recording", allocs)
+	}
+}
+
+func BenchmarkComputePassEncoderBindBufferSizes(b *testing.B) {
+	if err := Init(); err != nil {
+		b.Fatalf("Init: %v", err)
+	}
+	rawDevice := CreateSystemDefaultDevice()
+	if rawDevice == 0 {
+		b.Skip("no Metal device available")
+	}
+	b.Cleanup(func() { Release(rawDevice) })
+
+	device, err := newDevice(&Adapter{raw: rawDevice})
+	if err != nil {
+		b.Fatalf("newDevice: %v", err)
+	}
+	b.Cleanup(device.Destroy)
+
+	command := &CommandEncoder{device: device}
+	if err := command.BeginEncoding("bind-buffer-sizes-benchmark"); err != nil {
+		b.Fatalf("BeginEncoding: %v", err)
+	}
+	pass, ok := command.BeginComputePass(nil).(*ComputePassEncoder)
+	if !ok || pass == nil {
+		command.DiscardEncoding()
+		b.Fatal("BeginComputePass returned no Metal compute encoder")
+	}
+	b.Cleanup(func() {
+		pass.End()
+		command.DiscardEncoding()
+	})
+
+	pipeline := &ComputePipeline{
+		sizesBindings: []ir.ResourceBinding{
+			{Group: 0, Binding: 0},
+			{Group: 0, Binding: 1},
+			{Group: 1, Binding: 0},
+			{Group: 1, Binding: 1},
+		},
+		sizesSlot: 4,
+	}
+	bindingSizes := map[[2]uint32]uint64{
+		{0, 0}: 16,
+		{0, 1}: 28,
+		{1, 0}: 64,
+		{1, 1}: 256,
+	}
+
+	// Warm the selector cache before the timed region.
+	_ = Sel("setBytes:length:atIndex:")
+
+	for _, dispatches := range []int{1, 8, 64} {
+		b.Run(fmt.Sprintf("dispatches_per_pass=%d", dispatches), func(b *testing.B) {
+			// This benchmark compares Go allocations only. Repeated setBytes
+			// calls intentionally reuse one native command encoder.
+			b.ReportAllocs()
+			for b.Loop() {
+				encoder := ComputePassEncoder{
+					raw:          pass.raw,
+					pipeline:     pipeline,
+					bindingSizes: bindingSizes,
+				}
+				for range dispatches {
+					encoder.bindBufferSizes()
+				}
+			}
+		})
 	}
 }
 

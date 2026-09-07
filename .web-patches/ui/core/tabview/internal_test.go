@@ -259,7 +259,7 @@ func TestGranularInvalidation_MouseLeave_NoFullInvalidate(t *testing.T) {
 	}
 }
 
-func TestGranularInvalidation_SelectTab_KeepsFullInvalidation(t *testing.T) {
+func TestGranularInvalidation_SelectTab_KeepsLayoutInvalidation(t *testing.T) {
 	tabs := []Tab{
 		{Label: "Tab1"},
 		{Label: "Tab2"},
@@ -268,11 +268,14 @@ func TestGranularInvalidation_SelectTab_KeepsFullInvalidation(t *testing.T) {
 	w.SetBounds(geometry.NewRect(0, 0, 200, 300))
 	ctx := widget.NewContext()
 
-	// selectTab is a structural change (content swap) -- MUST use full invalidation.
-	w.selectTab(ctx, 1)
+	// Populate the layout cache so MarkNeedsLayout's guard passes.
+	widget.LayoutChild(w, ctx, geometry.Loose(geometry.Sz(200, 300)))
 
-	if !ctx.IsInvalidated() {
-		t.Error("selectTab MUST trigger full invalidation (structural change: content swap)")
+	// selectTab is a structural change (content swap) -- MUST invalidate layout.
+	w.selectTab(1)
+
+	if w.IsLayoutCacheValid() {
+		t.Error("selectTab MUST invalidate layout cache (structural change: content swap)")
 	}
 }
 

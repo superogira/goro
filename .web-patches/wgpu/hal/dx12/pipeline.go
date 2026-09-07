@@ -6,6 +6,7 @@
 package dx12
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"unsafe"
@@ -107,12 +108,13 @@ type rootParamMapping struct {
 // It wraps an ID3D12RootSignature and stores naga HLSL options for deferred
 // shader compilation, matching Rust wgpu-hal architecture.
 type PipelineLayout struct {
-	rootSignature    *d3d12.ID3D12RootSignature
-	bindGroupLayouts []*BindGroupLayout
-	groupMappings    []rootParamMapping // actual root param indices per bind group
-	samplerRootIndex int                // root param index for global sampler heap table, or -1
-	nagaOptions      *hlsl.Options      // HLSL compile options with proper BindingMap
-	device           *Device
+	rootSignature     *d3d12.ID3D12RootSignature
+	rootSignatureHash [32]byte // SHA-256 of serialized root signature blob (PSO cache key)
+	bindGroupLayouts  []*BindGroupLayout
+	groupMappings     []rootParamMapping // actual root param indices per bind group
+	samplerRootIndex  int                // root param index for global sampler heap table, or -1
+	nagaOptions       *hlsl.Options      // HLSL compile options with proper BindingMap
+	device            *Device
 }
 
 // Destroy releases the pipeline layout resources.
@@ -157,7 +159,11 @@ type BindGroup struct {
 	// BindingTypeStorageBuffer against the corresponding buffer bindings.
 	// Used by ComputePassEncoder to track which buffers transition to
 	// UNORDERED_ACCESS after Dispatch() (BUG-DX12-012 fix).
-	storageBuffers []*Buffer
+	storageBuffers         []*Buffer
+	readOnlyStorageBuffers []*Buffer
+	uniformBuffers         []*Buffer
+	sampledTextures        []*TextureView
+	storageTextures        []*TextureView
 }
 
 // Destroy releases the bind group resources and recycles descriptor heap slots.
@@ -186,10 +192,11 @@ func (g *BindGroup) GPUDescriptorHandle() d3d12.D3D12_GPU_DESCRIPTOR_HANDLE {
 
 // pipelineLayoutResult holds the output of root signature creation.
 type pipelineLayoutResult struct {
-	rootSignature    *d3d12.ID3D12RootSignature
-	groupMappings    []rootParamMapping
-	samplerRootIndex int
-	nagaOptions      *hlsl.Options
+	rootSignature     *d3d12.ID3D12RootSignature
+	rootSignatureHash [32]byte
+	groupMappings     []rootParamMapping
+	samplerRootIndex  int
+	nagaOptions       *hlsl.Options
 }
 
 // createRootSignatureFromLayouts creates a D3D12 root signature from bind group layouts.
@@ -199,8 +206,6 @@ type pipelineLayoutResult struct {
 //   - Per-group sampler index buffer SRV in the CBV/SRV/UAV table
 //   - Global sampler heap root parameter (2x2048 sampler ranges)
 //   - Full naga HLSL options with BindingMap and SamplerBufferBindingMap
-//
-//nolint:maintidx // inherent complexity: Rust wgpu-hal root signature construction with monotonic register counters
 func (d *Device) createRootSignatureFromLayouts(layouts []hal.BindGroupLayout) (*pipelineLayoutResult, error) {
 	var rootParams []d3d12.D3D12_ROOT_PARAMETER
 	var allRanges []d3d12.D3D12_DESCRIPTOR_RANGE // flat slice to prevent reallocation
@@ -409,6 +414,8 @@ func (d *Device) createRootSignatureFromLayouts(layouts []hal.BindGroupLayout) (
 	}
 	defer blob.Release()
 
+	rootSigHash := sha256.Sum256(unsafe.Slice((*byte)(blob.GetBufferPointer()), blob.GetBufferSize()))
+
 	// Check if device is already lost before attempting to create root signature.
 	if reason := d.raw.GetDeviceRemovedReason(); reason != nil {
 		d.logDREDBreadcrumbs()
@@ -436,10 +443,11 @@ func (d *Device) createRootSignatureFromLayouts(layouts []hal.BindGroupLayout) (
 	}
 
 	return &pipelineLayoutResult{
-		rootSignature:    rootSig,
-		groupMappings:    groupMappings,
-		samplerRootIndex: samplerRootIndex,
-		nagaOptions:      nagaOpts,
+		rootSignature:     rootSig,
+		rootSignatureHash: rootSigHash,
+		groupMappings:     groupMappings,
+		samplerRootIndex:  samplerRootIndex,
+		nagaOptions:       nagaOpts,
 	}, nil
 }
 
@@ -572,10 +580,14 @@ func (d *Device) buildGraphicsPipelineStateDesc(
 		psoDesc.RasterizerState.SlopeScaledDepthBias = desc.DepthStencil.DepthBiasSlopeScale
 	}
 
-	// Blend state
+	// Blend state — IndependentBlendEnable must be TRUE so that D3D12 uses
+	// the per-target blend descriptors in RenderTarget[0..N] instead of
+	// replicating RenderTarget[0] across all targets. This is required for
+	// correct MRT (multiple render targets) behavior.
+	// Matches Rust wgpu-hal: IndependentBlendEnable: true.into() (dx12/device.rs:1980).
 	psoDesc.BlendState = d3d12.D3D12_BLEND_DESC{
 		AlphaToCoverageEnable:  boolToInt32(desc.Multisample.AlphaToCoverageEnabled),
-		IndependentBlendEnable: 0, // Will set to 1 if we have different blend states per target
+		IndependentBlendEnable: 1, // TRUE: each render target has its own blend state
 	}
 
 	// Color targets

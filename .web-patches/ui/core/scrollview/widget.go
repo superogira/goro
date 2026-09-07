@@ -3,6 +3,7 @@ package scrollview
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -21,6 +22,9 @@ type Widget struct {
 	cfg     config
 	content widget.Widget
 	painter Painter
+
+	// Gesture recognizer for scrollbar thumb drag (ADR-049).
+	dragRec *gesture.DragRecognizer
 
 	// Cached layout measurements.
 	contentSize  geometry.Size
@@ -64,6 +68,10 @@ func New(content widget.Widget, opts ...Option) *Widget {
 		w.painter = w.cfg.painter
 	}
 
+	// Scrollbar drag handled by Event() handler (MousePress/Move/Release).
+	// GestureAware intentionally not implemented: container widgets must not
+	// compete with child widget recognizers in the gesture arena.
+
 	return w
 }
 
@@ -92,7 +100,7 @@ func (w *Widget) Layout(ctx widget.Context, constraints geometry.Constraints) ge
 	contentConstraints := w.buildContentConstraints()
 
 	// Measure content.
-	w.contentSize = w.content.Layout(ctx, contentConstraints)
+	w.contentSize = widget.LayoutChild(w.content, ctx, contentConstraints)
 
 	// Set content bounds at (0, 0) with its natural size.
 	if setter, ok := w.content.(interface{ SetBounds(geometry.Rect) }); ok {
@@ -387,8 +395,18 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the scroll view is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.dragRec != nil {
+		w.dragRec.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
 }
+
+// ScrollView does NOT implement GestureAware. Scrollbar drag is handled
+// by the Event() handler (MousePress/Move/Release) which correctly
+// hit-tests the scrollbar thumb area. Adding GestureAware would cause
+// ScrollView's DragRecognizer to compete with child widget recognizers
+// (e.g., TextField's TapAndDragRecognizer for text selection), consuming
+// drags that should reach the child.
 
 // Content returns the scroll view's content widget.
 func (w *Widget) Content() widget.Widget {
@@ -555,4 +573,6 @@ var (
 	_ widget.Widget    = (*Widget)(nil)
 	_ widget.Focusable = (*Widget)(nil)
 	_ widget.Lifecycle = (*Widget)(nil)
+	// ScrollView intentionally does NOT implement gesture.GestureAware.
+	// See comment on GestureHitTest removal above.
 )

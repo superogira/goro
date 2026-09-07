@@ -13,10 +13,14 @@
 |                    User Application                          |
 +==============================================================+
 |            Layer 3b: Design Systems (styling)                |
-| theme/material3/  |  theme/fluent/    |  theme/cupertino/    |
-| 21 Painters       |  9 Painters       |  9 Painters          |
-| (M3 HCT colors)   |  (Acrylic/Mica)  |  (Apple HIG)          |
-+-------------------+-------------------+----------------------+
+| theme/material3/  |  theme/devtools/  |  theme/fluent/        |
+| 24 Painters       |  24 Painters      |  11 Painters          |
+| (M3 HCT colors)   |  (JetBrains UI)  |  (Acrylic/Mica)       |
++-------------------+-------------------+-----------------------+
+| theme/cupertino/  |                   |                       |
+| 11 Painters       |  70 painters total across 4 systems      |
+| (Apple HIG)        |                                          |
++-------------------+-------------------+-----------------------+
 |         Layer 3a: Generic Widgets (behavior)                 |
 | core/button/      |  core/checkbox/   |  primitives/         |
 | core/radio/       |  core/textfield/  |  Box (HBox/VBox),    |
@@ -24,11 +28,13 @@
 | core/dialog/      |  core/scrollview/ |  ThemeScope,         |
 | core/tabview/     |  core/listview/   |  RepaintBoundary     |
 | core/gridview/    |  core/linechart/  |                      |
-| core/progressbar/ |  core/progress/   |  22 interactive      |
+| core/progressbar/ |  core/progress/   |  26 interactive      |
 | core/collapsible/ |  core/popover/    |  widgets in core/    |
 | core/splitview/   |  core/treeview/   |                      |
 | core/datatable/   |  core/toolbar/    |                      |
 | core/menu/        |  core/docking/    |                      |
+| core/badge/       |  core/chip/       |                      |
+| core/stripe/      |  core/titlebar/   |                      |
 +-------------------+-------------------+----------------------+
 |         Layer 2: Component Development Kit                   |
 | cdk/              |                                          |
@@ -43,27 +49,29 @@
 | Point, Size, Rect, Constraints, Insets                       |
 +==============================================================+
 |                    Infrastructure                            |
-| focus/           |  layout/          |  state/               |
-| Focus Manager    |  Flex, Stack, Grid|  Signals, Binding     |
-| (delegation)     |  (public API)     |  Scheduler, Lifecycle |
+| gesture/         |  focus/           |  state/               |
+| Arena, Click,    |  Focus Manager    |  Signals, Binding     |
+| Drag, LongPress, |  (delegation)     |  Scheduler, Lifecycle |
+| TapAndDrag, Team |                   |                       |
 +------------------+-------------------+-----------------------+
-| a11y/            |  registry/        |  plugin/              |
-| Accessible       |  Widget Registry  |  Plugin System        |
-| Node, Tree, Role |  Categories       |  Manager, Assets      |
+| layout/          |  a11y/            |  plugin/              |
+| Flex, Stack, Grid|  Accessible       |  Plugin System        |
+| (public API)     |  Node, Tree, Role |  Manager, Assets      |
 +------------------+-------------------+-----------------------+
-| animation/       |  transition/      |  icon/                |
-| Tween, Spring,   |  Fade, Slide,     |  Vector paths,        |
-| M3 Presets,      |  Scale, Show/Hide |  IconWidget,          |
-| Orchestration    |  Enter/Exit       |  10 built-in icons    |
+| registry/        |  animation/       |  transition/          |
+| Widget Registry  |  Tween, Spring,   |  Fade, Slide,         |
+| Categories       |  M3 Presets,      |  Scale, Show/Hide     |
+|                  |  Orchestration    |  Enter/Exit           |
 +------------------+-------------------+-----------------------+
-| dnd/             |  theme/font/      |  i18n/                |
-| DragSource,      |  Font Registry,   |  Locale, Bundle,      |
-| DropTarget,      |  CSS weight match |  Translator,          |
-| Manager          |  Family/Face      |  CLDR plural, RTL     |
+| icon/            |  dnd/             |  i18n/                |
+| Vector paths,    |  DragSource,      |  Locale, Bundle,      |
+| IconWidget,      |  DropTarget,      |  Translator,          |
+| 10 built-in      |  Manager          |  CLDR plural, RTL     |
 +------------------+-------------------+-----------------------+
-| uitest/          |                   |                       |
-| MockCanvas,      |  MockContext,     |  Event factories,     |
-| Widget helpers   |  Assertions       |  Reusable mocks       |
+| theme/font/      |  uitest/          |                       |
+| Font Registry,   |  MockCanvas,      |  Event factories,     |
+| CSS weight match |  MockContext,     |  Widget helpers       |
+| Family/Face      |  Assertions       |  Reusable mocks       |
 +------------------+-------------------+-----------------------+
 | overlay/         |  render/          |  app/                 |
 | Stack, Container |  Canvas factory   |  App, Window,         |
@@ -72,7 +80,7 @@
 |                 Internal Implementation                      |
 | internal/render  |  internal/layout  |  internal/focus       |
 | Canvas (gg)      |  Flex, Stack,     |  Manager, Ring,       |
-| SceneCanvas      |  Grid, Engine     |  Traversal, Shortcut  |
+| SceneCanvas      |  Grid, Layoutable |  Traversal, Shortcut  |
 +------------------+-------------------+-----------------------+
 | internal/dirty   |                   |                       |
 | Region Tracker,  |  Merge algorithm, |  Partial repaints     |
@@ -92,7 +100,7 @@
 
 | Package | Purpose | Key Types |
 |---------|---------|-----------|
-| `widget/` | Core widget abstractions | `Widget`, `WidgetBase`, `Context`, `Canvas`, `Focusable`, `PointerCapturer` (ADR-031), `Lifecycle`, `SchedulerRef`, `ThemeProvider`, `Color` |
+| `widget/` | Core widget abstractions | `Widget`, `WidgetBase`, `Context`, `Canvas`, `Focusable`, `PointerCapturer` (ADR-031), `Lifecycle`, `SchedulerRef`, `ThemeProvider`, `Color`, `ClipboardProvider` |
 | `event/` | Input event types | `MouseEvent`, `KeyEvent`, `FocusEvent`, `WheelEvent`, `Modifiers` |
 | `geometry/` | Geometric primitives | `Point`, `Size`, `Rect`, `Constraints`, `Insets` |
 
@@ -102,7 +110,7 @@
 |---------|---------|-----------|
 | `cdk/` | Headless behaviors, polymorphic content | `Content[C]`, `StringContent`, `FuncContent[C]`, `WidgetContent` |
 
-### Layer 3a: Generic Widgets (22 interactive widgets in core/)
+### Layer 3a: Generic Widgets (27 interactive widgets in core/)
 
 | Package | Purpose | Key Types |
 |---------|---------|-----------|
@@ -128,20 +136,26 @@
 | `core/toolbar/` | Horizontal action bar (icon buttons, separators) | `Widget`, `Painter`, spacers, custom items |
 | `core/menu/` | MenuBar + ContextMenu (submenus, shortcuts) | `MenuBar`, `ContextMenu`, `Painter`, overlay |
 | `core/docking/` | IDE-style dockable panels (border layout, tabbed groups) | `Host`, `Panel`, `Painter`, Dock/Undock API |
+| `core/badge/` | Notification badge (count or dot) | `Widget`, `Painter`, count/max, signal binding |
+| `core/chip/` | Compact interactive chip (tag/filter) | `Widget`, `Painter`, label, dismiss, signal binding |
+| `core/stripe/` | Vertical sidebar strip (tool window buttons) | `Widget`, `Painter`, top/bottom items, icon buttons |
+| `core/titlebar/` | Window title bar (CSD, drag, min/max/close) | `Widget`, `Painter`, `WindowChrome`, hit-test regions |
 | `primitives/` | Display-only widgets + RepaintBoundary | `BoxWidget` (HBox/VBox), `TextWidget`, `ImageWidget`, `ThemeScope`, `RepaintBoundary` |
 
 ### Layer 3b: Design Systems
 
 | Package | Purpose | Key Types |
 |---------|---------|-----------|
-| `theme/material3/` | M3 design tokens + 21 painters | `Theme`, `ButtonPainter`, `CheckboxPainter`, `RadioPainter`, `TextFieldPainter`, `DropdownPainter`, `SliderPainter`, `DialogPainter`, `ScrollbarPainter`, `TabViewPainter`, `ListViewPainter`, `GridViewPainter`, `LineChartPainter`, `ProgressBarPainter`, `ProgressPainter`, `CollapsiblePainter`, `PopoverPainter`, `SplitViewPainter`, `TreeViewPainter`, `DataTablePainter`, `ToolbarPainter`, `MenuPainter`, `DockingPainter`, `ColorScheme`, `TypeScale`, `ShapeScale` |
-| `theme/fluent/` | Microsoft Fluent Design + 9 painters | `Theme`, accent color system, inner focus ring, 4px radii, light/dark |
-| `theme/cupertino/` | Apple HIG + 9 painters | `Theme`, iOS toggle switch, segmented control, pill buttons |
+| `theme/material3/` | M3 design tokens + 24 painters | `Theme`, `ButtonPainter`, `CheckboxPainter`, `RadioPainter`, `TextFieldPainter`, `DropdownPainter`, `SliderPainter`, `DialogPainter`, `ScrollbarPainter`, `TabViewPainter`, `ListViewPainter`, `GridViewPainter`, `LineChartPainter`, `ProgressBarPainter`, `ProgressPainter`, `CollapsiblePainter`, `PopoverPainter`, `SplitViewPainter`, `TreeViewPainter`, `DataTablePainter`, `ToolbarPainter`, `MenuPainter`, `DockingPainter`, `BadgePainter`, `ChipPainter`, `ColorScheme`, `TypeScale`, `ShapeScale` |
+| `theme/devtools/` | JetBrains DevTools (Int UI) + 24 painters | `Theme`, `ButtonPainter`, `CheckboxPainter`, `RadioPainter`, `TextFieldPainter`, `DropdownPainter`, `SliderPainter`, `DialogPainter`, `ScrollbarPainter`, `TabViewPainter`, `ListViewPainter`, `LineChartPainter`, `CollapsiblePainter`, `PopoverPainter`, `SplitViewPainter`, `TreeViewPainter`, `DataTablePainter`, `ToolbarPainter`, `MenuPainter`, `DockingPainter`, `BadgePainter`, `ChipPainter`, `StripePainter`, `TitleBarPainter`, `ProgressPainter` |
+| `theme/fluent/` | Microsoft Fluent Design + 11 painters | `Theme`, accent color system, inner focus ring, 4px radii, light/dark |
+| `theme/cupertino/` | Apple HIG + 11 painters | `Theme`, iOS toggle switch, segmented control, pill buttons |
 
 ### Infrastructure
 
 | Package | Purpose | Key Types |
 |---------|---------|-----------|
+| `gesture/` | Gesture recognition (arena-based, Flutter pattern) | `Arena`, `Recognizer`, `RecognizerBase`, `ClickRecognizer`, `DragRecognizer`, `LongPressRecognizer`, `TapAndDragRecognizer`, `VelocityTracker`, `Team`, `GestureAware`, `PointerEvent` |
 | `overlay/` | Overlay/popup infrastructure | `Stack`, `Container`, `Position` |
 | `focus/` | Focus management (public API) | `Manager`, `Shortcut`, `DrawFocusRing` |
 | `layout/` | Layout tree and algorithms | `NodeID`, `NodeLayout`, `Result`, `Algorithm` |
@@ -166,7 +180,7 @@
 | Package | Purpose | Key Types |
 |---------|---------|-----------|
 | `internal/render/` | Canvas, SceneCanvas, FontRegistry, Renderer backed by gg | `Canvas`, `SceneCanvas`, `FontRegistry`, `Renderer`, `SoftwareTarget`, `RenderConfig` |
-| `internal/layout/` | Layout engines | `FlexContainer`, `VStack`, `HStack`, `GridContainer`, `Engine` |
+| `internal/layout/` | Layout algorithms | `FlexContainer`, `VStack`, `HStack`, `GridContainer`, `Layoutable` |
 | `internal/focus/` | Focus manager implementation | `Manager`, `Shortcut`, `DrawFocusRing`, traversal helpers |
 | `internal/dirty/` | Dirty region tracking | `Tracker`, `Collector`, merge algorithm, partial repaints |
 
@@ -188,7 +202,7 @@ type Widget interface {
 }
 ```
 
-- **Layout** -- Calculate size given constraints from the parent. Containers layout their children and set child bounds.
+- **Layout** -- Calculate size given constraints from the parent. Containers call `widget.LayoutChild(child, ctx, constraints)` which checks the per-widget layout cache before calling `child.Layout()`. On a cache hit (same constraints, no `MarkNeedsLayout()` call), the child's Layout is skipped entirely (ADR-032).
 - **Draw** -- Render to a canvas. Called after layout when bounds are established.
 - **Event** -- Handle user input. Returns true if the event was consumed.
 - **Children** -- Return child widgets in z-order. Leaf widgets return nil.
@@ -440,6 +454,74 @@ Methods: `Has`, `HasAny`, `IsShift`, `IsCtrl`, `IsAlt`, `IsSuper`, `With`, `With
 ### Event Propagation
 
 Events are dispatched from the root widget down through the tree. A widget's `Event` method returns `true` to consume the event and stop propagation. There is no explicit capture/bubble phase -- widgets check bounds and delegate to children as appropriate.
+
+### Gesture Recognition (ADR-049)
+
+The `gesture/` package provides arena-based gesture disambiguation, modeled after Flutter's `GestureArena` protocol. It sits at the infrastructure layer alongside `focus/`, `overlay/`, and `state/`.
+
+**Architecture:**
+
+```
+PointerDown event arrives
+  → hit-test: find widgets under pointer (deepest first)
+  → check each widget for GestureAware interface
+  → register each widget's recognizers in the Arena
+  → Arena closes (end of PointerDown dispatch)
+  → as PointerMove/PointerUp arrive, arena resolves winner
+  → winner fires gesture callbacks (OnClick, OnDragUpdate, etc.)
+  → losers reset their state
+```
+
+**Recognizers:**
+
+| Recognizer | Pattern | Use Case |
+|------------|---------|----------|
+| `ClickRecognizer` | Pointer down → up within slop distance | Buttons, checkboxes, list items |
+| `DragRecognizer` | Pointer down → move beyond slop threshold | Scrolling, slider thumb, splitview divider |
+| `LongPressRecognizer` | Pointer down → held for 500ms without movement | Context menus, drag initiation |
+| `TapAndDragRecognizer` | Tap (click) + immediate drag sequence | TextField text selection |
+
+**Arena protocol:**
+- When a `PointerDown` event occurs, all interested recognizers register.
+- As pointer events arrive, recognizers evaluate the gesture pattern.
+- A recognizer calls `Arena.Resolve(Accepted)` to claim victory or `Resolve(Rejected)` to withdraw.
+- If only one member remains when the arena closes, it wins automatically.
+- On `PointerUp`, the arena sweeps: first remaining member wins.
+- `Team` groups cooperating recognizers (e.g., Slider click + drag).
+
+**Per-device thresholds:**
+- Mouse: 1px slop distance (precise input)
+- Touch: 18px slop distance (finger imprecision)
+
+**GestureAware interface** (opt-in, same pattern as `Focusable`):
+
+```go
+type GestureAware interface {
+    GestureHitTest(pos geometry.Point) []Recognizer
+}
+```
+
+Leaf widgets (Button, Checkbox, TextField) always return their recognizers.
+Container widgets with partial interactive areas (Collapsible header, TabView tab strip,
+Docking zone tabs) return recognizers only when `pos` is within their interactive region.
+ScrollView intentionally does NOT implement GestureAware — scrollbar drag is handled by
+Event() handler with proper thumb hit-testing to avoid competing with child recognizers.
+
+**Signals integration:**
+Recognizers support opt-in reactive signals via functional options (e.g., `WithDraggingSignal` binds a `Signal[bool]` to drag state).
+
+### OS Clipboard
+
+The `widget.ClipboardProvider` interface enables clipboard access from widgets without direct platform imports:
+
+```go
+type ClipboardProvider interface {
+    ClipboardRead() (string, error)
+    ClipboardWrite(text string) error
+}
+```
+
+Registered by `desktop/` during initialization via `widget.RegisterClipboardProvider()`. Same DI pattern as `SoundPlayer`.
 
 ---
 
@@ -894,7 +976,7 @@ Key functions:
 - `HasDirtyBoundaries()` -- O(1) flat dirty set check for frame skip
 - `recordBoundary(w, ctx)` -- records scene with DrawChild skip for child boundaries
 - `widget.ClearRedrawInTree(w)` -- clears all flags recursively
-- `widget.MarkRedrawInTree(w)` -- marks all widgets dirty (used by resize, theme change)
+- `widget.MarkRedrawInTree(w)` -- marks all widgets dirty (used by root replacement or theme changes)
 - `widget.NeedsRedrawInTree(w)` -- checks if any descendant needs redraw
 
 ### Canvas Implementation
@@ -987,7 +1069,7 @@ Key components:
 - `DrawStatsProvider` — observability (CachedWidgets, DirtyWidgets)
 - `DirtyTrackerProvider` — O(regions) `Intersects()` fast path in RepaintBoundary
 
-See `docs/dev/architecture/ADR-004-INCREMENTAL-RENDERING.md` for full design.
+See ADR-004 for full design.
 
 ---
 
@@ -1254,11 +1336,19 @@ Changing the seed color produces an entirely different palette -- a red seed giv
 - Track sizing: `TrackAuto`, `TrackFixed`, `TrackFraction` (like CSS `fr` units)
 - Row and column track definitions
 
-**Engine** -- Layout orchestrator with optional caching:
-- Cache keyed by element ID + constraints
-- Dirty tracking for incremental updates
-- Two-pass intrinsic sizing via `LayoutWithIntrinsics`
-- Statistics tracking (cache hits/misses, layout calls)
+**Layoutable** -- Interface for widgets that participate in cached layout.
+
+### Per-Widget Layout Caching (ADR-032)
+
+Layout caching is built into `widget.WidgetBase`, not a centralized engine. The `widget.LayoutChild(child, ctx, constraints)` function checks the per-widget cache before calling `child.Layout()`:
+
+- **Cache hit** (same constraints + no `MarkNeedsLayout()`) → child's Layout is skipped entirely
+- **Cache miss** → `child.Layout()` executes, result is cached
+- **Invalidation** → `MarkNeedsLayout()` marks a widget dirty; `InvalidateLayoutTree()` propagates downward
+
+This is the Flutter `RenderObject.layout(parentUsesSize)` pattern: layout cost goes from O(total nodes) to O(affected subtree). The centralized `Engine` was removed in CACHE-030 (-769 LOC) as it had zero production usage.
+
+**Animation before layout (GAP-3):** `AnimationTicker` interface + `tickAnimationsInTree` walk runs BEFORE the layout pass (Flutter `handleBeginFrame` → `handleDrawFrame` pattern). Layout is a pure function of constraints + widget state.
 
 ---
 
@@ -1332,11 +1422,13 @@ enabling Tab navigation and keyboard shortcut dispatch.
 
 `app.EventBridge` translates `gpucontext` events into `event.*` types and dispatches them to the Window.
 
-**Event pipeline:**
+**Event pipeline (ADR-049 unified pointer):**
 ```
 gpucontext (native OS events)
   -> EventBridge (OnPointer, OnTextInput, OnKeyboard)
     -> Window.HandleEvent()
+      -> PointerEvent conversion (unified pointer pipeline)
+      -> GestureArena (hit-test → register GestureAware recognizers)
       -> HoverTracker (hit-test ScreenBounds, synthesize Enter/Leave)
       -> FocusManager.HandleKeyEvent() (Tab/Shift+Tab, shortcuts)
       -> Root Widget tree (depth-first dispatch)
@@ -1444,13 +1536,13 @@ The `registry/` package provides a global registry for widget factories:
 
 | Dependency | Purpose | Version |
 |------------|---------|---------|
-| `github.com/gogpu/gg` | 2D graphics + scene.Scene tile-parallel rendering | v0.48.11 |
-| `github.com/gogpu/gpucontext` | Shared GPU interfaces (opaque struct tokens) | v0.21.0 |
-| `github.com/gogpu/gogpu` | Application framework, windowing, Browser/WASM (examples only) | v0.42.0 |
-| `github.com/coregx/signals` | Reactive state management | v0.1.0 |
-| `golang.org/x/image` | Font rendering infrastructure | v0.41.0 |
+| `github.com/gogpu/gg` | 2D graphics + vector icons + unified draw queue | v0.52.2 |
+| `github.com/gogpu/gpucontext` | Shared GPU interfaces (opaque struct tokens) | v0.27.0 |
+| `github.com/gogpu/gogpu` | Application framework, windowing, Browser/WASM (examples only) | v0.52.1 |
+| `github.com/coregx/signals` | Reactive state management | v0.1.1 |
+| `golang.org/x/image` | Font rendering infrastructure | v0.44.0 |
 
-**Indirect:** gogpu/wgpu v0.30.1, gogpu/naga v0.17.15, gogpu/gputypes v0.5.0, go-text/typesetting v0.3.4, golang.org/x/text v0.36.0
+**Indirect:** gogpu/wgpu v0.31.2, gogpu/naga v0.18.0, gogpu/gputypes v0.5.2, go-text/typesetting v0.3.4, golang.org/x/text v0.40.0
 
 Go version: **1.25.0**
 
@@ -1504,6 +1596,12 @@ Generic widgets in `core/` define behavior and delegate visual rendering to a `P
 
 This lets the same widget render as Material 3, Fluent, or Cupertino by swapping the Painter. Colors flow as a value struct (`ButtonColorScheme`) -- no import cycle between `core/` and `theme/`.
 
+**Behavior/Styling separation (ADR-034):** Painters are draw-only — they receive pre-computed geometry (cursor rects, selection rects, action button positions) via PaintState and render with theme colors. Behavioral logic (text measurement, cursor positioning, hit-testing, animation easing) stays in the core widget. This enables community theme authoring without duplicating behavior.
+
+**LayoutMetrics (ADR-034):** Widgets define an optional `LayoutMetrics` interface that painters can implement to control spatial metrics (height, padding, font size, corner radius). Widgets query via type assertion with DefaultPainter fallback. This is the Qt `QStyle::pixelMetric` pattern — themes control dimensions without touching behavior.
+
+**ThemeBundle:** `theme.Bundle` interface (defined in `theme/bundle.go`) packages all painters for complete theme installation. Interface is defined but built-in implementations (M3, DevTools, Fluent, Cupertino) and `app.WithThemeBundle()` are not yet available (ADR-034 Phase 3 remaining work).
+
 ### 6. Opt-in Lifecycle for Signal Binding
 
 Widgets that use reactive signals implement `Lifecycle` (opt-in via type assertion). This follows the Flutter `initState`/`dispose` pattern — explicit lifecycle hooks for resource management:
@@ -1528,4 +1626,4 @@ All types in `geometry/` are small structs passed by value. Operations return ne
 
 ---
 
-*This document reflects the actual codebase as of June 15, 2026 (v0.1.29 — PointerCapturer ADR-031, Layer Tree compositor, damage-aware blit, 12 bug fixes, 4 design systems with 61 painters).*
+*This document reflects the actual codebase as of August 13, 2026 (v0.1.54 — 27 interactive widgets, 4 design systems with 70 painters, gesture recognition ADR-049, Layer Tree compositor, damage-aware blit, unified draw queue ADR-051/052, OS clipboard).*

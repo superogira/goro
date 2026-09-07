@@ -115,3 +115,53 @@ func BindToSchedulerFunc[T any](sig ReadonlySignal[T], shouldDirty func(T) bool,
 	b.cleanup = unsub
 	return b
 }
+
+// layoutInvalidator is satisfied by widgets that embed [widget.WidgetBase] and
+// support layout cache invalidation (ADR-032). Used by [BindToSchedulerLayout]
+// via type assertion so [widget.SchedulerRef] stays unchanged (no mock breakage).
+type layoutInvalidator interface {
+	MarkNeedsLayout()
+}
+
+// BindToSchedulerLayout creates a [Binding] that marks w as dirty in sched
+// AND invalidates its layout cache whenever sig changes.
+//
+// Use this for signals whose value affects the widget's measured size (text
+// content, item count, column count, ratio). Paint-only signals (color,
+// checked state, scroll offset) should use [BindToScheduler] instead.
+//
+// The layout invalidation uses a type assertion (not an interface extension)
+// so that [widget.SchedulerRef] and uitest mocks remain unchanged.
+func BindToSchedulerLayout[T any](sig ReadonlySignal[T], w widget.Widget, sched widget.SchedulerRef) *Binding {
+	b := &Binding{active: true}
+	unsub := sig.SubscribeForever(func(_ T) {
+		if lm, ok := w.(layoutInvalidator); ok {
+			lm.MarkNeedsLayout()
+		}
+		widget.InvalidateLayoutTree(w)
+		sched.MarkDirty(w)
+	})
+	b.cleanup = unsub
+	return b
+}
+
+// BindToSchedulerLayoutFunc creates a [Binding] that marks w as dirty in sched
+// AND invalidates its layout cache when sig changes AND the predicate returns true.
+//
+// This is the layout-aware variant of [BindToSchedulerFunc]. The predicate
+// suppresses redundant invalidations when the signal fires with a value that
+// doesn't actually change the widget's measured size.
+func BindToSchedulerLayoutFunc[T any](sig ReadonlySignal[T], shouldDirty func(T) bool, w widget.Widget, sched widget.SchedulerRef) *Binding {
+	b := &Binding{active: true}
+	unsub := sig.SubscribeForever(func(v T) {
+		if shouldDirty(v) {
+			if lm, ok := w.(layoutInvalidator); ok {
+				lm.MarkNeedsLayout()
+			}
+			widget.InvalidateLayoutTree(w)
+			sched.MarkDirty(w)
+		}
+	})
+	b.cleanup = unsub
+	return b
+}

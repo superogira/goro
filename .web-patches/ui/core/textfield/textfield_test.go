@@ -1,14 +1,15 @@
 package textfield_test
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
+	"time"
 
 	"github.com/gogpu/ui/a11y"
 	"github.com/gogpu/ui/core/textfield"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -508,7 +509,14 @@ func TestSelection_BackspaceDeletesSelection(t *testing.T) {
 
 // --- Clipboard Tests ---
 
+type testClipboard struct{ text string }
+
+func (c *testClipboard) ClipboardRead() (string, error)   { return c.text, nil }
+func (c *testClipboard) ClipboardWrite(text string) error { c.text = text; return nil }
+
 func TestClipboard_CopyPaste(t *testing.T) {
+	widget.RegisterClipboardProvider(&testClipboard{})
+
 	tf := textfield.New(textfield.InitialValue("hello"))
 	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
 	tf.SetFocused(true)
@@ -529,6 +537,8 @@ func TestClipboard_CopyPaste(t *testing.T) {
 }
 
 func TestClipboard_Cut(t *testing.T) {
+	widget.RegisterClipboardProvider(&testClipboard{})
+
 	tf := textfield.New(textfield.InitialValue("hello"))
 	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
 	tf.SetFocused(true)
@@ -593,16 +603,131 @@ func TestMouse_DoubleClickSelectsWord(t *testing.T) {
 	tf := textfield.New(textfield.InitialValue("hello world"))
 	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
 	tf.SetFocused(true)
-	ctx := widget.NewContext()
 
-	// Double-click on the first character area.
-	dbl := event.NewMouseEvent(event.MouseDoubleClick, event.ButtonLeft, event.ButtonStateLeft,
-		geometry.Pt(12+2, 24), geometry.Pt(12+2, 24), event.ModNone)
-	tf.Event(ctx, dbl)
+	// Double-click is now handled by the TapAndDragRecognizer.
+	// Simulate two rapid taps at the same position through the gesture system.
+	recs := tf.GestureHitTest(geometry.Pt(0, 0))
+	if len(recs) == 0 {
+		t.Fatal("TextField should have a TapAndDragRecognizer")
+	}
+	arena := gesture.NewArena()
+	tapPos := geometry.Pt(12+2, 24)
+	ts := 100 * time.Millisecond
 
+	// First tap: down + up.
+	down1 := &gesture.PointerEvent{
+		Base:           event.NewBase(event.TypeMouse, event.ModNone),
+		EventType:      gesture.PointerDown,
+		PointerID:      1,
+		PointerType:    gesture.PointerTypeMouse,
+		Position:       tapPos,
+		GlobalPosition: tapPos,
+		Button:         event.ButtonLeft,
+		Buttons:        event.ButtonStateLeft,
+		Timestamp:      ts,
+	}
+	recs[0].AddPointer(down1, arena)
+	arena.Close(1)
+
+	up1 := &gesture.PointerEvent{
+		Base:           event.NewBase(event.TypeMouse, event.ModNone),
+		EventType:      gesture.PointerUp,
+		PointerID:      1,
+		PointerType:    gesture.PointerTypeMouse,
+		Position:       tapPos,
+		GlobalPosition: tapPos,
+		Timestamp:      ts + 50*time.Millisecond,
+	}
+	recs[0].HandleEvent(up1)
+	arena.Sweep(1)
+
+	// Second tap (within DoubleTapTimeout): down + up.
+	ts2 := ts + 100*time.Millisecond
+	down2 := &gesture.PointerEvent{
+		Base:           event.NewBase(event.TypeMouse, event.ModNone),
+		EventType:      gesture.PointerDown,
+		PointerID:      1,
+		PointerType:    gesture.PointerTypeMouse,
+		Position:       tapPos,
+		GlobalPosition: tapPos,
+		Button:         event.ButtonLeft,
+		Buttons:        event.ButtonStateLeft,
+		Timestamp:      ts2,
+	}
+	recs[0].AddPointer(down2, arena)
+	arena.Close(1)
+
+	// After the second tap-down with ConsecutiveTapCount=2, word selection
+	// should have been triggered by OnTapDown.
 	start, end := tf.Selection()
 	if start != 0 || end != 5 {
 		t.Errorf("selection = (%d, %d), want (0, 5) for word 'hello'", start, end)
+	}
+}
+
+func TestMouse_TripleClickSelectsAll(t *testing.T) {
+	tf := textfield.New(textfield.InitialValue("hello world"))
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	tf.SetFocused(true)
+
+	recs := tf.GestureHitTest(geometry.Pt(0, 0))
+	if len(recs) == 0 {
+		t.Fatal("TextField should have a TapAndDragRecognizer")
+	}
+	arena := gesture.NewArena()
+	tapPos := geometry.Pt(14, 24)
+
+	// Three rapid taps at the same position.
+	ts := 100 * time.Millisecond
+	for i := 0; i < 3; i++ {
+		tapTS := ts + time.Duration(i)*100*time.Millisecond
+		down := &gesture.PointerEvent{
+			Base:           event.NewBase(event.TypeMouse, event.ModNone),
+			EventType:      gesture.PointerDown,
+			PointerID:      1,
+			PointerType:    gesture.PointerTypeMouse,
+			Position:       tapPos,
+			GlobalPosition: tapPos,
+			Button:         event.ButtonLeft,
+			Buttons:        event.ButtonStateLeft,
+			Timestamp:      tapTS,
+		}
+		recs[0].AddPointer(down, arena)
+		arena.Close(1)
+
+		up := &gesture.PointerEvent{
+			Base:           event.NewBase(event.TypeMouse, event.ModNone),
+			EventType:      gesture.PointerUp,
+			PointerID:      1,
+			PointerType:    gesture.PointerTypeMouse,
+			Position:       tapPos,
+			GlobalPosition: tapPos,
+			Timestamp:      tapTS + 30*time.Millisecond,
+		}
+		recs[0].HandleEvent(up)
+		arena.Sweep(1)
+	}
+
+	// Triple click selects all text.
+	start, end := tf.Selection()
+	runeCount := len([]rune("hello world"))
+	if start != 0 || end != runeCount {
+		t.Errorf("selection = (%d, %d), want (0, %d) for select-all", start, end, runeCount)
+	}
+}
+
+func TestTextField_GestureAwareInterface(t *testing.T) {
+	tf := textfield.New()
+
+	// Verify GestureAware interface is implemented.
+	ga, ok := interface{}(tf).(gesture.GestureAware)
+	if !ok {
+		t.Fatal("TextField should implement gesture.GestureAware")
+	}
+
+	recs := ga.GestureHitTest(geometry.Pt(0, 0))
+	if len(recs) != 1 {
+		t.Errorf("GestureHitTest() returned %d, want 1", len(recs))
 	}
 }
 
@@ -807,6 +932,192 @@ func TestDraw_DoesNotPanicWithBounds(t *testing.T) {
 	tf.Draw(ctx, canvas)
 }
 
+// --- Pre-computed PaintState Tests (ADR-034) ---
+
+func TestDraw_PrecomputedDisplayText(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("secret"),
+		textfield.InputTypeOpt(textfield.TypePassword),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if p.state.DisplayText == "secret" {
+		t.Error("password DisplayText should be masked, not plaintext")
+	}
+	if len([]rune(p.state.DisplayText)) != 6 {
+		t.Errorf("password DisplayText should have 6 bullets, got %d runes", len([]rune(p.state.DisplayText)))
+	}
+}
+
+func TestDraw_PrecomputedDisplayText_PlainText(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("hello"),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if p.state.DisplayText != "hello" {
+		t.Errorf("DisplayText = %q, want %q", p.state.DisplayText, "hello")
+	}
+}
+
+func TestDraw_PrecomputedContentRect(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("test"),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(10, 20, 300, 48))
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	cr := p.state.ContentRect
+	if cr.IsEmpty() {
+		t.Error("ContentRect should not be empty")
+	}
+	// ContentRect should be inside bounds (inset by padding).
+	bounds := tf.Bounds()
+	if cr.Min.X <= bounds.Min.X || cr.Min.Y <= bounds.Min.Y {
+		t.Errorf("ContentRect.Min should be inset from bounds: cr=%v, bounds=%v", cr, bounds)
+	}
+	if cr.Max.X >= bounds.Max.X || cr.Max.Y >= bounds.Max.Y {
+		t.Errorf("ContentRect.Max should be inset from bounds: cr=%v, bounds=%v", cr, bounds)
+	}
+}
+
+func TestDraw_PrecomputedShowCursor_Focused(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("hello"),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	tf.SetFocused(true)
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if !p.state.ShowCursor {
+		t.Error("ShowCursor should be true when focused with no selection")
+	}
+	if p.state.CursorRect.IsEmpty() {
+		t.Error("CursorRect should not be empty when ShowCursor is true")
+	}
+}
+
+func TestDraw_PrecomputedShowCursor_Unfocused(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("hello"),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	// Not focused.
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if p.state.ShowCursor {
+		t.Error("ShowCursor should be false when not focused")
+	}
+}
+
+func TestDraw_PrecomputedShowCursor_Disabled(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("hello"),
+		textfield.Disabled(true),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	tf.SetFocused(true)
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if p.state.ShowCursor {
+		t.Error("ShowCursor should be false when disabled")
+	}
+}
+
+func TestDraw_PrecomputedSelection(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue("hello"),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	tf.SetFocused(true)
+	ctx := widget.NewContext()
+
+	// Select last 2 chars.
+	pressKey(tf, ctx, event.KeyLeft, event.ModShift)
+	pressKey(tf, ctx, event.KeyLeft, event.ModShift)
+
+	canvas := &mockCanvas{}
+	tf.Draw(ctx, canvas)
+
+	if !p.state.ShowSelection {
+		t.Error("ShowSelection should be true when selection exists")
+	}
+	if p.state.SelectionRect.IsEmpty() {
+		t.Error("SelectionRect should not be empty when ShowSelection is true")
+	}
+	if p.state.ShowCursor {
+		t.Error("ShowCursor should be false when selection exists")
+	}
+}
+
+func TestDraw_PrecomputedFontSize(t *testing.T) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, 300, 48))
+	ctx := widget.NewContext()
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if p.state.FontSize <= 0 {
+		t.Errorf("FontSize = %v, want > 0", p.state.FontSize)
+	}
+}
+
+func TestLayoutMetrics_DefaultPainter(t *testing.T) {
+	var lm textfield.LayoutMetrics = textfield.DefaultPainter{}
+
+	h, v := lm.ContentPadding()
+	if h <= 0 || v <= 0 {
+		t.Errorf("ContentPadding = (%v, %v), want positive values", h, v)
+	}
+	if lm.TextFieldFontSize() <= 0 {
+		t.Errorf("TextFieldFontSize = %v, want > 0", lm.TextFieldFontSize())
+	}
+	if lm.TextFieldCursorWidth() <= 0 {
+		t.Errorf("TextFieldCursorWidth = %v, want > 0", lm.TextFieldCursorWidth())
+	}
+	if lm.TextFieldCornerRadius() <= 0 {
+		t.Errorf("TextFieldCornerRadius = %v, want > 0", lm.TextFieldCornerRadius())
+	}
+}
+
 // --- Widget Interface Compliance ---
 
 func TestWidgetInterface(t *testing.T) {
@@ -976,6 +1287,312 @@ func TestPaintState_ColorScheme(t *testing.T) {
 	_ = ps
 }
 
+// --- Horizontal Scroll Tests (Issue #212) ---
+
+// narrowFieldWidth creates a narrow field width where text will overflow.
+// With default painter: contentPaddingH=12 on each side, so content area = 80-24 = 56px.
+// With MeasureText returning len(runes)*fontSize*0.5, at fontSize=14 each rune = 7px.
+// So 8 runes = 56px fills the content area, 9+ triggers scrolling.
+const narrowFieldWidth float32 = 80
+
+func newNarrowField(text string) (*textfield.Widget, widget.Context, *testPainter) {
+	p := &testPainter{}
+	tf := textfield.New(
+		textfield.InitialValue(text),
+		textfield.PainterOpt(p),
+	)
+	tf.SetBounds(geometry.NewRect(0, 0, narrowFieldWidth, 48))
+	tf.SetFocused(true)
+	ctx := widget.NewContext()
+	return tf, ctx, p
+}
+
+func TestScroll_NoScrollWhenTextFits(t *testing.T) {
+	tf, ctx, p := newNarrowField("short")
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if tf.ScrollOffsetX() != 0 {
+		t.Errorf("scrollOffsetX = %v, want 0 (text fits)", tf.ScrollOffsetX())
+	}
+	// Cursor should be within content rect.
+	if p.state.ShowCursor && p.state.CursorRect.Min.X < p.state.ContentRect.Min.X {
+		t.Error("cursor should be within content rect when text fits")
+	}
+}
+
+func TestScroll_ScrollsWhenTextOverflows(t *testing.T) {
+	// "abcdefghijklmnop" = 16 runes * 7px = 112px, content area ~56px.
+	// Cursor starts at end (position 16). Text must scroll left.
+	tf, ctx, _ := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	if tf.ScrollOffsetX() >= 0 {
+		t.Errorf("scrollOffsetX = %v, want < 0 (text overflows, cursor at end)", tf.ScrollOffsetX())
+	}
+}
+
+func TestScroll_CursorVisibleAfterTyping(t *testing.T) {
+	tf, ctx, p := newNarrowField("")
+	canvas := &mockCanvas{}
+
+	// Type characters until text overflows the content area.
+	for _, r := range "abcdefghijklmnop" {
+		typeRune(tf, ctx, r)
+	}
+
+	tf.Draw(ctx, canvas)
+
+	// Cursor must be visible within content rect.
+	if p.state.ShowCursor {
+		cr := p.state.CursorRect
+		ct := p.state.ContentRect
+		if cr.Min.X < ct.Min.X || cr.Min.X > ct.Max.X {
+			t.Errorf("cursor at X=%v outside content rect [%v, %v]",
+				cr.Min.X, ct.Min.X, ct.Max.X)
+		}
+	}
+}
+
+func TestScroll_HomeResetsScroll(t *testing.T) {
+	tf, ctx, p := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Draw once to establish scroll state (cursor at end).
+	tf.Draw(ctx, canvas)
+	scrollBefore := tf.ScrollOffsetX()
+	if scrollBefore >= 0 {
+		t.Fatalf("precondition failed: scrollOffsetX = %v, want < 0", scrollBefore)
+	}
+
+	// Press Home to go to position 0.
+	pressKey(tf, ctx, event.KeyHome, event.ModNone)
+	tf.Draw(ctx, canvas)
+
+	// After Home, cursor is at position 0. Scroll should adjust toward 0
+	// (showing text from the beginning).
+	if tf.ScrollOffsetX() != 0 {
+		t.Errorf("scrollOffsetX = %v after Home, want 0", tf.ScrollOffsetX())
+	}
+
+	// Cursor should be near the left edge of content rect.
+	if p.state.ShowCursor {
+		cr := p.state.CursorRect
+		ct := p.state.ContentRect
+		// Cursor at Home should be at or very near the content rect left edge.
+		if cr.Min.X < ct.Min.X || cr.Min.X > ct.Min.X+10 {
+			t.Errorf("cursor at Home X=%v, expected near content left %v", cr.Min.X, ct.Min.X)
+		}
+	}
+}
+
+func TestScroll_EndScrollsToShowCursor(t *testing.T) {
+	tf, ctx, p := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Move to Home first.
+	pressKey(tf, ctx, event.KeyHome, event.ModNone)
+	tf.Draw(ctx, canvas)
+	if tf.ScrollOffsetX() != 0 {
+		t.Fatalf("precondition failed: scroll should be 0 after Home")
+	}
+
+	// Press End to go to end.
+	pressKey(tf, ctx, event.KeyEnd, event.ModNone)
+	tf.Draw(ctx, canvas)
+
+	if tf.ScrollOffsetX() >= 0 {
+		t.Errorf("scrollOffsetX = %v after End, want < 0", tf.ScrollOffsetX())
+	}
+
+	// Cursor at end should be visible within content rect.
+	if p.state.ShowCursor {
+		cr := p.state.CursorRect
+		ct := p.state.ContentRect
+		if cr.Min.X > ct.Max.X {
+			t.Errorf("cursor at End X=%v exceeds content right edge %v", cr.Min.X, ct.Max.X)
+		}
+	}
+}
+
+func TestScroll_ArrowLeftScrollsBack(t *testing.T) {
+	tf, ctx, _ := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Cursor starts at end, text is scrolled left.
+	tf.Draw(ctx, canvas)
+	scrollEnd := tf.ScrollOffsetX()
+
+	// Press left arrow multiple times to move cursor back.
+	for i := 0; i < 10; i++ {
+		pressKey(tf, ctx, event.KeyLeft, event.ModNone)
+	}
+	tf.Draw(ctx, canvas)
+
+	// Scroll should have changed (less negative or zero).
+	if tf.ScrollOffsetX() <= scrollEnd {
+		t.Errorf("scrollOffsetX = %v after leftward movement, expected > %v",
+			tf.ScrollOffsetX(), scrollEnd)
+	}
+}
+
+func TestScroll_BackspaceAdjustsScroll(t *testing.T) {
+	tf, ctx, _ := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Draw to establish initial scroll.
+	tf.Draw(ctx, canvas)
+
+	// Delete all characters via backspace.
+	for range 16 {
+		pressKey(tf, ctx, event.KeyBackspace, event.ModNone)
+	}
+	tf.Draw(ctx, canvas)
+
+	// After deleting all text, scroll should reset to 0.
+	if tf.ScrollOffsetX() != 0 {
+		t.Errorf("scrollOffsetX = %v after deleting all text, want 0", tf.ScrollOffsetX())
+	}
+}
+
+func TestScroll_OffsetNeverPositive(t *testing.T) {
+	tf, ctx, _ := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Home.
+	pressKey(tf, ctx, event.KeyHome, event.ModNone)
+	tf.Draw(ctx, canvas)
+
+	if tf.ScrollOffsetX() > 0 {
+		t.Errorf("scrollOffsetX = %v, must never be > 0", tf.ScrollOffsetX())
+	}
+
+	// Keep pressing left at position 0.
+	pressKey(tf, ctx, event.KeyLeft, event.ModNone)
+	tf.Draw(ctx, canvas)
+
+	if tf.ScrollOffsetX() > 0 {
+		t.Errorf("scrollOffsetX = %v after left at pos 0, must never be > 0", tf.ScrollOffsetX())
+	}
+}
+
+func TestScroll_ScrollOffsetXGetter(t *testing.T) {
+	tf := textfield.New()
+	if tf.ScrollOffsetX() != 0 {
+		t.Errorf("new widget scrollOffsetX = %v, want 0", tf.ScrollOffsetX())
+	}
+}
+
+func TestScroll_CursorRectWithinContentRect(t *testing.T) {
+	// Verify cursor rect stays within content rect bounds after scrolling.
+	tf, ctx, p := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Test at various cursor positions.
+	positions := []event.Key{event.KeyHome, event.KeyEnd}
+	for _, key := range positions {
+		pressKey(tf, ctx, key, event.ModNone)
+		tf.Draw(ctx, canvas)
+
+		if p.state.ShowCursor {
+			cr := p.state.CursorRect
+			ct := p.state.ContentRect
+			// CursorRect.Min.X should be within ContentRect horizontal bounds
+			// (with a small margin tolerance for scrollMargin).
+			if cr.Min.X < ct.Min.X-1 || cr.Min.X > ct.Max.X+1 {
+				t.Errorf("key=%v: cursor X=%v outside content rect [%v, %v]",
+					key, cr.Min.X, ct.Min.X, ct.Max.X)
+			}
+		}
+	}
+}
+
+func TestScroll_ContentRectUnchangedByScroll(t *testing.T) {
+	// Verify that ContentRect in PaintState is the original (unscrolled) rect,
+	// ensuring painters clip to the correct visible area.
+	tf, ctx, p := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	tf.Draw(ctx, canvas)
+
+	// ContentRect should match the bounds minus padding, NOT shifted by scroll.
+	bounds := tf.Bounds()
+	cr := p.state.ContentRect
+	if cr.Min.X <= bounds.Min.X {
+		t.Errorf("ContentRect.Min.X=%v should be > bounds.Min.X=%v (padding)", cr.Min.X, bounds.Min.X)
+	}
+	if cr.Max.X >= bounds.Max.X {
+		t.Errorf("ContentRect.Max.X=%v should be < bounds.Max.X=%v (padding)", cr.Max.X, bounds.Max.X)
+	}
+}
+
+func TestScroll_MouseClickWithScroll(t *testing.T) {
+	// When text is scrolled, a click at the left edge of the field
+	// should position the cursor at the first visible rune, not rune 0.
+	tf, ctx, _ := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+
+	// Draw to establish scroll state (cursor at end, text scrolled left).
+	tf.Draw(ctx, canvas)
+	if tf.ScrollOffsetX() >= 0 {
+		t.Fatalf("precondition: expected scroll < 0 for overflowing text")
+	}
+
+	// Click at the left edge of the content area (just inside padding).
+	// With scroll active, this should NOT place cursor at position 0.
+	leftEdge := geometry.Pt(13, 24) // Just past the 12px left padding.
+	press := event.NewMouseEvent(event.MousePress, event.ButtonLeft, event.ButtonStateLeft,
+		leftEdge, leftEdge, event.ModNone)
+	tf.Event(ctx, press)
+
+	// The cursor should be at a position > 0 because text is scrolled.
+	if tf.CursorPosition() == 0 {
+		t.Error("click at left edge with scroll should not place cursor at position 0")
+	}
+}
+
+func TestScroll_DeleteReducesScroll(t *testing.T) {
+	// After deleting text that makes the remaining text fit, scroll should reset.
+	tf, ctx, _ := newNarrowField("abcdefghijklmnop")
+	canvas := &mockCanvas{}
+	tf.Draw(ctx, canvas)
+
+	// Select all and delete.
+	pressKey(tf, ctx, event.KeyA, event.ModCtrl)
+	pressKey(tf, ctx, event.KeyBackspace, event.ModNone)
+	tf.Draw(ctx, canvas)
+
+	if tf.ScrollOffsetX() != 0 {
+		t.Errorf("scrollOffsetX = %v after clearing all text, want 0", tf.ScrollOffsetX())
+	}
+}
+
+func TestScroll_PasteTriggersScroll(t *testing.T) {
+	tf, ctx, _ := newNarrowField("")
+	canvas := &mockCanvas{}
+
+	// Type "ab", select all, copy.
+	typeRune(tf, ctx, 'a')
+	typeRune(tf, ctx, 'b')
+	pressKey(tf, ctx, event.KeyA, event.ModCtrl)
+	pressKey(tf, ctx, event.KeyC, event.ModCtrl)
+	pressKey(tf, ctx, event.KeyEnd, event.ModNone)
+
+	// Paste many times to overflow.
+	for range 10 {
+		pressKey(tf, ctx, event.KeyV, event.ModCtrl)
+	}
+	tf.Draw(ctx, canvas)
+
+	// Text should now be "ab" * 10 + "ab" = 22 chars, definitely overflowing.
+	if tf.ScrollOffsetX() >= 0 {
+		t.Errorf("scrollOffsetX = %v after pasting overflow text, want < 0", tf.ScrollOffsetX())
+	}
+}
+
 // --- Helper functions ---
 
 func typeRune(tf *textfield.Widget, ctx widget.Context, r rune) bool {
@@ -995,9 +1612,9 @@ type testPainter struct {
 	state  textfield.PaintState
 }
 
-func (p *testPainter) PaintTextField(_ widget.Canvas, ps textfield.PaintState) {
+func (p *testPainter) PaintTextField(_ widget.Canvas, ps *textfield.PaintState) {
 	p.called = true
-	p.state = ps
+	p.state = *ps
 }
 
 // --- recordingCanvas records draw calls for verification ---
@@ -1075,7 +1692,7 @@ func (c *recordingCanvas) PopTransform()                                {}
 func (c *recordingCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *recordingCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *recordingCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *recordingCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *recordingCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 // --- mockCanvas for non-recording tests ---
 
@@ -1109,7 +1726,7 @@ func (c *mockCanvas) PopTransform()                                {}
 func (c *mockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *mockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *mockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *mockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *mockCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 // --- Lifecycle Tests ---
 

@@ -4,6 +4,7 @@ import (
 	"image"
 	"testing"
 
+	gpu_types "github.com/gogpu/gogpu/gpu/types"
 	"github.com/gogpu/gogpu/input"
 	"github.com/gogpu/gogpu/internal/platform"
 	"github.com/gogpu/gpucontext"
@@ -95,14 +96,41 @@ func TestAppOnCloseChaining(t *testing.T) {
 func TestAppQuit(t *testing.T) {
 	app := NewApp(DefaultConfig())
 
-	if app.running {
+	if app.running.Load() {
 		t.Error("running should be false initially")
 	}
 
-	app.running = true
+	app.running.Store(true)
 	app.Quit()
 
-	if app.running {
+	if app.running.Load() {
+		t.Error("running should be false after Quit()")
+	}
+}
+
+// TestAppQuitWakesEventLoop verifies Quit unblocks WaitEvents (reported by
+// @jbunds on macOS: App.Run hung until mouse/keyboard input after Quit from
+// a timer because running=false alone does not wake the idle loop).
+func TestAppQuitWakesEventLoop(t *testing.T) {
+	app := NewApp(DefaultConfig())
+	woken := false
+	app.wakeupFn.Store(func() { woken = true })
+	app.running.Store(true)
+
+	app.Quit()
+
+	if app.running.Load() {
+		t.Error("running should be false after Quit()")
+	}
+	if !woken {
+		t.Error("Quit should invoke wakeupFn to unblock WaitEvents")
+	}
+}
+
+func TestAppQuitBeforeStartRunLoopNoWakeup(t *testing.T) {
+	app := NewApp(DefaultConfig())
+	app.Quit()
+	if app.running.Load() {
 		t.Error("running should be false after Quit()")
 	}
 }
@@ -335,6 +363,7 @@ func TestGpucontextKeyToInputKey(t *testing.T) {
 		{"ScrollLock", gpucontext.KeyScrollLock, input.KeyScrollLock},
 		{"NumLock", gpucontext.KeyNumLock, input.KeyNumLock},
 		{"Pause", gpucontext.KeyPause, input.KeyPause},
+		{"Cancel", gpucontext.KeyCancel, input.KeyCancel},
 		{"Unknown", gpucontext.Key(9999), input.KeyUnknown},
 	}
 
@@ -623,7 +652,7 @@ func TestApp_OnAnyWindowClosed_Primary(t *testing.T) {
 	)
 
 	// ADR-026: primary close with no other windows → app exits
-	if app.running {
+	if app.running.Load() {
 		t.Error("app should be stopped after last window close")
 	}
 	if app.primaryWindow != nil {
@@ -638,8 +667,8 @@ func TestApp_OnAnyWindowClosed_PrimaryRejected(t *testing.T) {
 	app := &App{
 		windowManager: newWindowManager(),
 		renderLoop:    &mockRenderLoop{},
-		running:       true,
 	}
+	app.running.Store(true)
 	pid := platform.NewWindowID()
 	app.primaryWindow = &Window{
 		id:         app.windowManager.allocate(),
@@ -664,7 +693,7 @@ func TestApp_OnAnyWindowClosed_PrimaryRejected(t *testing.T) {
 	if called {
 		t.Error("should not be called when onClose rejects")
 	}
-	if !app.running {
+	if !app.running.Load() {
 		t.Error("app should still be running")
 	}
 }
@@ -738,9 +767,9 @@ func TestApp_PrimaryCloseKeepsSecondary(t *testing.T) {
 	app := &App{
 		windowManager:          newWindowManager(),
 		renderLoop:             &mockRenderLoop{},
-		running:                true,
 		quitOnLastWindowClosed: true,
 	}
+	app.running.Store(true)
 
 	// Create primary
 	primaryPID := platform.NewWindowID()
@@ -767,7 +796,7 @@ func TestApp_PrimaryCloseKeepsSecondary(t *testing.T) {
 	if app.primaryWindow != nil {
 		t.Error("primaryWindow should be nil after close")
 	}
-	if !app.running {
+	if !app.running.Load() {
 		t.Error("app should still be running — secondary window alive")
 	}
 	if app.windowManager.get(secondaryID) == nil {
@@ -780,7 +809,7 @@ func TestApp_PrimaryCloseKeepsSecondary(t *testing.T) {
 	// Close secondary — NOW app should exit
 	app.classifyEvent(&platform.Event{Type: platform.EventClose, WindowID: secondaryPID}, nil, nil)
 
-	if app.running {
+	if app.running.Load() {
 		t.Error("app should stop after last window closed")
 	}
 	if app.windowManager.count() != 0 {
@@ -792,9 +821,9 @@ func TestApp_QuitOnLastWindowClosedFalse(t *testing.T) {
 	app := &App{
 		windowManager:          newWindowManager(),
 		renderLoop:             &mockRenderLoop{},
-		running:                true,
 		quitOnLastWindowClosed: false,
 	}
+	app.running.Store(true)
 
 	pid := platform.NewWindowID()
 	id := app.windowManager.allocate()
@@ -808,7 +837,7 @@ func TestApp_QuitOnLastWindowClosedFalse(t *testing.T) {
 	// Close only window
 	app.classifyEvent(&platform.Event{Type: platform.EventClose, WindowID: pid}, nil, nil)
 
-	if !app.running {
+	if !app.running.Load() {
 		t.Error("app should still run with quitOnLastWindowClosed=false")
 	}
 }
@@ -974,8 +1003,8 @@ func TestApp_WindowCloseEvent_OnClosePanic(t *testing.T) {
 	app := &App{
 		windowManager: newWindowManager(),
 		renderLoop:    &mockRenderLoop{},
-		running:       true,
 	}
+	app.running.Store(true)
 	pid := platform.NewWindowID()
 	app.primaryWindow = &Window{
 		id:         app.windowManager.allocate(),
@@ -996,7 +1025,7 @@ func TestApp_WindowCloseEvent_OnClosePanic(t *testing.T) {
 		WindowID: pid,
 	})
 
-	if !app.running {
+	if !app.running.Load() {
 		t.Error("app should still be running after panicking onClose")
 	}
 }
@@ -1134,6 +1163,229 @@ func TestAppSetMinMaxSizeNilPlatform(t *testing.T) {
 	}
 }
 
+func TestRequestSize_ClampsToConstraints(t *testing.T) {
+	mock := &mockWindow{width: 800, height: 600}
+	wm := newWindowManager()
+	id := wm.allocate()
+	pw := &Window{
+		id:         id,
+		platWindow: mock,
+	}
+	wm.add(pw)
+
+	app := &App{
+		config:        Config{MinWidth: 200, MinHeight: 150, MaxWidth: 1920, MaxHeight: 1080},
+		primaryWindow: pw,
+		windowManager: wm,
+	}
+
+	tests := []struct {
+		name       string
+		w, h       int
+		wantW      int
+		wantH      int
+		wantCalled bool
+	}{
+		{"within bounds", 640, 480, 640, 480, true},
+		{"clamp to min width", 100, 480, 200, 480, true},
+		{"clamp to min height", 640, 100, 640, 150, true},
+		{"clamp to max width", 2000, 480, 1920, 480, true},
+		{"clamp to max height", 640, 2000, 640, 1080, true},
+		{"clamp both min", 50, 50, 200, 150, true},
+		{"clamp both max", 3000, 3000, 1920, 1080, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock.width = 800
+			mock.height = 600
+			app.RequestSize(tt.w, tt.h)
+			if mock.width != tt.wantW || mock.height != tt.wantH {
+				t.Errorf("got %dx%d, want %dx%d", mock.width, mock.height, tt.wantW, tt.wantH)
+			}
+		})
+	}
+}
+
+func TestRequestSize_SkipsNegativeAndZero(t *testing.T) {
+	mock := &mockWindow{width: 800, height: 600}
+	wm := newWindowManager()
+	id := wm.allocate()
+	pw := &Window{
+		id:         id,
+		platWindow: mock,
+	}
+	wm.add(pw)
+
+	app := &App{
+		config:        DefaultConfig(),
+		primaryWindow: pw,
+		windowManager: wm,
+	}
+
+	tests := []struct {
+		name string
+		w, h int
+	}{
+		{"zero width", 0, 600},
+		{"zero height", 800, 0},
+		{"negative width", -100, 600},
+		{"negative height", 800, -50},
+		{"both zero", 0, 0},
+		{"both negative", -1, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock.width = 800
+			mock.height = 600
+			app.RequestSize(tt.w, tt.h)
+			// Size should NOT change — request ignored
+			if mock.width != 800 || mock.height != 600 {
+				t.Errorf("got %dx%d, want 800x600 (unchanged)", mock.width, mock.height)
+			}
+		})
+	}
+}
+
+func TestRequestSize_NilPlatformNoPanic(t *testing.T) {
+	app := NewApp(DefaultConfig())
+
+	// Must not panic when primaryWindow is nil
+	app.RequestSize(800, 600)
+}
+
+func TestRequestSize_NoConstraints(t *testing.T) {
+	mock := &mockWindow{width: 800, height: 600}
+	wm := newWindowManager()
+	id := wm.allocate()
+	pw := &Window{
+		id:         id,
+		platWindow: mock,
+	}
+	wm.add(pw)
+
+	// No min/max constraints (all zero)
+	app := &App{
+		config:        Config{},
+		primaryWindow: pw,
+		windowManager: wm,
+	}
+
+	app.RequestSize(3840, 2160)
+	if mock.width != 3840 || mock.height != 2160 {
+		t.Errorf("got %dx%d, want 3840x2160", mock.width, mock.height)
+	}
+}
+
+func TestPollInputEvent_EmptyQueue(t *testing.T) {
+	app := NewApp(DefaultConfig())
+	ev, ok := app.PollInputEvent()
+	if ok || ev != nil {
+		t.Errorf("expected (nil, false), got (%v, %v)", ev, ok)
+	}
+}
+
+func TestPollInputEvent_KeyEvents(t *testing.T) {
+	app := &App{}
+	app.inputEvents = append(app.inputEvents,
+		gpucontext.KeyEvent{Key: gpucontext.KeyA, Pressed: true},
+		gpucontext.KeyEvent{Key: gpucontext.KeyA, Pressed: false},
+	)
+
+	ev1, ok1 := app.PollInputEvent()
+	if !ok1 {
+		t.Fatal("expected event")
+	}
+	ke, ok := ev1.(gpucontext.KeyEvent)
+	if !ok || ke.Key != gpucontext.KeyA || !ke.Pressed {
+		t.Errorf("unexpected event: %+v", ev1)
+	}
+
+	ev2, ok2 := app.PollInputEvent()
+	if !ok2 {
+		t.Fatal("expected second event")
+	}
+	ke2, ok := ev2.(gpucontext.KeyEvent)
+	if !ok || ke2.Pressed {
+		t.Errorf("expected release, got: %+v", ev2)
+	}
+
+	_, ok3 := app.PollInputEvent()
+	if ok3 {
+		t.Error("expected empty queue")
+	}
+}
+
+func TestPollInputEvent_MixedTypes(t *testing.T) {
+	app := &App{}
+	app.inputEvents = append(app.inputEvents,
+		gpucontext.KeyEvent{Key: gpucontext.KeyEscape, Pressed: true},
+		gpucontext.PointerEvent{Type: gpucontext.PointerDown, X: 100, Y: 200},
+		gpucontext.ScrollEvent{DeltaY: -3.0},
+		gpucontext.CharEvent{Char: 'x'},
+		gpucontext.FocusEvent{Focused: true},
+		gpucontext.ResizeEvent{Width: 1024, Height: 768},
+	)
+
+	types := []string{}
+	for ev, ok := app.PollInputEvent(); ok; ev, ok = app.PollInputEvent() {
+		switch ev.(type) {
+		case gpucontext.KeyEvent:
+			types = append(types, "key")
+		case gpucontext.PointerEvent:
+			types = append(types, "pointer")
+		case gpucontext.ScrollEvent:
+			types = append(types, "scroll")
+		case gpucontext.CharEvent:
+			types = append(types, "char")
+		case gpucontext.FocusEvent:
+			types = append(types, "focus")
+		case gpucontext.ResizeEvent:
+			types = append(types, "resize")
+		}
+	}
+
+	expected := []string{"key", "pointer", "scroll", "char", "focus", "resize"}
+	if len(types) != len(expected) {
+		t.Fatalf("got %d events, want %d", len(types), len(expected))
+	}
+	for i, want := range expected {
+		if types[i] != want {
+			t.Errorf("event %d: got %s, want %s", i, types[i], want)
+		}
+	}
+}
+
+func TestPollInputEvent_FrameReset(t *testing.T) {
+	app := &App{}
+	app.inputEvents = make([]gpucontext.InputEvent, 0, 16)
+	app.inputEvents = append(app.inputEvents,
+		gpucontext.KeyEvent{Key: gpucontext.KeyA, Pressed: true},
+	)
+
+	// Simulate frame reset (same as processEventsMultiThread does)
+	app.inputEvents = app.inputEvents[:0]
+
+	_, ok := app.PollInputEvent()
+	if ok {
+		t.Error("expected empty queue after frame reset")
+	}
+
+	// Backing array should be reused
+	app.inputEvents = append(app.inputEvents,
+		gpucontext.KeyEvent{Key: gpucontext.KeyB, Pressed: true},
+	)
+	ev, ok := app.PollInputEvent()
+	if !ok {
+		t.Fatal("expected event after re-fill")
+	}
+	ke := ev.(gpucontext.KeyEvent)
+	if ke.Key != gpucontext.KeyB {
+		t.Errorf("Key = %v, want KeyB", ke.Key)
+	}
+}
+
 // configCapturingManager wraps mockManager and records the Config passed to CreateWindow.
 type configCapturingManager struct {
 	mockManager
@@ -1159,5 +1411,38 @@ func TestInitPlatform_PropagatesIcon(t *testing.T) {
 	}
 	if capturing.got.Icon != img {
 		t.Error("initPlatform: Icon not propagated to platform.Config")
+	}
+}
+
+func TestInitPlatform_PropagatesUseDirectComposition(t *testing.T) {
+	tests := []struct {
+		name        string
+		api         gpu_types.GraphicsAPI
+		transparent bool
+		want        bool
+	}{
+		{"auto+transparent", gpu_types.GraphicsAPIAuto, true, false},
+		{"vulkan+transparent", gpu_types.GraphicsAPIVulkan, true, false},
+		{"dx12+transparent", gpu_types.GraphicsAPIDX12, true, true},
+		{"dx12+opaque", gpu_types.GraphicsAPIDX12, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := NewApp(DefaultConfig().
+				WithGraphicsAPI(tt.api).
+				WithTransparent(tt.transparent))
+
+			capturing := &configCapturingManager{}
+			old := newPlatformManagerFn
+			newPlatformManagerFn = func() platform.PlatformManager { return capturing }
+			defer func() { newPlatformManagerFn = old }()
+
+			if _, err := app.initPlatform(); err != nil {
+				t.Fatalf("initPlatform: %v", err)
+			}
+			if capturing.got.UseDirectComposition != tt.want {
+				t.Errorf("UseDirectComposition = %v, want %v", capturing.got.UseDirectComposition, tt.want)
+			}
+		})
 	}
 }

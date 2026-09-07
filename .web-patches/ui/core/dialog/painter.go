@@ -22,6 +22,12 @@ type PaintState struct {
 	Focused     bool
 	Bounds      geometry.Rect // dialog surface bounds (not backdrop)
 	ColorScheme DialogColorScheme
+
+	// ActionRects holds pre-computed button positions (one per action).
+	// The widget computes these using canvas.MeasureText for accurate layout.
+	// Painters should draw action buttons at these positions rather than
+	// computing button widths from character count estimates.
+	ActionRects []geometry.Rect
 }
 
 // DialogColorScheme provides theme-derived colors for dialog painting.
@@ -37,8 +43,27 @@ type DialogColorScheme struct {
 	ActionBg widget.Color // primary action button background
 }
 
+// LayoutMetrics allows theme painters to provide spatial metrics used by the
+// widget's layout calculations to compute dialog dimensions.
+//
+// Painters that implement this interface provide custom metrics.
+// Painters that do not implement it get default values from [DefaultPainter].
+type LayoutMetrics interface {
+	// DialogPadding returns the internal padding of the dialog surface.
+	DialogPadding() float32
+
+	// DialogTitleHeight returns the height reserved for the title text.
+	DialogTitleHeight() float32
+
+	// DialogMaxWidth returns the default maximum width for the dialog.
+	DialogMaxWidth() float32
+}
+
 // DefaultPainter provides a minimal fallback painter with no design system styling.
 // It draws a simple dialog -- useful for testing and as a base reference.
+//
+// DefaultPainter also implements [LayoutMetrics], providing the default spatial
+// values used when a painter does not implement that interface.
 type DefaultPainter struct{}
 
 // PaintDialog renders a minimal dialog with white surface and gray border.
@@ -99,7 +124,15 @@ func (p DefaultPainter) paintActions(canvas widget.Canvas, ps PaintState, hasSch
 		actionFg = ps.ColorScheme.ActionFg
 	}
 
-	// Layout actions from right to left.
+	// Use pre-computed ActionRects when available (ADR-034 Phase 4).
+	if len(ps.ActionRects) == len(ps.Actions) {
+		for i, action := range ps.Actions {
+			canvas.DrawText(action.Label, ps.ActionRects[i], actionFontSize, actionFg, false, textAlignCenter)
+		}
+		return
+	}
+
+	// Legacy fallback: compute button layout from character count estimate.
 	x := ps.Bounds.Max.X - dialogPadding
 	y := ps.Bounds.Max.Y - dialogPadding - actionHeight
 
@@ -114,6 +147,27 @@ func (p DefaultPainter) paintActions(canvas widget.Canvas, ps PaintState, hasSch
 		x -= actionSpacing
 	}
 }
+
+// DialogPadding returns the default dialog padding.
+func (DefaultPainter) DialogPadding() float32 { return dialogPadding }
+
+// DialogTitleHeight returns the default title height.
+func (DefaultPainter) DialogTitleHeight() float32 { return titleHeight }
+
+// DialogMaxWidth returns the default maximum width.
+func (DefaultPainter) DialogMaxWidth() float32 { return defaultMaxWidth }
+
+// resolveDialogLayoutMetrics returns the LayoutMetrics from the painter if it
+// implements that interface, otherwise returns DefaultPainter metrics.
+func resolveDialogLayoutMetrics(p Painter) LayoutMetrics {
+	if lm, ok := p.(LayoutMetrics); ok {
+		return lm
+	}
+	return DefaultPainter{}
+}
+
+// Compile-time checks.
+var _ LayoutMetrics = DefaultPainter{}
 
 // Default painting constants.
 const (

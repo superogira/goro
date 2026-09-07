@@ -226,6 +226,20 @@ func (e *CommandEncoder) ResolveQuerySet(querySet hal.QuerySet, firstQuery, quer
 	})
 }
 
+// BuildAccelerationStructures is a no-op (GLES has no ray tracing).
+func (e *CommandEncoder) BuildAccelerationStructures(_ []hal.BuildAccelerationStructureDescriptor) {}
+
+// PlaceAccelerationStructureBarrier is a no-op (GLES has no ray tracing).
+func (e *CommandEncoder) PlaceAccelerationStructureBarrier(_ hal.AccelerationStructureBarrier) {}
+
+// CopyAccelerationStructure is a no-op (GLES has no ray tracing).
+func (e *CommandEncoder) CopyAccelerationStructure(_, _ hal.AccelerationStructure, _ gputypes.AccelerationStructureCopyMode) {
+}
+
+// ReadAccelerationStructureCompactSize is a no-op (GLES has no ray tracing).
+func (e *CommandEncoder) ReadAccelerationStructureCompactSize(_ hal.AccelerationStructure, _ hal.Buffer, _ uint64) {
+}
+
 // BeginRenderPass begins a render pass.
 func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.RenderPassEncoder {
 	rpe := &RenderPassEncoder{
@@ -246,16 +260,28 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 		e.setupColorAttachment(desc, rpe)
 	}
 
-	// Record clear commands
+	// Set draw buffers for MRT. Matches Rust wgpu-hal GLES
+	// SetDrawColorBuffers (command.rs:643-646, queue.rs:1202-1207).
+	if len(desc.ColorAttachments) > 0 {
+		e.commands = append(e.commands, &SetDrawColorBuffersCommand{
+			count: len(desc.ColorAttachments),
+		})
+	}
+
+	// Record per-buffer clear commands. Uses glClearBufferfv for per-target
+	// clearing instead of global glClearColor+glClear(GL_COLOR_BUFFER_BIT).
+	// Matches Rust wgpu-hal GLES ClearColorF (command.rs:648-676, queue.rs:1222).
 	for i, ca := range desc.ColorAttachments {
 		if ca.LoadOp == gputypes.LoadOpClear {
 			clearColor := ca.ClearValue
-			e.commands = append(e.commands, &ClearColorCommand{
-				attachment: i,
-				r:          float32(clearColor.R),
-				g:          float32(clearColor.G),
-				b:          float32(clearColor.B),
-				a:          float32(clearColor.A),
+			e.commands = append(e.commands, &ClearColorBufferCommand{
+				drawBuffer: int32(i),
+				color: [4]float32{
+					float32(clearColor.R),
+					float32(clearColor.G),
+					float32(clearColor.B),
+					float32(clearColor.A),
+				},
 			})
 		}
 	}
@@ -284,8 +310,11 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 	return rpe
 }
 
-// setupColorAttachment configures framebuffer, viewport, and MSAA resolve for the
-// primary color attachment of a render pass.
+// setupColorAttachment configures framebuffer, viewport, and MSAA resolve for
+// all color attachments of a render pass. For surface targets only attachment[0]
+// is used (surfaces are always single-target). For offscreen targets, all
+// attachments are bound to GL_COLOR_ATTACHMENT0..N.
+// Matches Rust wgpu-hal GLES begin_render_pass (command.rs:552-627).
 func (e *CommandEncoder) setupColorAttachment(desc *hal.RenderPassDescriptor, rpe *RenderPassEncoder) {
 	ca := desc.ColorAttachments[0]
 	tv, ok := ca.View.(*TextureView)
@@ -294,7 +323,7 @@ func (e *CommandEncoder) setupColorAttachment(desc *hal.RenderPassDescriptor, rp
 	}
 
 	if tv.isSurface {
-		e.setupSurfaceTarget(tv, rpe)
+		e.setupSurfaceTarget(desc, tv, rpe)
 		return
 	}
 
@@ -302,7 +331,7 @@ func (e *CommandEncoder) setupColorAttachment(desc *hal.RenderPassDescriptor, rp
 		return
 	}
 
-	e.setupOffscreenTarget(desc, ca, tv, rpe)
+	e.setupOffscreenTarget(desc, tv, rpe)
 }
 
 // setupSurfaceTarget binds the Surface's swapchain offscreen framebuffer and
@@ -313,7 +342,7 @@ func (e *CommandEncoder) setupColorAttachment(desc *hal.RenderPassDescriptor, rp
 // Y-flip (WriterFlagAdjustCoordinateSpace). Queue.Present performs an explicit
 // Y-flipping glBlitFramebuffer from this FBO to FBO 0 before SwapBuffers.
 // Mirrors Rust wgpu-hal/src/gles/egl.rs Surface::configure/Surface::present.
-func (e *CommandEncoder) setupSurfaceTarget(tv *TextureView, rpe *RenderPassEncoder) {
+func (e *CommandEncoder) setupSurfaceTarget(desc *hal.RenderPassDescriptor, tv *TextureView, rpe *RenderPassEncoder) {
 	if tv.surfaceTex != nil && tv.surfaceTex.surface != nil {
 		surf := tv.surfaceTex.surface
 		e.commands = append(e.commands, &BindSurfaceFramebufferCommand{surface: surf})
@@ -321,9 +350,21 @@ func (e *CommandEncoder) setupSurfaceTarget(tv *TextureView, rpe *RenderPassEnco
 			cfg := surf.config
 			rpe.fbHeight = cfg.Height
 			e.commands = append(e.commands, &SetViewportCommand{
-				width:  float32(cfg.Width),
-				height: float32(cfg.Height),
+				width:    float32(cfg.Width),
+				height:   float32(cfg.Height),
+				maxDepth: 1,
 			})
+		}
+		// Attach depth/stencil to the swapchain FBO if requested.
+		// The swapchain FBO is a real GL FBO (not FBO 0), so glFramebufferTexture2D
+		// works. Matches Rust wgpu-hal GLES: BindAttachment for depth/stencil after
+		// ResetFramebuffer { is_default: false } (command.rs:575-601).
+		if desc.DepthStencilAttachment != nil {
+			if dsView, ok := desc.DepthStencilAttachment.View.(*TextureView); ok && dsView.texture != nil {
+				e.commands = append(e.commands, &AttachDepthStencilToFBOCommand{
+					depthTexture: dsView.texture,
+				})
+			}
 		}
 		return
 	}
@@ -332,14 +373,31 @@ func (e *CommandEncoder) setupSurfaceTarget(tv *TextureView, rpe *RenderPassEnco
 	e.commands = append(e.commands, &BindFramebufferCommand{fbo: 0})
 }
 
-// setupOffscreenTarget configures an offscreen FBO, depth/stencil attachment, and MSAA resolve.
+// setupOffscreenTarget configures an offscreen FBO with all color attachments,
+// depth/stencil attachment, and MSAA resolve.
+// Matches Rust wgpu-hal GLES begin_render_pass (command.rs:558-595):
+// iterates all color_attachments and calls BindAttachment for each.
 func (e *CommandEncoder) setupOffscreenTarget(
 	desc *hal.RenderPassDescriptor,
-	ca hal.RenderPassColorAttachment,
 	tv *TextureView,
 	rpe *RenderPassEncoder,
 ) {
 	e.commands = append(e.commands, &EnsureOffscreenFBOCommand{texture: tv.texture})
+
+	// Attach additional color textures (attachments 1..N) to the FBO.
+	// Attachment 0 is already bound by EnsureOffscreenFBOCommand.
+	// Matches Rust BindAttachment for each color_attachments[i] (command.rs:558-595).
+	for i := 1; i < len(desc.ColorAttachments); i++ {
+		ca := desc.ColorAttachments[i]
+		atv, ok := ca.View.(*TextureView)
+		if !ok || atv.texture == nil {
+			continue
+		}
+		e.commands = append(e.commands, &AttachColorCommand{
+			attachmentIndex: uint32(i),
+			texture:         atv.texture,
+		})
+	}
 
 	// Attach depth/stencil texture to the FBO if provided.
 	if desc.DepthStencilAttachment != nil {
@@ -353,11 +411,13 @@ func (e *CommandEncoder) setupOffscreenTarget(
 
 	rpe.fbHeight = tv.texture.size.Height
 	e.commands = append(e.commands, &SetViewportCommand{
-		width:  float32(tv.texture.size.Width),
-		height: float32(tv.texture.size.Height),
+		width:    float32(tv.texture.size.Width),
+		height:   float32(tv.texture.size.Height),
+		maxDepth: 1,
 	})
 
-	// Record MSAA resolve target if present.
+	// Record MSAA resolve target if present (attachment 0 only).
+	ca := desc.ColorAttachments[0]
 	if resolveView, ok := ca.ResolveTarget.(*TextureView); ok && ca.ResolveTarget != nil {
 		if resolveView.texture != nil {
 			rpe.msaaTexture = tv.texture
@@ -498,13 +558,12 @@ func (e *RenderPassEncoder) SetPipeline(pipeline hal.RenderPipeline) {
 	e.encoder.commands = append(e.encoder.commands,
 		&UseProgramCommand{programID: p.programID},
 		&SetPipelineStateCommand{
-			topology:       p.primitiveTopology,
-			cullMode:       p.cullMode,
-			frontFace:      p.frontFace,
-			depthStencil:   p.depthStencil,
-			blend:          p.blend,
-			colorWriteMask: p.colorWriteMask,
-			stencilRef:     e.stencilRef,
+			topology:     p.primitiveTopology,
+			cullMode:     p.cullMode,
+			frontFace:    p.frontFace,
+			depthStencil: p.depthStencil,
+			colorTargets: p.colorTargets,
+			stencilRef:   e.stencilRef,
 		},
 	)
 }
@@ -580,18 +639,18 @@ func (e *RenderPassEncoder) SetIndexBuffer(buffer hal.Buffer, format gputypes.In
 }
 
 // SetViewport sets the viewport.
-func (e *RenderPassEncoder) SetViewport(x, y, width, height, minDepth, maxDepth float32) {
+func (e *RenderPassEncoder) SetViewport(vp gputypes.Viewport) {
 	e.encoder.commands = append(e.encoder.commands, &SetViewportCommand{
-		x: x, y: y, width: width, height: height,
-		minDepth: minDepth, maxDepth: maxDepth,
+		x: vp.X, y: vp.Y, width: vp.Width, height: vp.Height,
+		minDepth: vp.MinDepth, maxDepth: vp.MaxDepth,
 	})
 }
 
 // SetScissorRect sets the scissor rectangle.
 // With ADJUST_COORDINATE_SPACE, no Y-flip is needed — coordinates pass through directly.
-func (e *RenderPassEncoder) SetScissorRect(x, y, width, height uint32) {
+func (e *RenderPassEncoder) SetScissorRect(rect gputypes.ScissorRect) {
 	e.encoder.commands = append(e.encoder.commands, &SetScissorCommand{
-		x: x, y: y, width: width, height: height,
+		x: rect.X, y: rect.Y, width: rect.Width, height: rect.Height,
 	})
 }
 
@@ -619,51 +678,59 @@ func (e *RenderPassEncoder) SetStencilReference(ref uint32) {
 }
 
 // Draw draws primitives.
-func (e *RenderPassEncoder) Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32) {
+func (e *RenderPassEncoder) Draw(args gputypes.DrawArgs) {
 	topology := gputypes.PrimitiveTopologyTriangleList // default
 	if e.pipeline != nil {
 		topology = e.pipeline.primitiveTopology
 	}
 	e.encoder.commands = append(e.encoder.commands, &DrawCommand{
-		vertexCount:   vertexCount,
-		instanceCount: instanceCount,
-		firstVertex:   firstVertex,
-		firstInstance: firstInstance,
+		vertexCount:   args.VertexCount,
+		instanceCount: args.InstanceCount,
+		firstVertex:   args.FirstVertex,
+		firstInstance: args.FirstInstance,
 		topology:      topology,
 	})
 }
 
 // DrawIndexed draws indexed primitives.
-func (e *RenderPassEncoder) DrawIndexed(indexCount, instanceCount, firstIndex uint32, baseVertex int32, firstInstance uint32) {
+func (e *RenderPassEncoder) DrawIndexed(args gputypes.DrawIndexedArgs) {
 	topology := gputypes.PrimitiveTopologyTriangleList // default
 	if e.pipeline != nil {
 		topology = e.pipeline.primitiveTopology
 	}
 	e.encoder.commands = append(e.encoder.commands, &DrawIndexedCommand{
-		indexCount:    indexCount,
-		instanceCount: instanceCount,
-		firstIndex:    firstIndex,
-		baseVertex:    baseVertex,
-		firstInstance: firstInstance,
+		indexCount:    args.IndexCount,
+		instanceCount: args.InstanceCount,
+		firstIndex:    args.FirstIndex,
+		baseVertex:    args.BaseVertex,
+		firstInstance: args.FirstInstance,
 		indexFormat:   e.indexFormat,
 		topology:      topology,
 	})
 }
 
-// DrawIndirect draws primitives with GPU-generated parameters.
-// Note: Requires GL_ARB_draw_indirect (GL 4.0+ / GLES 3.1+).
-// Currently not implemented - use direct Draw calls instead.
-func (e *RenderPassEncoder) DrawIndirect(buffer hal.Buffer, offset uint64) {
+// DrawIndirect is not implemented by the GLES backend.
+func (e *RenderPassEncoder) DrawIndirect(buffer hal.Buffer, offset uint64, drawCount uint32) {
 	_ = buffer
 	_ = offset
+	_ = drawCount
 }
 
-// DrawIndexedIndirect draws indexed primitives with GPU-generated parameters.
-// Note: Requires GL_ARB_draw_indirect (GL 4.0+ / GLES 3.1+).
-// Currently not implemented - use direct DrawIndexed calls instead.
-func (e *RenderPassEncoder) DrawIndexedIndirect(buffer hal.Buffer, offset uint64) {
+// DrawIndexedIndirect is not implemented by the GLES backend.
+// OpenGL cannot apply a WebGPU index-buffer base offset to an indirect record
+// without translating that record or the bound index buffer.
+func (e *RenderPassEncoder) DrawIndexedIndirect(buffer hal.Buffer, offset uint64, drawCount uint32) {
 	_ = buffer
 	_ = offset
+	_ = drawCount
+}
+
+// DrawIndirectCount is not supported by the GLES backend.
+func (e *RenderPassEncoder) DrawIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
+
+// DrawIndexedIndirectCount is not supported by the GLES backend.
+func (e *RenderPassEncoder) DrawIndexedIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
 }
 
 // ExecuteBundle executes a pre-recorded render bundle.
@@ -838,13 +905,41 @@ type AttachDepthStencilCommand struct {
 
 func (c *AttachDepthStencilCommand) Execute(ctx *gl.Context) {
 	if c.colorTexture.fbo == 0 {
-		return // No FBO was created; nothing to attach to.
+		return
 	}
-	// Attach the depth/stencil texture. Using DEPTH_STENCIL_ATTACHMENT covers
-	// combined depth+stencil formats (e.g., Depth24PlusStencil8). For
-	// depth-only formats the driver silently ignores the stencil part.
-	// Use the texture's actual target (GL_TEXTURE_2D or GL_TEXTURE_2D_MULTISAMPLE).
-	ctx.FramebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, c.depthTexture.target, c.depthTexture.id, 0)
+	attachment := depthStencilAttachmentPoint(c.depthTexture.format)
+	ctx.FramebufferTexture2D(gl.FRAMEBUFFER, attachment, c.depthTexture.target, c.depthTexture.id, 0)
+}
+
+// depthStencilAttachmentPoint returns the GL attachment point for a depth/stencil
+// texture format. Matches Rust wgpu-hal GLES (command.rs:577-580).
+func depthStencilAttachmentPoint(format gputypes.TextureFormat) uint32 {
+	switch format {
+	case gputypes.TextureFormatDepth24PlusStencil8, gputypes.TextureFormatDepth32FloatStencil8:
+		return gl.DEPTH_STENCIL_ATTACHMENT
+	case gputypes.TextureFormatStencil8:
+		return gl.STENCIL_ATTACHMENT
+	default:
+		return gl.DEPTH_ATTACHMENT
+	}
+}
+
+// AttachDepthStencilToFBOCommand attaches a depth/stencil texture to the
+// currently bound FBO. Unlike AttachDepthStencilCommand, this does not
+// reference a color texture — it operates on whatever FBO is currently bound
+// (typically the surface swapchain FBO).
+//
+// The attachment point is chosen by texture format (Rust wgpu-hal command.rs:577-580):
+//   - depth-only → GL_DEPTH_ATTACHMENT
+//   - stencil-only → GL_STENCIL_ATTACHMENT
+//   - depth+stencil → GL_DEPTH_STENCIL_ATTACHMENT
+type AttachDepthStencilToFBOCommand struct {
+	depthTexture *Texture
+}
+
+func (c *AttachDepthStencilToFBOCommand) Execute(ctx *gl.Context) {
+	attachment := depthStencilAttachmentPoint(c.depthTexture.format)
+	ctx.FramebufferTexture2D(gl.FRAMEBUFFER, attachment, c.depthTexture.target, c.depthTexture.id, 0)
 }
 
 // MSAAResolveCommand resolves an MSAA framebuffer to a single-sample framebuffer
@@ -918,9 +1013,57 @@ func (c *MSAAResolveCommand) ensureResolveFBO(ctx *gl.Context) bool {
 	return true
 }
 
-// ClearColorCommand clears a color attachment.
+// AttachColorCommand attaches a color texture to a specific FBO attachment point.
+// Used for MRT (Multiple Render Targets) to bind attachments 1..N.
+// Attachment 0 is bound by EnsureOffscreenFBOCommand.
+// Matches Rust wgpu-hal GLES BindAttachment for color targets (command.rs:580-582).
+type AttachColorCommand struct {
+	attachmentIndex uint32 // 0-based index (attachment point = GL_COLOR_ATTACHMENT0 + index)
+	texture         *Texture
+}
+
+func (c *AttachColorCommand) Execute(ctx *gl.Context) {
+	ctx.FramebufferTexture2D(gl.FRAMEBUFFER,
+		gl.COLOR_ATTACHMENT0+c.attachmentIndex,
+		c.texture.target, c.texture.id, 0)
+}
+
+// SetDrawColorBuffersCommand configures the list of draw buffers for MRT output.
+// Matches Rust wgpu-hal GLES SetDrawColorBuffers (command.rs:643-646, queue.rs:1202-1207).
+type SetDrawColorBuffersCommand struct {
+	count int // number of color attachments
+}
+
+func (c *SetDrawColorBuffersCommand) Execute(ctx *gl.Context) {
+	bufs := make([]uint32, c.count)
+	for i := range bufs {
+		bufs[i] = gl.COLOR_ATTACHMENT0 + uint32(i)
+	}
+	ctx.DrawBuffers(bufs)
+}
+
+// ClearColorBufferCommand clears a specific color draw buffer using glClearBufferfv.
+// This replaces the old global glClearColor+glClear approach for MRT correctness:
+// each color attachment can have a different clear value.
+// Matches Rust wgpu-hal GLES ClearColorF (command.rs:657-663, queue.rs:1222).
+type ClearColorBufferCommand struct {
+	drawBuffer int32      // 0-based draw buffer index
+	color      [4]float32 // RGBA clear value
+}
+
+func (c *ClearColorBufferCommand) Execute(ctx *gl.Context) {
+	ctx.Disable(gl.SCISSOR_TEST) // Ensure clear covers full framebuffer (not clipped by stale scissor)
+	// Temporarily enable all color writes so the clear takes effect even if a
+	// previous pipeline masked some channels. Matches Rust behavior which
+	// sets color_mask(true,true,true,true) before clear (queue.rs:1134).
+	ctx.ColorMask(true, true, true, true)
+	ctx.ClearBufferfv(gl.COLOR, c.drawBuffer, &c.color)
+}
+
+// ClearColorCommand clears a color attachment using the legacy global clear path.
+// Retained for backward compatibility with tests and single-target code paths.
+// For MRT, use ClearColorBufferCommand instead (per-buffer via glClearBufferfv).
 type ClearColorCommand struct {
-	attachment int
 	r, g, b, a float32
 }
 
@@ -937,6 +1080,8 @@ type ClearDepthCommand struct {
 
 func (c *ClearDepthCommand) Execute(ctx *gl.Context) {
 	ctx.Disable(gl.SCISSOR_TEST)
+	ctx.DepthMask(true)
+	ctx.ClearDepth(c.depth)
 	ctx.Clear(gl.DEPTH_BUFFER_BIT)
 }
 
@@ -963,13 +1108,12 @@ func (c *UseProgramCommand) Execute(ctx *gl.Context) {
 
 // SetPipelineStateCommand sets pipeline state (culling, depth, stencil, blending, color mask).
 type SetPipelineStateCommand struct {
-	topology       gputypes.PrimitiveTopology
-	cullMode       gputypes.CullMode
-	frontFace      gputypes.FrontFace
-	depthStencil   *hal.DepthStencilState
-	blend          *gputypes.BlendState
-	colorWriteMask gputypes.ColorWriteMask
-	stencilRef     uint32
+	topology     gputypes.PrimitiveTopology
+	cullMode     gputypes.CullMode
+	frontFace    gputypes.FrontFace
+	depthStencil *hal.DepthStencilState
+	colorTargets []ColorTargetDesc // per-target blend/write-mask for MRT
+	stencilRef   uint32
 }
 
 func (c *SetPipelineStateCommand) Execute(ctx *gl.Context) {
@@ -1000,26 +1144,44 @@ func (c *SetPipelineStateCommand) Execute(ctx *gl.Context) {
 	// Depth and stencil
 	c.applyDepthStencilState(ctx)
 
-	// Color write mask
-	ctx.ColorMask(
-		c.colorWriteMask&gputypes.ColorWriteMaskRed != 0,
-		c.colorWriteMask&gputypes.ColorWriteMaskGreen != 0,
-		c.colorWriteMask&gputypes.ColorWriteMaskBlue != 0,
-		c.colorWriteMask&gputypes.ColorWriteMaskAlpha != 0,
-	)
+	// Color targets (blend + write mask).
+	// Matches Rust wgpu-hal GLES SetColorTarget (queue.rs:1483-1559):
+	//   - If all targets are identical, use global (non-indexed) calls.
+	//   - If targets differ, use per-draw-buffer indexed calls (GLES 3.2 / GL 4.0).
+	//     Fallback: apply target[0] globally when indexed functions unavailable.
+	c.applyColorTargets(ctx)
+}
 
-	// Blending
-	if c.blend != nil {
+// applyColorTargets sets blend and write-mask state per render target.
+// Matches Rust wgpu-hal GLES SetColorTarget command (queue.rs:1483-1559).
+func (c *SetPipelineStateCommand) applyColorTargets(ctx *gl.Context) {
+	if len(c.colorTargets) == 0 {
+		// No color targets — disable blending, allow all color writes.
+		ctx.Disable(gl.BLEND)
+		ctx.ColorMask(true, true, true, true)
+		return
+	}
+
+	// Single target or all targets identical: use global (non-indexed) calls.
+	// Matches Rust path: draw_buffer_index == None (queue.rs:1527-1558).
+	ct := c.colorTargets[0]
+	ctx.ColorMask(
+		ct.WriteMask&gputypes.ColorWriteMaskRed != 0,
+		ct.WriteMask&gputypes.ColorWriteMaskGreen != 0,
+		ct.WriteMask&gputypes.ColorWriteMaskBlue != 0,
+		ct.WriteMask&gputypes.ColorWriteMaskAlpha != 0,
+	)
+	if ct.Blend != nil {
 		ctx.Enable(gl.BLEND)
 		ctx.BlendFuncSeparate(
-			blendFactorToGL(c.blend.Color.SrcFactor),
-			blendFactorToGL(c.blend.Color.DstFactor),
-			blendFactorToGL(c.blend.Alpha.SrcFactor),
-			blendFactorToGL(c.blend.Alpha.DstFactor),
+			blendFactorToGL(ct.Blend.Color.SrcFactor),
+			blendFactorToGL(ct.Blend.Color.DstFactor),
+			blendFactorToGL(ct.Blend.Alpha.SrcFactor),
+			blendFactorToGL(ct.Blend.Alpha.DstFactor),
 		)
 		ctx.BlendEquationSeparate(
-			blendOperationToGL(c.blend.Color.Operation),
-			blendOperationToGL(c.blend.Alpha.Operation),
+			blendOperationToGL(ct.Blend.Color.Operation),
+			blendOperationToGL(ct.Blend.Alpha.Operation),
 		)
 	} else {
 		ctx.Disable(gl.BLEND)
@@ -1287,6 +1449,7 @@ type SetViewportCommand struct {
 
 func (c *SetViewportCommand) Execute(ctx *gl.Context) {
 	ctx.Viewport(int32(c.x), int32(c.y), int32(c.width), int32(c.height))
+	ctx.DepthRange(float64(c.minDepth), float64(c.maxDepth))
 }
 
 // SetScissorCommand sets the scissor rectangle.
@@ -1710,7 +1873,7 @@ func vertexFormatToGL(format gputypes.VertexFormat) (size int32, typ uint32, nor
 }
 
 // stencilOpToGL converts a HAL stencil operation to the corresponding GL constant.
-func stencilOpToGL(op hal.StencilOperation) uint32 {
+func stencilOpToGL(op gputypes.StencilOperation) uint32 {
 	switch op {
 	case hal.StencilOperationKeep:
 		return gl.KEEP

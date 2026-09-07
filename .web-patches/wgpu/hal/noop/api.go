@@ -8,16 +8,19 @@ import (
 )
 
 // API implements hal.Backend for the noop backend.
-type API struct{}
+type Backend struct{}
+
+// NewBackend returns a noop backend instance.
+func NewBackend() Backend { return Backend{} }
 
 // Variant returns the backend type identifier.
-func (API) Variant() gputypes.Backend {
+func (Backend) Variant() gputypes.Backend {
 	return gputypes.BackendEmpty
 }
 
 // CreateInstance creates a new noop instance.
 // Always succeeds and returns a placeholder instance.
-func (API) CreateInstance(_ *hal.InstanceDescriptor) (hal.Instance, error) {
+func (Backend) CreateInstance(_ *hal.InstanceDescriptor) (hal.Instance, error) {
 	return &Instance{}, nil
 }
 
@@ -25,8 +28,8 @@ func (API) CreateInstance(_ *hal.InstanceDescriptor) (hal.Instance, error) {
 type Instance struct{}
 
 // CreateSurface creates a noop surface.
-// Always succeeds regardless of display/window handles.
-func (i *Instance) CreateSurface(_, _ uintptr) (hal.Surface, error) {
+// Always succeeds regardless of the target.
+func (i *Instance) CreateSurface(_ hal.SurfaceTarget) (hal.Surface, error) {
 	return &Surface{}, nil
 }
 
@@ -53,10 +56,7 @@ func (i *Instance) EnumerateAdapters(_ hal.Surface) []hal.ExposedAdapter {
 					BufferCopyOffset: 4,
 					BufferCopyPitch:  256,
 				},
-				DownlevelCapabilities: hal.DownlevelCapabilities{
-					ShaderModel: 0,
-					Flags:       0,
-				},
+				DownlevelCapabilities: gputypes.DefaultDownlevelCapabilities(),
 			},
 		},
 	}

@@ -142,9 +142,21 @@ func (d *Device) CreateSampler(desc *hal.SamplerDescriptor) (hal.Sampler, error)
 // DestroySampler is a no-op.
 func (d *Device) DestroySampler(_ hal.Sampler) {}
 
+// BindGroupLayout stores layout entries for the software backend.
+// Entries are needed at draw time to determine which buffer bindings
+// have HasDynamicOffset and should consume dynamic offset values.
+type BindGroupLayout struct {
+	Resource
+	entries []gputypes.BindGroupLayoutEntry
+}
+
 // CreateBindGroupLayout creates a software bind group layout.
-func (d *Device) CreateBindGroupLayout(_ *hal.BindGroupLayoutDescriptor) (hal.BindGroupLayout, error) {
-	return &Resource{}, nil
+func (d *Device) CreateBindGroupLayout(desc *hal.BindGroupLayoutDescriptor) (hal.BindGroupLayout, error) {
+	bgl := &BindGroupLayout{}
+	if desc != nil {
+		bgl.entries = desc.Entries
+	}
+	return bgl, nil
 }
 
 // DestroyBindGroupLayout is a no-op.
@@ -152,15 +164,28 @@ func (d *Device) DestroyBindGroupLayout(_ hal.BindGroupLayout) {}
 
 // CreateBindGroup creates a software bind group.
 // It resolves handle-based entries to typed software resources using the device registry.
+// Layout entries are inspected to build the hasDynamicOffset map so that dynamic
+// offsets are only applied to bindings explicitly marked with HasDynamicOffset.
 func (d *Device) CreateBindGroup(desc *hal.BindGroupDescriptor) (hal.BindGroup, error) {
 	bg := &BindGroup{
-		desc:           desc,
-		textureViews:   make(map[uint32]*TextureView),
-		buffers:        make(map[uint32]*Buffer),
-		bufferBindings: make(map[uint32]bufferSlice),
-		samplers:       make(map[uint32]*SamplerResource),
+		desc:             desc,
+		textureViews:     make(map[uint32]*TextureView),
+		buffers:          make(map[uint32]*Buffer),
+		bufferBindings:   make(map[uint32]bufferSlice),
+		samplers:         make(map[uint32]*SamplerResource),
+		hasDynamicOffset: make(map[uint32]bool),
 	}
+
+	// Extract HasDynamicOffset from layout entries.
 	if desc != nil {
+		if bgl, ok := desc.Layout.(*BindGroupLayout); ok && bgl != nil {
+			for _, le := range bgl.entries {
+				if le.Buffer != nil && le.Buffer.HasDynamicOffset {
+					bg.hasDynamicOffset[le.Binding] = true
+				}
+			}
+		}
+
 		for _, entry := range desc.Entries {
 			switch res := entry.Resource.(type) {
 			case gputypes.TextureViewBinding:
@@ -321,6 +346,57 @@ func (d *Device) CreateRenderBundleEncoder(_ *hal.RenderBundleEncoderDescriptor)
 
 // DestroyRenderBundle is a no-op for the software device.
 func (d *Device) DestroyRenderBundle(_ hal.RenderBundle) {}
+
+// CreateAccelerationStructure creates a CPU-side acceleration structure.
+// The actual BVH is built later in BuildAccelerationStructures; this call
+// only allocates the container with the requested format and size.
+func (d *Device) CreateAccelerationStructure(desc *hal.AccelerationStructureDescriptor) (hal.AccelerationStructure, error) {
+	if desc == nil {
+		return nil, fmt.Errorf("software: acceleration structure descriptor is nil")
+	}
+	return &AccelerationStructure{
+		id:     nextResourceID.Add(1),
+		format: desc.Format,
+		size:   desc.Size,
+	}, nil
+}
+
+// DestroyAccelerationStructure releases the acceleration structure. The Go GC
+// handles the BVH tree memory; this just nils out the reference.
+func (d *Device) DestroyAccelerationStructure(as hal.AccelerationStructure) {
+	if swAS, ok := as.(*AccelerationStructure); ok && swAS != nil {
+		swAS.bvh = nil
+		swAS.instances = nil
+	}
+}
+
+// GetAccelerationStructureBuildSizes returns estimated sizes for an AS build.
+// Software backend BVH lives in Go heap (GC-managed), so the sizes are
+// informational rather than allocation-critical.
+func (d *Device) GetAccelerationStructureBuildSizes(desc *hal.GetAccelerationStructureBuildSizesDescriptor) hal.AccelerationStructureBuildSizes {
+	if desc == nil || desc.Entries == nil {
+		return hal.AccelerationStructureBuildSizes{}
+	}
+	return estimateBuildSize(desc.Entries)
+}
+
+// GetAccelerationStructureDeviceAddress returns a unique address for the AS.
+// In the software backend this is the Go pointer cast to uint64, which is
+// stable for the lifetime of the struct (no GC relocation of pinned data).
+func (d *Device) GetAccelerationStructureDeviceAddress(as hal.AccelerationStructure) uint64 {
+	swAS, ok := as.(*AccelerationStructure)
+	if !ok || swAS == nil {
+		return 0
+	}
+	return swAS.id
+}
+
+// TlasInstanceToBytes packs a TlasInstance into the 64-byte format
+// matching Vulkan VkAccelerationStructureInstanceKHR and DX12
+// D3D12_RAYTRACING_INSTANCE_DESC for cross-backend consistency.
+func (d *Device) TlasInstanceToBytes(instance hal.TlasInstance) []byte {
+	return packTLASInstance(instance)
+}
 
 // WaitIdle is a no-op for the software device.
 func (d *Device) WaitIdle() error { return nil }

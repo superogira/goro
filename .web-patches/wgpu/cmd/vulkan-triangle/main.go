@@ -224,7 +224,10 @@ func initGPU(window *Window) (*gpuResources, error) {
 
 	// Create surface
 	fmt.Print("5. Creating surface... ")
-	surface, err := instance.CreateSurface(0, window.Handle())
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{
+		Kind:         hal.SurfaceTargetWindowsHWND,
+		WindowHandle: window.Handle(),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("creating surface: %w", err)
 	}
@@ -452,7 +455,7 @@ func renderFrame(gpu *gpuResources) error {
 	})
 
 	renderPass.SetPipeline(gpu.pipeline)
-	renderPass.Draw(3, 1, 0, 0)
+	renderPass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 	renderPass.End()
 
 	// End encoding

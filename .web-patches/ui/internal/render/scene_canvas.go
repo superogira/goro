@@ -2,7 +2,6 @@ package render
 
 import (
 	"image"
-	stdcolor "image/color"
 	"image/draw"
 	"math"
 
@@ -581,7 +580,7 @@ func (c *SceneCanvas) ClipBounds() geometry.Rect {
 	return c.currentClip
 }
 
-// ReplayScene merges a child scene.Scene into this canvas's parent scene
+// ReplayScene merges a child scene into this canvas's parent scene
 // with translation offset. This is the scene-concatenation path (ADR-007)
 // used when a RepaintBoundary replays its cached display list inside
 // another SceneCanvas (nested boundaries).
@@ -589,11 +588,15 @@ func (c *SceneCanvas) ClipBounds() geometry.Rect {
 // The child scene was recorded in local coordinates (0,0 = boundary origin).
 // AppendWithTranslation offsets all path coordinates by the current cumulative
 // transform offset, following the Vello pattern (encoding.rs:162-169).
-func (c *SceneCanvas) ReplayScene(s *scene.Scene) {
-	if s == nil || s.IsEmpty() {
+func (c *SceneCanvas) ReplayScene(s widget.SceneCache) {
+	if s == nil {
 		return
 	}
-	c.sc.AppendWithTranslation(s, c.currentOffset.X, c.currentOffset.Y)
+	sc, ok := s.(*scene.Scene)
+	if !ok || sc.IsEmpty() {
+		return
+	}
+	c.sc.AppendWithTranslation(sc, c.currentOffset.X, c.currentOffset.Y)
 }
 
 // --- Internal helpers ---
@@ -760,48 +763,42 @@ func (c *SceneCanvas) RenderSVG(svgXML []byte, bounds geometry.Rect, color widge
 	}
 	bounds = c.applyTransform(bounds)
 
-	dpiScale := c.DeviceScale()
-
-	// Physical pixel dimensions for rasterization.
-	physW := int(math.Ceil(float64(bounds.Width()) * float64(dpiScale)))
-	physH := int(math.Ceil(float64(bounds.Height()) * float64(dpiScale)))
-	if physW <= 0 || physH <= 0 {
+	// Skip zero-size or negative-size bounds — nothing to render.
+	if bounds.Width() <= 0 || bounds.Height() <= 0 {
 		return
 	}
 
-	// Icon cache lookup (Level 2: rasterized image).
-	// Key uses physical dimensions — different scales produce different entries.
-	key := iconImageKey{
-		svgPtr: svgSlicePtr(svgXML),
-		width:  physW,
-		height: physH,
-		color:  packColor(color),
-	}
-	if cached := globalIconCache.getImage(key); cached != nil {
-		c.sc.DrawImage(cached, svgDrawTransform(bounds.Min.X, bounds.Min.Y, dpiScale))
+	// Honor the clip, as every other draw method on this canvas does. Without
+	// it an icon with no pixels on screen still emits its whole document into
+	// the scene.
+	if !c.isVisible(bounds) {
 		return
 	}
 
-	// Cache miss: parse SVG (Level 1 cache) + rasterize at physical resolution.
+	// Parse SVG (Level 1 document cache).
 	doc := globalIconCache.getDoc(svgXML)
 	if doc == nil {
 		return
 	}
 
-	dc := gg.NewContext(physW, physH)
-	dc.SetRasterizerMode(gg.RasterizerAnalytic) // CPU-only: bypass GPU queueing
-	r8, g8, b8, a8 := color.RGBA8()
-	doc.RenderToWithColor(dc, 0, 0, float64(physW), float64(physH),
-		stdcolor.NRGBA{R: r8, G: g8, B: b8, A: a8})
+	// Keep the document inside the box it was given. The emitted geometry is
+	// positioned by a transform built from those bounds but is not otherwise
+	// constrained by them, so a document whose contents reach past its own
+	// viewBox — or a stroke that widens past it — paints over whatever sits
+	// around the icon. Every other primitive here is bounded by construction;
+	// a whole SVG is not.
+	clip := scene.NewRectShape(bounds.Min.X, bounds.Min.Y, bounds.Width(), bounds.Height())
+	c.sc.PushClip(clip)
+	defer c.sc.PopClip()
 
-	rgba := imageToRGBA(dc.Image())
-	scImg := scene.NewImage(physW, physH)
-	scImg.Data = rgba.Pix
-	c.sc.DrawImage(scImg, svgDrawTransform(bounds.Min.X, bounds.Min.Y, dpiScale))
-	_ = dc.Close()
-
-	// Store in cache for next frame.
-	globalIconCache.putImage(key, scImg)
+	// Vector path: emit SVG as scene geometry (paths + fills/strokes).
+	// Resolution-independent — rendered at actual display resolution by the
+	// GPU or CPU scene renderer. No bitmap pre-rasterization, no Level 2
+	// image cache needed. Matches Skia/Jewel architecture where icons remain
+	// vector until final compositing. See gg#464.
+	doc.RenderToSceneWithColor(c.sc, bounds.Min.X, bounds.Min.Y,
+		bounds.Width(), bounds.Height(),
+		gg.RGBA{R: float64(color.R), G: float64(color.G), B: float64(color.B), A: float64(color.A)})
 }
 
 // Verify SceneCanvas implements widget.Canvas.

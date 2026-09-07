@@ -5,6 +5,299 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.54] — 2026-08-13
+
+### Added
+
+- **Gesture recognition system** (ADR-049) — Flutter-inspired arena-based gesture disambiguation. New `gesture/` package: `Arena`, `ClickRecognizer`, `DragRecognizer`, `LongPressRecognizer`, `TapAndDragRecognizer`, `VelocityTracker`, `Team` cooperative groups. `GestureAware` interface for widget opt-in. Per-device thresholds (mouse 1px, touch 18px). Signals integration via functional options. 124 tests, 96.0% coverage, ~5K LOC.
+- **Unified pointer pipeline** — `PointerEvent` as single source of all pointer input. Replaces legacy mouse event callbacks with a structured pointer event type that carries device kind, pointer ID, button state, and coordinates. Foundation for future touch/pen/stylus input.
+- **TextField drag selection** ([#225](https://github.com/gogpu/ui/issues/225)) — mouse drag to select text, double-click to select word, triple-click to select all.
+- **OS clipboard** — `widget.ClipboardProvider` DI pattern (same as `SoundPlayer`), wired to platform clipboard (Win32, macOS, Linux) via `widget.RegisterClipboardProvider()`. `widget.ClipboardRead()` / `widget.ClipboardWrite()` for widget-level clipboard access.
+
+### Changed
+
+- All 20+ interactive widgets implement `gesture.GestureAware` with `GestureHitTest(pos)` — container widgets (Collapsible, TabView, Docking) scope recognizers to their interactive region (header, tab strip, zone tabs). Leaf widgets (Button, Checkbox, TextField, etc.) always return recognizers.
+- ScrollView removed from `GestureAware` — scrollbar drag handled by Event() handler with proper thumb hit-testing. Container widgets must not compete with child recognizers.
+- Event bridge: unified pointer pipeline (ADR-049 Phase 3) — pointer events flow through gesture arena before widget dispatch.
+- **deps:** gg v0.52.2 → v0.52.3, gogpu v0.52.1 → v0.53.0, gpucontext v0.27.0 → v0.28.0, wgpu v0.31.2 → v0.31.4
+
+### Fixed
+
+- **fix(gesture): GestureHitTest scoped hit-test** — container widgets (Collapsible, TabView, Docking) no longer consume child widget clicks. `GestureRecognizers()` replaced by `GestureHitTest(pos geometry.Point)` which receives widget-local coordinates and returns recognizers only for the interactive region.
+- **fix(desktop): retain unchanged boundaries on resize** ([#176](https://github.com/gogpu/ui/issues/176), @besmpl) — unchanged boundaries preserved during window resize.
+- **fix(app): keep pointer events within window bounds** ([#179](https://github.com/gogpu/ui/issues/179), @besmpl) — pointer coordinates clamped to window dimensions.
+
+## [0.1.53] — 2026-08-11
+
+### Added
+
+- **Pluggable DebugOverlay system** (ADR-066) — dirty widget overlay migrated from hardcoded cyan rectangles to gogpu's pluggable `DebugOverlay` system (GTK4 Inspector pattern). Each debug overlay is a named source with per-source color. `GOGPU_DEBUG_DIRTY=overlay` activates dirty widget overlay. Future: FPS, layout bounds, a11y overlays via same system.
+
+### Fixed
+
+- **fix(desktop): resync device scale after display changes** ([#172](https://github.com/gogpu/ui/issues/172), @besmpl) — window dragged between displays with different scale factors now correctly re-syncs device scale, invalidates retained scenes, boundary textures, and layer state. Frame-level synchronization before the idle gate ensures scale-change redraw produces correctly rasterized content.
+- **fix(registry): canonicalize widget metadata names** (@besmpl) — registration key is now authoritative for `WidgetInfo.Name`. Prevents mismatched names between registry key and metadata causing `Info()`/`AllInfo()` to disagree.
+
+### Changed
+
+- **env vars:** `GOGPU_DEBUG_DIRTY=1` → `GOGPU_DEBUG_DIRTY=overlay`, `GOGPU_DEBUG_DAMAGE=1` → `GOGPU_DEBUG_DAMAGE=overlay` (value `1` still works as fallback)
+- **deps:** gg v0.50.14 → v0.52.2, gogpu v0.50.2 → v0.52.1, gpucontext v0.24.0 → v0.27.0, wgpu v0.30.37 → v0.31.2, gputypes v0.5.1 → v0.5.2
+  - **gg v0.52.2:** compositor architecture (ADR-067), damage source registration (ADR-065), 7 @besmpl fixes, clip transform parity
+  - **gogpu v0.52.1:** compositor-owned render target (ADR-067), pluggable DebugOverlay system (ADR-066), overlay-only frame rendering
+  - **gpucontext v0.27.0:** SurfaceCompositor interface, DamageSource, RegisterDamageSource, DamageOverlayRenderer
+  - **wgpu v0.31.2:** VkPresentRegionsKHR damage rects, incremental present, fixes
+
+## [0.1.51] — 2026-08-07
+
+### Added
+
+- **Auto-play UI sound feedback** (ADR-037) — interactive widgets automatically play platform system sounds on user interaction when `sound.SetEnabled(true)`. DI pattern via `widget.RegisterSoundPlayer()` — widget code never imports `gogpu/sound`. Auto-play: button, checkbox, radio, dropdown, collapsible, tabview, dialog (Alert), menu. No sound on slider (continuous drag).
+- **examples/sounds** — system sounds demo showcasing auto-play with checkbox, radio, slider, and buttons. Includes manual `sound.Play(sound.Success/Warning/Error)` examples.
+
+### Fixed
+
+- **fix(textfield): cursor rounding** ([#211](https://github.com/gogpu/ui/issues/211)) — `CursorX` base X now rounded with `math.Round` to match `DrawText`'s pixel-grid rounding. Eliminates constant cursor-to-text offset (up to 0.5px).
+- **fix(textfield): horizontal scroll** ([#212](https://github.com/gogpu/ui/issues/212)) — TextField scrolls text horizontally when content exceeds field width. `ensureCursorVisible()` keeps cursor within visible area (Flutter `_showCaretOnScreen` pattern). `TextRect` in PaintState separates text drawing origin from clip rect.
+- **fix(textfield): cursor-scroll sync** — cursor position computed in text-local coordinates, `scrollOffsetX` applied uniformly to cursor/selection/text. Matches Flutter `_paintOffset` and Qt `topLeft` patterns. Fixes cursor drifting leftward during scroll.
+
+### Changed
+
+- **refactor(widget): decouple widget/ from gg/scene** (ADR-036 Phase 1) — replaced `*scene.Scene` with `SceneCache` interface in widget package. Third-party widget authors importing `widget/` + `geometry/` + `event/` now compile **71 packages instead of 124** (zero gg/wgpu/naga in the dependency chain). `SceneFactory` registration pattern follows existing `SceneRecorder` DI.
+  - New: `widget.SceneCache` interface (`Reset()`, `IsEmpty()`), `widget.SceneFactory`, `widget.RegisterSceneFactory()`, `widget.NewSceneCache()`
+  - Changed: `Canvas.ReplayScene(*scene.Scene)` → `Canvas.ReplayScene(SceneCache)`
+  - Changed: `WidgetBase.CachedScene()` / `SetCachedScene()` types → `SceneCache`
+  - Changed: `SceneRecorder` function signature uses `SceneCache`
+  - 92 files changed, rendering layer uses type assertions where concrete `*scene.Scene` needed
+- **deps:** gg v0.50.11 → v0.50.14, gogpu v0.48.5 → v0.50.2, wgpu v0.30.35 → v0.30.37
+  - **gg v0.50.14:** hinted advances (gg#479), deps update, removed deprecated LoadFontFace.
+  - **gogpu v0.50.2:** 12 system sound types with correct platform mapping (gogpu#433), `WithSoundFeedback(true)`, outgoing DnD, per-pixel-alpha, window API.
+  - **wgpu v0.30.37:** fixes.
+
+## [0.1.50] — 2026-08-03
+
+### Fixed
+
+- **Concurrent dirty-boundary crash** ([#203](https://github.com/gogpu/ui/pull/203), @samyfodil) — `dirty-boundary` map guarded with `sync.Mutex` to prevent concurrent map read/write when `SetNeedsRedraw` races with `PaintBoundaryLayers`. Matches Flutter `_nodesNeedingPaint` concurrency pattern.
+- **SVG viewport clipping** ([#204](https://github.com/gogpu/ui/pull/204), @samyfodil) — `RenderSVG` now clips drawing to the icon bounds via `PushClip`/`PopClip`, preventing SVG content from overflowing its allocated rectangle (W3C `overflow:hidden` default).
+- **Keyboard modifiers on mouse/wheel events** ([#205](https://github.com/gogpu/ui/pull/205), @samyfodil) — `EventBridge` tracks modifier state from key events and stamps it onto subsequent mouse and wheel events. Enables Ctrl+Click, Shift+Scroll, and other modifier-dependent interactions. Matches winit/SDL3 Model B pattern.
+
+### Changed
+
+- **deps:** gogpu v0.48.4 → v0.48.5, wgpu v0.30.34 → v0.30.35
+  - **gogpu v0.48.5:** DX12 DirectComposition for per-pixel alpha.
+  - **wgpu v0.30.35:** DX12 DirectComposition path for per-pixel alpha.
+
+## [0.1.49] — 2026-08-02
+
+### Added
+
+- **GPUView widget** ([#150](https://github.com/gogpu/ui/issues/150)) — renamed from Viewport3D based on enterprise naming research (38 frameworks analyzed). GPU-rendered view for 3D, video, compute, custom shaders. ExternalTextureLayer wired into Layer Tree build/update (#197). SetOnCreateGPUTexture wired in desktop.initCanvas (#193).
+- **Vector icon rendering** — SVG icons rendered as scene geometry via `RenderToSceneWithColor` instead of bitmap pre-rasterization. Resolution-independent, no Level 2 bitmap cache needed. Matches Skia/Jewel architecture (gg#464).
+- **JetBrains @20x20 SVG icons** — native 20×20 viewBox tool window icons from IntelliJ reference (project, commit, structure, services, problems, vcs). 1:1 scale rendering with stroke hinting.
+- **SVG window controls** — minimize, maximize, restore, close replaced from procedural DrawLine/StrokeRect to JetBrains SVG icons (filled rects, pixel-perfect). Both default and DevTools painters.
+- **Examples:** `examples/gpuview` (GPU viewport demo), `examples/filedrop` (file drop demo).
+
+### Fixed
+
+- **Stripe label overflow** — `PushClip`/`PopClip` around label `DrawText` prevents long labels from overflowing into adjacent panels.
+- **Icon pixel-snap** — `math.Round` on icon center positions eliminates subpixel blur from odd button widths (BUG-ICON-002).
+- **Icon foreground color** — DevTools stripe inactive color #9DA0A8 → #CED0D6 matching JetBrains dark variant for proper contrast on dark backgrounds.
+- **Toolbar icon size** — `maxIconSize` 20→16 for 1:1 viewBox rendering (both default and DevTools painters).
+- **Boundary freeze during re-dirty** ([#198](https://github.com/gogpu/ui/pull/198), @samyfodil) — `ClearDirtyBoundaries` moved before painting to preserve re-registrations made during recording. Matches Flutter `_nodesNeedingPaint` pattern.
+
+### Changed
+
+- **deps:** gg v0.50.8 → v0.50.11, gogpu v0.45.1 → v0.48.4, gpucontext v0.21.1 → v0.24.0, wgpu v0.30.23 → v0.30.34, naga v0.17.16 → v0.18.0
+  - **gg v0.50.11:** Vector icon rendering (RenderToSceneWithColor), stroke hinting, SDF hairline calibration, text grayscale default, bind group lifecycle fix, @besmpl CFF1/scene/glyph contributions.
+  - **gogpu v0.48.4:** PollInputEvent, FontSmoothing, OS DnD, CommandEncoder, X11 HiDPI, Wayland fixes.
+  - **wgpu v0.30.34:** ADR-056 unified resource lifecycle, @samyfodil queue pin fix, Metal MSAA, software backend fixes.
+  - **naga v0.18.0:** Shader compiler improvements.
+- **FontSmoothing mock** — gpucontext v0.23.0 PlatformProvider compliance.
+- **TDD approach** documented in CLAUDE.md as standard practice.
+
+## [0.1.48] — 2026-07-27
+
+### Added
+
+- **GPUView widget** ([#150](https://github.com/gogpu/ui/issues/150)) — GPU-rendered view for external content: 3D scenes, video, compute visualization, or custom shader output. Flutter Texture widget pattern: widget owns offscreen GPU texture, external renderer draws into it via `OnRender` callback, Layer Tree compositor blits to surface. Functional options: `Size`, `OnRender`, `Continuous`. RepaintBoundary by default. (Renamed from Viewport3D in v0.1.49.)
+- **ExternalTextureLayer** — new Layer Tree node for pre-rendered GPU textures. Unlike PictureLayer (scene replay), ExternalTextureLayer composites external textures directly.
+- **GPUTextureProvider** — optional `widget.Context` interface for widgets needing offscreen GPU textures (gpuview, video player, custom shaders).
+- **OS file drag-and-drop bridge** ([#189](https://github.com/gogpu/ui/issues/189)) — bridges gogpu `OnDragDrop` into ui's `dnd` package. `KindFile` constant, `FilePayload` type, `Manager.DropExternal` for atomic external drops with hit-testing. Works on Windows, macOS, Linux (X11 + Wayland).
+
+### Fixed
+
+- **Stale ghost rows on ListView scroll** ([#177](https://github.com/gogpu/ui/issues/177)) — damage ring accumulation reordered: current frame stored after iterating previous slots, preventing double-counting that reduced effective history depth during rapid scroll.
+- **ListView selection content styling** ([#178](https://github.com/gogpu/ui/issues/178)) — `rebuildAffected` now unmounts old decorators and mounts new ones via `MountTree`, so signal bindings activate and selection styling updates immediately.
+- **Example goroutine leak** ([#180](https://github.com/gogpu/ui/issues/180)) — `context.Context` cancellation added to modular-compositor module goroutines.
+
+### Tests
+
+- 26 new tests: DnD (7), ExternalTextureLayer (5), GPUView (14)
+- 4 rendering regression tests: damage ring (3), selection lifecycle (1)
+
+### Changed
+
+- **deps:** gg v0.50.7 → v0.50.8, gogpu v0.44.9 → v0.45.1, wgpu v0.30.22 → v0.30.23, naga v0.17.15 → v0.17.16
+  - **gogpu v0.45.1:** OS drag-and-drop on all 4 platforms (Win32 WM_DROPFILES, macOS NSView dragging, X11 XDnD, Wayland wl_data_device), MarkExternalContent for 3D compositing, Wayland/macOS fixes.
+  - **gg v0.50.8:** Variable font outlines ignore gvar under transforms fix ([gg#405](https://github.com/gogpu/gg/issues/405)).
+  - **wgpu v0.30.23:** Software backend CopyTextureToBuffer row stride, blend state, BGRA readTexel fixes.
+  - **naga v0.17.16:** Shader compiler improvements (indirect).
+
+## [0.1.47] — 2026-07-16
+
+### Changed
+
+- **deps:** gg v0.50.6 → v0.50.7, gogpu v0.44.8 → v0.44.9, wgpu v0.30.21 → v0.30.22
+  - **wgpu v0.30.22:** Metal MSAA storage mode fix — Intel integrated GPUs (Iris Plus) no longer crash on texture creation ([wgpu#271](https://github.com/gogpu/wgpu/issues/271)).
+  - **gg v0.50.7:** Variable font gvar fix under transforms ([gg#405](https://github.com/gogpu/gg/issues/405)).
+
+## [0.1.46] — 2026-07-16
+
+### Fixed
+
+- **ListView scene leak on scroll** ([#173](https://github.com/gogpu/ui/issues/173)) — evicted decorators now properly unmount (`UnmountTree`) and release cached `scene.Scene`. Previously, scrolling accumulated orphaned scene objects on the heap.
+- **ListView row content never mounted** ([#174](https://github.com/gogpu/ui/issues/174)) — widgets created by `Content[C].Render()` now receive `MountTree` after creation, so signal bindings via `BindToScheduler` activate correctly. Previously, reactive updates in list item content were silently dead.
+- **GridView cell content never mounted** ([#181](https://github.com/gogpu/ui/issues/181)) — same lifecycle fix as ListView applied to GridView cells. `UnmountTree` on eviction, `MountTree` after `Content[C].Render()`.
+- **Overlay lifecycle bypass** ([#171](https://github.com/gogpu/ui/issues/171)) — `PushOverlay` now calls `MountTree` on the overlay container, `PopOverlay`/`RemoveOverlay` call `UnmountTree`. Previously, signal bindings in overlay content (dropdowns, dialogs) never registered, and cleanup never ran on dismiss — leaking goroutines and heap allocations.
+- **Window.Close teardown** ([#175](https://github.com/gogpu/ui/issues/175)) — added `Window.Close()` method that stops the animation pumper goroutine, unmounts all overlay trees, and unmounts the root widget tree. Wired into `desktop.Run` OnClose callback. Previously, the animation pumper goroutine outlived the window.
+- **linechart goroutine-safety** ([#182](https://github.com/gogpu/ui/issues/182)) — `PushValue`, `AddSeries`, `ClearSeries` now route invalidation through the scheduler (`MarkDirty`) instead of direct `SetNeedsRedraw`, eliminating data races when called from background goroutines. Falls back to `SetNeedsRedraw` when unmounted.
+
+### Tests
+
+- **28 regression tests** across 5 new test files covering all lifecycle fixes:
+  - `core/listview/lifecycle_test.go` — mount/unmount on scroll, eviction, clear, re-scroll
+  - `core/gridview/lifecycle_test.go` — cell mount/unmount, update, clear, invalidate
+  - `app/overlay_lifecycle_test.go` — push/pop lifecycle, signal bindings, dismiss callback
+  - `app/window_close_test.go` — close idempotency, unmount root + overlays, stop pumper
+  - `core/linechart/safety_test.go` — concurrent PushValue (10 goroutines × 100 values), scheduler routing
+
+## [0.1.45] — 2026-07-16
+
+### Changed
+
+- **deps:** gg v0.50.4 → v0.50.6, gogpu v0.44.1 → v0.44.8, wgpu v0.30.10 → v0.30.21, signals v0.1.0 → v0.1.1
+  - **gg v0.50.6:** Unified backend-agnostic draw queue (ADR-051) + three-tier clip architecture (ADR-052). All rendering commands (shapes, text, GPU textures) now flow through a single dispatch pipeline regardless of backend. Software backend rendering is now architecturally correct — offscreen boundary textures, Layer Tree compositing, and damage-aware blit work on CPU adapters.
+  - **gogpu v0.44.8:** Multi-backend auto-selection improvements, Wayland fractional scale, pixelPresented frame lifecycle.
+  - **wgpu v0.30.21:** Software backend correctness fixes (BGRA swizzle, MSAA rejection, WriteTexture, blit optimization), format-aware copy commands.
+  - **signals v0.1.1:** Minor improvements.
+
+### Known Issues
+
+- **Software backend performance:** The unified pipeline ensures correctness on CPU adapters, but performance is significantly slower than GPU backends. The SPIR-V interpreter processes shaders instruction-by-instruction on the CPU. Community contributions for optimization are welcome — see [Optimization Roadmap](#software-backend-optimization) below.
+
+### Software Backend Optimization Roadmap
+
+The software backend (`GOGPU_GRAPHICS_API=software`) now renders correctly through the same Layer Tree compositor pipeline as GPU backends. Performance optimization is the next priority:
+
+1. **gg direct CPU rasterization** ([ADR-053](https://github.com/gogpu/gg)): gg already has fast native Go CPU rasterizers inspired by tiny-skia and Vello — AnalyticFiller (scanline AA), SparseStrips (4×4 tiles), TileCompute (16×16 Vello 9-stage). These are orders of magnitude faster than the SPIR-V interpreter. Smart dispatch routing: shapes/text rendered directly by gg's CPU rasterizers, only GPU-specific operations (texture compositing) go through the software HAL. This is the highest-impact optimization with minimal code changes.
+2. **naga Go+SIMD backend** ([NAGA-FEAT-004](https://github.com/gogpu/naga)): Generate native Go code from WGSL shaders with `goexperiment.simd` (AVX-512/NEON) vectorization. Replaces SPIR-V interpreter entirely for shader execution. Expected 100x+ speedup. Reference: GoMLX PackGEMM achieved 14x speedup with pure Go SIMD on MatMul.
+3. **SPIR-V interpreter SIMD** ([FEAT-SW-008](https://github.com/gogpu/wgpu)): `goexperiment.simd` Float32x4 for vec4 ops in the existing interpreter — estimated 2-4x speedup with ~500 LOC. Interim solution before naga Go backend.
+4. **Multi-threaded CPU dispatch** ([ADR-053](https://github.com/gogpu/gg)): Parallel CPU dispatch for independent boundary textures. Each boundary = isolated pixmap → trivially parallel.
+
+Contributions and profiling reports are welcome — see [issue #158](https://github.com/gogpu/ui/issues/158) for the software backend tracker.
+
+## [0.1.44] — 2026-07-09
+
+### Changed
+
+- **deps:** gg v0.50.3 → v0.50.4, x/image v0.43.0 → v0.44.0, x/text v0.39.0 → v0.40.0
+  - **gg v0.50.4:** Composite hardening (nil-safe `WithTransform`, `BeginClip`/`EndClip` balanced check, GlyphRun empty guard).
+
+### Documentation
+
+- **ARCHITECTURE.md:** comprehensive update — 26 widgets (added badge, chip, stripe, titlebar), 4 design systems with 70 painters (added DevTools 24), removed Engine references (CACHE-030), per-widget layout caching (ADR-032), updated all dependency versions.
+
+## [0.1.43] — 2026-07-08
+
+### Changed
+
+- **deps:** gg v0.50.2 → v0.50.3, gogpu v0.43.4 → v0.44.1, wgpu v0.30.9 → v0.30.10
+  - **gogpu v0.44.1:** Multi-backend auto-selection (old GPUs get DX12/GLES instead of software), macOS live resize fix.
+  - **gg v0.50.3:** TT hinter improvements.
+
+## [0.1.42] — 2026-07-05
+
+### Added
+
+- **Layout cache activation** (ADR-032 Phase 2b, [#160](https://github.com/gogpu/ui/pull/160), @TimLai666) — convert 32 parent→child Layout calls to `widget.LayoutChild` across 23 files, activating per-widget layout caching. Layout cost: O(total nodes) → O(affected subtree). Removes `MarkLayoutCleanRecursive` shim. Adds `InvalidateLayoutTree` for downward cache propagation on signal fires. `IsLayoutVerifying` sentinel for debug verifier (Flutter `debugCheckingIntrinsics` pattern).
+- **Animation tick before layout** (ADR-032 GAP-3) — `AnimationTicker` interface + `tickAnimationsInTree` walk before layout pass. Collapsible and Transition animations now tick BEFORE layout (Flutter `handleBeginFrame` → `handleDrawFrame` pattern). Layout is a pure function of constraints + widget state, required for RelayoutBoundary (Phase 5).
+
+### Removed
+
+- **`internal/layout/Engine`** (ADR-032 CACHE-030) — centralized layout engine with 0 production usage. Per-widget layout caching is now fully handled by `widget.LayoutChild` on `WidgetBase`. -769 lines of dead code.
+
+### Changed
+
+- **deps:** gg v0.50.1 → v0.50.2, gogpu v0.43.1 → v0.43.4, wgpu v0.30.8 → v0.30.9, goffi v0.5.5 → v0.5.6
+
+## [0.1.41] — 2026-07-01
+
+### Fixed
+
+- **Collapsible animation glitch on Wayland** ([#152](https://github.com/gogpu/ui/issues/152), [#157](https://github.com/gogpu/ui/pull/157)) — force final redraw after animation completes + full-window `wl_surface.damage_buffer` on root repaint. Confirmed by @porjo (Intel Iris Plus ICL GT2, Fedora 44, GNOME/Mutter).
+
+### Changed
+
+- **Event-driven rendering by default** (ADR-035) — removed `WithContinuousRender(false)` boilerplate from all examples. gogpu v0.43.0+ defaults to event-driven (winit 0.29 pattern).
+- **deps:** gg v0.49.2 → v0.50.1, gogpu v0.42.11 → v0.43.1, wgpu v0.30.7 → v0.30.8
+
+## [0.1.40] — 2026-06-29
+
+### Changed
+
+- **Event-driven rendering by default** (ADR-035) — removed `WithContinuousRender(false)` from all 6 examples and documentation. No longer needed since gogpu v0.43.0 defaults to event-driven rendering, following the winit 0.29 pattern. Enterprise research: 8/8 UI frameworks (Flutter, Qt, GTK4, SwiftUI, Compose, Iced, Gio, Chromium) enforce event-driven at entry point.
+- **deps:** gg v0.49.2 → v0.50.1, gogpu v0.42.11 → v0.43.1, wgpu v0.30.7 → v0.30.8
+
+## [0.1.39] — 2026-06-28
+
+### Changed
+
+- **deps:** gg v0.49.0 → v0.49.2, gogpu v0.42.8 → v0.42.11, wgpu v0.30.5 → v0.30.7, gputypes v0.5.0 → v0.5.1
+  - **gg v0.49.2:** Software Vulkan (llvmpipe/SwiftShader/WARP) now fully supported for offscreen boundary textures (ADR-046). Removes `softwareMode` blanket disable — software adapters treated as full GPU implementations per enterprise pattern (Skia Graphite, Flutter Impeller, wgpu). MSAA runtime fallback 4x→1x. Error logging in `CreateOffscreenTexture` instead of silent nil return.
+  - **wgpu v0.30.7:** Software backend format-aware copy + GLES LockOSThread fix.
+  - **gputypes v0.5.1:** `BlockCopySize()` for format-aware buffer sizing.
+
+## [0.1.38] — 2026-06-28
+
+### Added
+
+- **Layout invalidation wiring** ([#151](https://github.com/gogpu/ui/pull/151), @TimLai666) — ADR-032 Phase 2a: `BindToSchedulerLayout` + `BindToSchedulerLayoutFunc` for layout-affecting signals, `MarkNeedsLayout()` in 9 event handlers, `MarkLayoutCleanRecursive` post-layout shim. 11 signal bindings converted (button/text, checkbox/label, chip/label, badge/count, collapsible/expanded, treeview/root, listview/itemCount, gridview/itemCount+columns, datatable/rowCount, splitview/ratio). Invalidation infrastructure ready — cache activation (LayoutChild) in Phase 2b.
+
+## [0.1.37] — 2026-06-27
+
+### Added
+
+- **Painter/Widget behavior separation** (ADR-034) — enterprise-level refactor moving ALL behavioral logic (cursor position, selection, text measurement, animation easing, data mapping) from theme painters to core widgets. Painters are now draw-only. Enables community theme authoring.
+- **LayoutMetrics optional interface** — 7 widgets (button, checkbox, radio, slider, chip, dialog, textfield) define LayoutMetrics allowing theme painters to control spatial metrics (height, padding, fontSize, radius). 35 compile-time checked implementations across 5 painters.
+- **ThemeBundle interface** (`theme.Bundle`) — packages all painters for complete theme installation. Community themes implement this to provide a full design system.
+- **Gallery: 8 themes** — Fluent and Cupertino added to theme switcher alongside M3 (4 colors) + DevTools (dark/light).
+- **internal/textmetrics** — shared MeasureText-based text measurement replacing per-painter charWidthRatio estimates.
+
+### Fixed
+
+- **DevTools cursor wrong position** ([#126](https://github.com/gogpu/ui/issues/126)) — cursor position was computed differently per theme (MeasureText vs charWidthRatio). Now all themes use widget-computed CursorRect via MeasureText.
+- **Cursor height** — added 2px caretHeightOffset (Flutter `_kCaretHeightOffset` pattern) for cleaner cursor appearance.
+
+### Changed (breaking, v0.x)
+
+- **TextField PaintState** — expanded with pre-computed fields (DisplayText, ContentRect, CursorRect, SelectionRect, ShowCursor, ShowSelection, FontSize, ColorScheme). Pointer receiver (`*PaintState`).
+- **titlebar Painter** — `DrawBackground`/`DrawControlButton` renamed to `PaintBackground`/`PaintControlButton`.
+- **linechart Painter** — `PaintChart(canvas, bounds, state)` → `PaintChart(canvas, state)` with Bounds in PaintState.
+- **progressbar PaintState** — `ProgressBarColorScheme` field renamed to `ColorScheme`.
+
+### Dependencies
+
+- gg v0.48.16 → v0.49.0
+- gogpu v0.42.6 → v0.42.8
+- wgpu v0.30.3 → v0.30.5
+
+### Removed
+
+- 4 duplicate `maskText` functions (one per theme painter — now single in core)
+- 4 duplicate `contentRect` functions (now computed by widget)
+- `charWidthRatio` constants from all theme textfield painters
+- `easeInOut` duplicate from M3 progress painter
+
 ## [0.1.36] — 2026-06-25
 
 ### Added

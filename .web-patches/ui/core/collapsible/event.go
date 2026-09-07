@@ -92,8 +92,8 @@ func handleMouseEvent(w *Widget, ctx widget.Context, e *event.MouseEvent) bool {
 		}
 		if wasPressed && hdr.Contains(e.Position) {
 			w.Toggle()
-			// ADR-028: layout change — Toggle changes height, needs full layout recalc.
-			ctx.Invalidate()
+			// ADR-032: layout change — Toggle changes height.
+			w.MarkNeedsLayout()
 			return true
 		}
 		// ADR-028: visual only — state changed from pressed to hover/normal.
@@ -132,8 +132,8 @@ func handleActivationKey(w *Widget, ctx widget.Context, e *event.KeyEvent) bool 
 		w.istate = stateNormal
 		if wasPressed {
 			w.Toggle()
-			// ADR-028: layout change — Toggle changes height.
-			ctx.Invalidate()
+			// ADR-032: layout change — Toggle changes height.
+			w.MarkNeedsLayout()
 		} else {
 			// ADR-028: visual only — state changed to normal.
 			w.SetNeedsRedraw(true)

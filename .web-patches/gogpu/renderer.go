@@ -9,17 +9,26 @@ import (
 	"math"
 	"os"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/gogpu/gogpu/gpu/backend/native"
 	"github.com/gogpu/gogpu/gpu/types"
+	"github.com/gogpu/gogpu/internal/compositor"
 	"github.com/gogpu/gogpu/internal/platform"
+	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu"
 )
 
-// texQuadUniformSize is the size of the uniform buffer for textured quads.
-// Layout: rect(4 floats) + screen(2 floats) + alpha(1 float) + premultiplied(1 float) = 32 bytes
-const texQuadUniformSize = 32
+const (
+	shaderEntryVS = "vs_main"
+	shaderEntryFS = "fs_main"
+
+	// texQuadUniformSize is the size of the uniform buffer for textured quads.
+	// Layout: rect(4 floats) + screen(2 floats) + alpha(1 float) + premultiplied(1 float) = 32 bytes
+	texQuadUniformSize = 32
+)
 
 // SurfaceState tracks the lifecycle state of a GPU surface.
 // Transitions follow the WebGPU spec + wgpu framework.rs recovery pattern:
@@ -55,6 +64,10 @@ type RenderTarget struct {
 	currentSurfaceTexture *wgpu.SurfaceTexture
 	currentView           *wgpu.TextureView
 	frameCleared          bool // Whether the frame has been cleared (for LoadOp selection)
+	externalContent       bool // External renderer (g3d) has content on surface (MarkPreserveContent)
+	// frameEncoder is borrowed by external renderers and owned by this surface.
+	// It is finished and submitted exactly once at frame end.
+	frameEncoder *wgpu.CommandEncoder
 
 	// Deferred clear -- eliminates separate Clear render pass.
 	// ClearColor stores the color and sets hasPendingClear=true.
@@ -67,13 +80,38 @@ type RenderTarget struct {
 	// VSync preference for this window
 	vsync bool
 
-	// damageRects holds the dirty regions for the current frame (physical pixels,
-	// top-left origin). Set by Context.SetDamageRects(), consumed and cleared by
-	// present(). When nil, the full surface is presented (backward compatible).
-	// Passed to wgpu Surface.PresentWithDamage() which forwards to the platform
-	// compositor (Vulkan VK_KHR_incremental_present, DX12 Present1, GLES
-	// eglSwapBuffersWithDamageKHR, Software partial BitBlt/XPutImage).
-	damageRects []image.Rectangle
+	// transparent requests CompositeAlphaModePremultiplied for this surface
+	// when the adapter advertises support (ADR-060, gogpu#361).
+	transparent bool
+
+	// presentationSyncRequested asks the platform to gate the frame following
+	// the next successful present until the compositor acknowledges it. It is
+	// retained across empty or failed frames.
+	presentationSyncRequested bool
+
+	// damageSources holds all registered damage reporters for this surface.
+	// Each independent renderer (gg, g3d, video, compose) registers one source
+	// via Context.RegisterDamageSource. At present time, all sources are unioned
+	// into a single damage region (ADR-065). Sources are reset after present —
+	// each must report damage every frame that content changes.
+	damageSources []*compositor.DamageSource
+
+	// debugOverlays holds registered debug visualization layers (ADR-066).
+	// Overlays draw in registration order after all content renderers,
+	// before present. GTK4 GtkInspectorOverlay pattern.
+	debugOverlays []gpucontext.DebugOverlay
+
+	// frameNumber is a monotonic counter incremented each frame, exposed to
+	// debug overlays via DebugOverlayContext.FrameNumber for statistics,
+	// logging, and frame-based calculations (e.g., rolling FPS average).
+	frameNumber uint64
+
+	// overlayNeedsRedraw is set when any debug overlay's Draw returns true,
+	// signaling it needs another frame to complete visualization (e.g., fade
+	// animation, FPS counter). The caller (App frame loop) checks this and
+	// calls RequestRedraw for a self-sustaining render loop that automatically
+	// stops when all overlays return false (Chromium pattern).
+	overlayNeedsRedraw bool
 
 	// hasGPUWork tracks whether any draw calls were issued this frame.
 	// When false after OnDraw, no swapchain acquire/present happened
@@ -84,11 +122,49 @@ type RenderTarget struct {
 	// emitted for this surface. Limited to avoid log spam even at Debug level.
 	presentLogCount int
 
+	// pixelPresented is set when PresentPixels bypassed the normal
+	// Acquire→Render→Present cycle (ADR-052). endFrameForSurface skips
+	// present and cleans up stale state instead.
+	pixelPresented bool
+
 	// frameStarted tracks whether beginFrame was called this frame cycle.
 	// With lazy acquire, beginFrame is deferred until the first draw call.
 	// If OnDraw produces no GPU work, beginFrame is never called → no
 	// swapchain acquire/present → zero GPU overhead.
 	frameStarted bool
+
+	// acquireFailed records that a draw call asked for the swapchain this
+	// frame and could not have it. It is what separates "the callback drew
+	// nothing", which is what lazy acquire is FOR, from "the callback drew and
+	// the surface was unavailable", which is worth another frame. Without the
+	// distinction the demand-driven loop reschedules itself forever against a
+	// UI that correctly draws nothing when nothing changed.
+	acquireFailed bool
+
+	// Compositor-owned composition texture (ADR-067).
+	// When debug overlays are active, content renderers draw into this
+	// intermediate texture instead of the swapchain image directly.
+	// gogpu composites the overlays on top, then blits the result to the
+	// swapchain. This isolates overlay rendering from content rendering,
+	// preventing bind group lifecycle conflicts.
+	// composTex is the per-frame composition surface. Content + overlay are
+	// drawn here, then blitted to swapchain. Rebuilt each frame from contentTex.
+	composTex  *wgpu.Texture
+	composView *wgpu.TextureView
+	composW    uint32
+	composH    uint32
+
+	// Note: contentTex is NOT needed. composView IS the content cache.
+	// Overlays draw on swapchain (after blit), not on composView.
+	// composView stays clean (content only) automatically.
+
+	// pendingBlitBindGroup holds the blit bind group created in blitComposToSwapchain.
+	// Released at next frame boundary (prepareLazyAcquire) after GPU completion.
+	pendingBlitBindGroup *wgpu.BindGroup
+
+	// compositeState holds per-surface persistent bind group state for the MSAA
+	// overlay alpha-composite path (compositor.CompositeState).
+	compositeState compositor.CompositeState
 }
 
 // lockDisplay acquires the platform display lock if the window supports it.
@@ -144,6 +220,11 @@ type Renderer struct {
 	texQuadUniformData    []byte
 	texQuadPipelineInited bool
 
+	// Dedicated composition blit pipeline (ADR-067).
+	// Owns blit + composite pipelines, shader, layouts, sampler, uniform buffer.
+	// Lives in internal/compositor to keep renderer.go focused on frame orchestration.
+	blitPipeline compositor.BlitPipeline
+
 	// Texture bind group cache — device-level, shared across all windows.
 	texBindGroupCache map[*wgpu.TextureView]*wgpu.BindGroup
 
@@ -161,17 +242,31 @@ type Renderer struct {
 	// currentSurface is the RenderTarget being drawn in the current frame.
 	// Set by the multi-window frame loop before each window's draw callback.
 	currentSurface *RenderTarget
+
+	// secondaryFrameGatePending avoids scanning the window list in the common
+	// single-window path. It is set only when a secondary platform window
+	// actually prepares compositor frame gating.
+	secondaryFrameGatePending atomic.Bool
+
+	// GPU stats (GOGPU_STATS=1 / EnableStats). Zero-cost when disabled —
+	// record paths return after a single atomic load (Rust wgpu counters pattern).
+	statsTextures      atomic.Int64
+	statsTextureBytes  atomic.Int64
+	statsUploadBytes   atomic.Int64
+	statsUploadRegions atomic.Int64
+	frameStats         frameStatsState
 }
 
 // newRenderer creates and initializes a new renderer.
-func newRenderer(platWin platform.PlatformWindow, graphicsAPI types.GraphicsAPI, vsync bool, powerPref gputypes.PowerPreference) (*Renderer, error) {
+func newRenderer(platWin platform.PlatformWindow, graphicsAPI types.GraphicsAPI, vsync bool, powerPref gputypes.PowerPreference, transparent bool) (*Renderer, error) {
 	r := &Renderer{
 		powerPreference: powerPref,
 	}
 	r.primary = &RenderTarget{
-		renderer:   r,
-		platWindow: platWin,
-		vsync:      vsync,
+		renderer:    r,
+		platWindow:  platWin,
+		vsync:       vsync,
+		transparent: transparent,
 	}
 
 	// Phase 1: Create GPU instance with backend mask (may include multiple backends).
@@ -197,6 +292,59 @@ func newRenderer(platWin platform.PlatformWindow, graphicsAPI types.GraphicsAPI,
 		return nil, err
 	}
 
+	return r, nil
+}
+
+// NewHeadlessRenderer creates a renderer that does not require a native window
+// or display. The zero-argument form uses the deterministic Pure-Go software
+// backend, which is suitable for golden tests and CI. An optional graphics API
+// can be supplied when a headless render must exercise another backend.
+//
+// The returned renderer owns a GPU device and must be released with Destroy
+// followed by ReleaseInstance when it is no longer needed. RenderToImage is
+// the headless frame boundary; it is not safe to call concurrently on one
+// renderer.
+func NewHeadlessRenderer(graphicsAPI ...types.GraphicsAPI) (*Renderer, error) {
+	return newHeadlessRendererWithRuntime(graphicsAPI, defaultHeadlessRuntime)
+}
+
+type headlessRuntime struct {
+	initInstance      func(*Renderer, types.GraphicsAPI) error
+	initAdapterDevice func(*Renderer) error
+}
+
+var defaultHeadlessRuntime = headlessRuntime{
+	initInstance: func(r *Renderer, api types.GraphicsAPI) error {
+		return r.initInstance(api)
+	},
+	initAdapterDevice: func(r *Renderer) error {
+		return r.initAdapterDevice(nil)
+	},
+}
+
+func newHeadlessRendererWithRuntime(graphicsAPI []types.GraphicsAPI, runtime headlessRuntime) (*Renderer, error) {
+	api := types.GraphicsAPISoftware
+	if len(graphicsAPI) > 1 {
+		return nil, errors.New("gogpu: NewHeadlessRenderer accepts at most one graphics API")
+	}
+	if len(graphicsAPI) == 1 {
+		api = graphicsAPI[0]
+	}
+
+	r := &Renderer{
+		powerPreference: gputypes.PowerPreferenceHighPerformance,
+	}
+	r.primary = &RenderTarget{renderer: r}
+
+	if err := runtime.initInstance(r, api); err != nil {
+		r.ReleaseInstance()
+		return nil, err
+	}
+	if err := runtime.initAdapterDevice(r); err != nil {
+		r.Destroy()
+		r.ReleaseInstance()
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -298,14 +446,16 @@ func (r *Renderer) configureSurface(ws *RenderTarget) error {
 
 // configure configures the wgpu surface with current dimensions and format.
 func (ws *RenderTarget) configure(device *wgpu.Device, adapter *wgpu.Adapter) error {
-	presentMode := ws.resolvePresentMode(adapter)
+	caps := adapter.GetSurfaceCapabilities(ws.surface)
+	presentMode := resolvePresentMode(caps, ws.vsync)
+	alphaMode := resolveAlphaMode(caps, ws.transparent)
 
 	return ws.surface.Configure(device, &wgpu.SurfaceConfiguration{
 		Format:      ws.format,
 		Usage:       gputypes.TextureUsageRenderAttachment,
 		Width:       ws.width,
 		Height:      ws.height,
-		AlphaMode:   gputypes.CompositeAlphaModeOpaque,
+		AlphaMode:   alphaMode,
 		PresentMode: presentMode,
 	})
 }
@@ -314,23 +464,22 @@ func (ws *RenderTarget) configure(device *wgpu.Device, adapter *wgpu.Adapter) er
 // Rust wgpu fallback pattern. For VSync on (AutoVsync): FifoRelaxed -> Fifo.
 // For VSync off (AutoNoVsync): Immediate -> Mailbox -> Fifo.
 // Falls back to Fifo which is guaranteed by the Vulkan spec.
-func (ws *RenderTarget) resolvePresentMode(adapter *wgpu.Adapter) gputypes.PresentMode {
-	caps := adapter.GetSurfaceCapabilities(ws.surface)
+func resolvePresentMode(caps *wgpu.SurfaceCapabilities, vsync bool) gputypes.PresentMode {
 	if caps == nil {
 		// No capabilities available — use safe default.
 		mode := gputypes.PresentModeFifo
-		if !ws.vsync {
+		if !vsync {
 			mode = gputypes.PresentModeImmediate
 		}
 		slog.Debug("gogpu: no surface capabilities, using default present mode",
-			"mode", mode, "vsync", ws.vsync)
+			"mode", mode, "vsync", vsync)
 		return mode
 	}
 
 	supported := caps.PresentModes
 	var mode gputypes.PresentMode
 
-	if ws.vsync {
+	if vsync {
 		// VSync on: FifoRelaxed -> Fifo (like Rust AutoVsync).
 		mode = pickPresentMode(supported,
 			gputypes.PresentModeFifoRelaxed,
@@ -346,8 +495,30 @@ func (ws *RenderTarget) resolvePresentMode(adapter *wgpu.Adapter) gputypes.Prese
 	}
 
 	slog.Debug("gogpu: resolved present mode",
-		"mode", mode, "vsync", ws.vsync, "supported", supported)
+		"mode", mode, "vsync", vsync, "supported", supported)
 	return mode
+}
+
+// resolveAlphaMode selects the surface alpha compositing mode.
+// Transparent windows request CompositeAlphaModePremultiplied; if the
+// adapter does not advertise it (or capabilities are unavailable) the
+// surface falls back to Opaque, preserving pre-ADR-060 behavior.
+func resolveAlphaMode(caps *wgpu.SurfaceCapabilities, transparent bool) gputypes.CompositeAlphaMode {
+	if !transparent {
+		return gputypes.CompositeAlphaModeOpaque
+	}
+	if caps == nil {
+		slog.Debug("gogpu: no surface capabilities, using opaque alpha mode")
+		return gputypes.CompositeAlphaModeOpaque
+	}
+	for _, mode := range caps.AlphaModes {
+		if mode == gputypes.CompositeAlphaModePremultiplied {
+			return mode
+		}
+	}
+	slog.Debug("gogpu: premultiplied alpha unsupported, using opaque alpha mode",
+		"supported", caps.AlphaModes)
+	return gputypes.CompositeAlphaModeOpaque
 }
 
 // pickPresentMode returns the first mode from preferred that is in supported.
@@ -419,6 +590,10 @@ func (ws *RenderTarget) resize(width, height int, device *wgpu.Device, adapter *
 	ws.width = uint32(width)   //nolint:gosec // G115: validated positive above
 	ws.height = uint32(height) //nolint:gosec // G115: validated positive above
 
+	// Release stale composition texture — it will be recreated at the new
+	// size during the next frame if overlays are active.
+	ws.releaseCompositionTexture()
+
 	// Configure surface with new dimensions.
 	if err := ws.configure(device, adapter); err != nil {
 		// Restore old dimensions to keep surface consistent with swapchain.
@@ -434,6 +609,7 @@ func (ws *RenderTarget) resize(width, height int, device *wgpu.Device, adapter *
 // Backward compatibility wrapper — multi-window code uses beginFrameForSurface.
 func (r *Renderer) BeginFrame() bool {
 	r.DrainDeferredDestroys()
+	r.beginFrameStats()
 	return r.beginFrameForSurface(r.primary)
 }
 
@@ -498,6 +674,7 @@ func (ws *RenderTarget) beginFrame(platWin platform.PlatformWindow, device *wgpu
 
 	// Reset frame state for new frame
 	ws.frameCleared = false
+	ws.externalContent = false
 	ws.hasPendingClear = false
 	ws.hasGPUWork = false
 
@@ -532,6 +709,7 @@ func (ws *RenderTarget) recoverFromAcquireError(err error, device *wgpu.Device, 
 // Backward compatibility wrapper — multi-window code uses endFrameForSurface.
 func (r *Renderer) EndFrame() {
 	if !r.primary.frameStarted {
+		r.endFrameStats(true)
 		r.pollSubmissions()
 		return
 	}
@@ -546,16 +724,129 @@ func (r *Renderer) EndFrame() {
 // it does NOT poll submissions -- the caller polls once after all windows.
 // Returns true if present() reconfigured an outdated surface (see present).
 func (r *Renderer) endFrameForSurface(ws *RenderTarget) bool {
-	ws.flushClear(r.device, r)
+	// PresentPixels already presented — skip normal present path (ADR-052).
+	if ws.pixelPresented {
+		ws.discardFrameEncoder()
+		ws.pixelPresented = false
+		ws.hasPendingClear = false
+		ws.releaseFrame()
+		r.endFrameStats(false)
+		return false
+	}
+
+	// No swapchain frame was started (idle / lazy acquire never triggered).
+	if !ws.frameStarted {
+		r.endFrameStats(true)
+		return false
+	}
+
+	// ADR-067: when composition texture is active, content renderers already
+	// handled the clear via their own render passes (LoadOpClear). Don't
+	// flush a pending clear here — it would wipe the rendered content.
+	// Only flush when rendering directly to swapchain (no composition texture).
+	if ws.composView == nil {
+		ws.flushClear(r.device, r)
+	} else {
+		ws.hasPendingClear = false
+	}
+
+	// ADR-067: blit cached content to swapchain FIRST, then overlays on top.
+	// composView = clean content cache (no overlay). Overlay draws on swapchain
+	// after blit → never accumulates. composView stays clean for next frame.
+	if ws.composView != nil {
+		r.blitComposToSwapchain(ws)
+	}
+
+	ws.drawDebugOverlays()
+
+	ws.submitFrameEncoder(r)
+	ws.frameNumber++
 	// Request frame callback BEFORE present (winit pre_present_notify pattern).
 	// Wayland spec: "The frame request will take effect on the next commit."
 	// The present's internal wl_surface.commit activates it atomically.
-	if ws.platWindow != nil {
-		ws.platWindow.SyncFrame()
-	}
-	reconfigured := ws.present()
+	syncAttempt := syncFrameForPresent(ws)
+	reconfigured, presented := ws.present()
+	finishPresentationSync(ws, syncAttempt, presented)
 	ws.releaseFrame()
+	r.endFrameStats(!presented)
 	return reconfigured
+}
+
+type presentationSyncAttempt struct {
+	consumedRequest bool
+	cancelable      bool
+}
+
+// syncFrameForPresent applies the platform's normal frame policy, unless the
+// surface has a pending one-shot request. Platforms with pre-present semantics
+// report whether they actually prepared a cancelable synchronization request.
+func syncFrameForPresent(ws *RenderTarget) presentationSyncAttempt {
+	if ws == nil || ws.platWindow == nil {
+		return presentationSyncAttempt{}
+	}
+	force := ws.presentationSyncRequested
+	if syncer, ok := ws.platWindow.(platform.PresentationSyncer); ok {
+		prepared := syncer.PrepareFrameSync(force)
+		if prepared {
+			markSecondaryFrameGatePending(ws)
+		}
+		if force && !prepared {
+			// A failed preparation must not consume the request. This also covers
+			// an unexpected already-pending callback; the frame gate normally
+			// prevents rendering in that state.
+			return presentationSyncAttempt{}
+		}
+		ws.presentationSyncRequested = false
+		return presentationSyncAttempt{consumedRequest: force, cancelable: prepared}
+	}
+
+	ws.platWindow.SyncFrame()
+	if force {
+		ws.presentationSyncRequested = false
+	}
+	return presentationSyncAttempt{consumedRequest: force}
+}
+
+// syncFrameBeforePixelPresent prepares frame synchronization only on platforms
+// that require it before the surface commit (Wayland). Other platforms retain
+// their existing post-present SyncFrame timing.
+func syncFrameBeforePixelPresent(ws *RenderTarget) (presentationSyncAttempt, bool) {
+	if ws == nil || ws.platWindow == nil {
+		return presentationSyncAttempt{}, false
+	}
+	if _, ok := ws.platWindow.(platform.PresentationSyncer); !ok {
+		return presentationSyncAttempt{}, false
+	}
+	return syncFrameForPresent(ws), true
+}
+
+func syncFrameAfterPixelPresent(ws *RenderTarget) {
+	if ws == nil || ws.platWindow == nil {
+		return
+	}
+	ws.platWindow.SyncFrame()
+	ws.presentationSyncRequested = false
+}
+
+func finishPresentationSync(ws *RenderTarget, attempt presentationSyncAttempt, presented bool) {
+	if ws == nil || presented {
+		return
+	}
+	if attempt.cancelable {
+		if syncer, ok := ws.platWindow.(platform.PresentationSyncer); ok {
+			syncer.CancelFrameSync()
+		}
+	}
+	if attempt.consumedRequest {
+		ws.presentationSyncRequested = true
+	}
+}
+
+func markSecondaryFrameGatePending(ws *RenderTarget) {
+	if ws == nil || ws.renderer == nil || ws == ws.renderer.primary {
+		return
+	}
+	ws.renderer.secondaryFrameGatePending.Store(true)
 }
 
 // pollSubmissions performs non-blocking submission tracking: frees GPU resources
@@ -568,25 +859,29 @@ func (r *Renderer) pollSubmissions() {
 	r.tracker.triage(completedIdx, r.device)
 }
 
-// present presents the surface texture to the screen, passing any
-// damage rects to the platform compositor. Damage rects are consumed
-// (set to nil) after presentation so they don't leak to the next frame.
+// present presents the surface texture to the screen, passing the union of
+// all registered damage sources to the platform compositor. Damage sources
+// are reset after presentation so each must report again next frame.
 //
 // On Wayland, Vulkan WSI internally calls wl_surface_attach / wl_surface_commit /
 // wl_display_flush during vkQueuePresentKHR. The display lock serializes this with
 // the main thread's DispatchDefaultQueue (ADR-041 Phase 2).
 //
-// Returns true if the surface was outdated and reconfigured — caller re-renders.
-func (ws *RenderTarget) present() (reconfigured bool) {
+// Returns whether the surface was outdated and reconfigured and whether the
+// submitted frame was successfully presented.
+func (ws *RenderTarget) present() (reconfigured, presented bool) {
 	if ws.currentSurfaceTexture == nil {
-		return false
+		return false, false
 	}
+	finalDamage := compositor.UnionAllSources(ws.damageSources)
 	lockDisplay(ws.platWindow)
-	err := ws.surface.PresentWithDamage(ws.currentSurfaceTexture, ws.damageRects)
+	err := ws.surface.PresentWithDamage(ws.currentSurfaceTexture, finalDamage)
 	unlockDisplay(ws.platWindow)
-	ws.damageRects = nil
+	for _, ds := range ws.damageSources {
+		ds.Reset()
+	}
 	if err == nil {
-		return false
+		return false, true
 	}
 	// Mirror recoverFromAcquireError: outdated is expected (resize/DPI/monitor),
 	// not an error — reconfigure and signal the caller to re-render.
@@ -596,19 +891,19 @@ func (ws *RenderTarget) present() (reconfigured bool) {
 			if cfgErr := ws.configure(ws.renderer.device, ws.renderer.adapter); cfgErr != nil {
 				slog.Error("gogpu: reconfigure after outdated failed", "err", cfgErr)
 				ws.state = SurfaceLost
-				return false
+				return false, false
 			}
-			return true
+			return true, false
 		}
-		return false
+		return false, false
 	}
 	if errors.Is(err, wgpu.ErrSurfaceLost) {
 		slog.Error("gogpu: surface lost on present", "err", err)
 		ws.state = SurfaceLost
-		return false
+		return false, false
 	}
 	slog.Error("PRESENT ERROR", "err", err)
-	return false
+	return false, false
 }
 
 // setTransactionPresent toggles Core Animation transaction-based present on
@@ -629,8 +924,20 @@ func (ws *RenderTarget) setTransactionPresent(enabled bool) {
 // The actual swapchain acquire happens on first draw call via ensureFrameStarted.
 // Uses ws.platWindow and ws.renderer.{device,adapter} — no parameters needed.
 func (ws *RenderTarget) prepareLazyAcquire() {
+	ws.discardFrameEncoder()
 	ws.frameStarted = false
 	ws.hasGPUWork = false
+	ws.pixelPresented = false
+	ws.acquireFailed = false
+	// Release blit bind group from previous frame (GPU completed by VSync).
+	if ws.pendingBlitBindGroup != nil {
+		ws.pendingBlitBindGroup.Release()
+		ws.pendingBlitBindGroup = nil
+	}
+	ws.compositeState.Release()
+	if ws.renderer != nil {
+		ws.renderer.beginFrameStats()
+	}
 }
 
 // ensureFrameStarted calls beginFrame on first draw call (lazy acquire pattern).
@@ -654,23 +961,277 @@ func (ws *RenderTarget) ensureFrameStarted() bool {
 			}
 		}
 	}
+	ws.acquireFailed = true
 	return false
 }
 
 // resetLazyState clears per-frame state after frame cycle.
+// Note: overlayNeedsRedraw is NOT cleared here — it survives into the app
+// frame loop so the self-sustaining render loop (ADR-066 Chromium pattern)
+// can call RequestRedraw. It is cleared at the start of drawDebugOverlays
+// each frame.
 func (ws *RenderTarget) resetLazyState() {
 	ws.frameStarted = false
 	ws.hasGPUWork = false
+	ws.pixelPresented = false
+	ws.acquireFailed = false
+}
+
+// tryOverlayOnlyFrame attempts to start an overlay-only frame when the
+// composition texture holds content from a previous frame and an overlay
+// requests another draw (ADR-067). Returns true if a frame was successfully
+// started — the caller should fall through to endFrame. Returns false if
+// no overlay-only frame is possible.
+func (ws *RenderTarget) tryOverlayOnlyFrame() bool {
+	if !ws.overlayNeedsRedraw || ws.composView == nil {
+		return false
+	}
+	return ws.ensureFrameStarted()
+}
+
+// ensureFrameEncoder returns the framework-owned encoder for this surface
+// frame, creating it lazily. Ownership remains with RenderTarget.
+func (ws *RenderTarget) ensureFrameEncoder() (*wgpu.CommandEncoder, error) {
+	if !ws.ensureFrameStarted() {
+		return nil, fmt.Errorf("gogpu: surface frame not available")
+	}
+	if ws.frameEncoder != nil {
+		return ws.frameEncoder, nil
+	}
+	encoder, err := ws.renderer.device.CreateCommandEncoder(&wgpu.CommandEncoderDescriptor{
+		Label: "gogpu_shared_frame",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gogpu: create shared frame encoder: %w", err)
+	}
+	ws.frameEncoder = encoder
+	return encoder, nil
+}
+
+// submitFrameEncoder finishes and submits the framework-owned shared encoder.
+func (ws *RenderTarget) submitFrameEncoder(r *Renderer) {
+	encoder := ws.frameEncoder
+	ws.frameEncoder = nil
+	if encoder == nil {
+		return
+	}
+	commands, err := encoder.Finish()
+	if err != nil {
+		slog.Error("finish shared frame encoder failed", "err", err)
+		return
+	}
+	r.submitTracked(commands)
+}
+
+// drawDebugOverlays iterates registered debug overlays and calls their Draw
+// method with the current frame's GPU context. Called after all content
+// renderers have finished and before submitFrameEncoder/present.
+//
+// When overlays are present and a composition texture exists, overlays draw
+// onto the composition texture (which already contains the content). The
+// caller then blits the composition texture to the swapchain. When no
+// composition texture is available (no overlays registered before draw),
+// overlays draw directly onto the swapchain as before.
+//
+// Overlays use the shared frame encoder and surface view to record render
+// passes with LoadOp::Load (compositing on top of content). When any overlay
+// returns true (needs another frame), overlayNeedsRedraw is set so the caller
+// (App frame loop) can call RequestRedraw for a self-sustaining render loop
+// that automatically stops when all overlays return false.
+//
+// GTK4 pattern: GtkInspectorOverlay list iterated by gsk_renderer_render
+// after gsk_render_node_draw, before compositor flip.
+func (ws *RenderTarget) drawDebugOverlays() {
+	// Auto-register debug overlays if their env vars are set.
+	// Must run before the empty check so overlays can self-register.
+	initDamageOverlayIfNeeded(ws)
+	initFPSOverlayIfNeeded(ws)
+
+	if len(ws.debugOverlays) == 0 {
+		return
+	}
+	if ws.currentView == nil {
+		return
+	}
+
+	encoder, err := ws.ensureFrameEncoder()
+	if err != nil {
+		slog.Error("gogpu: debug overlay encoder unavailable", "err", err)
+		return
+	}
+
+	// ADR-067: overlays ALWAYS draw on swapchain (currentView), AFTER
+	// blitComposToSwapchain copies cached content. composView stays clean
+	// (content-only cache). Overlay never accumulates on composView.
+	overlayView := ws.currentView
+	ctx := gpucontext.DebugOverlayContext{
+		SurfaceWidth:  ws.width,
+		SurfaceHeight: ws.height,
+		Encoder:       gpucontext.NewCommandEncoder(unsafe.Pointer(encoder)),  //nolint:gosec // Go spec Rule 1: *T -> unsafe.Pointer
+		SurfaceView:   gpucontext.NewTextureView(unsafe.Pointer(overlayView)), //nolint:gosec // Go spec Rule 1: *T -> unsafe.Pointer
+		FrameNumber:   ws.frameNumber,
+	}
+
+	ws.overlayNeedsRedraw = false
+	for _, overlay := range ws.debugOverlays {
+		if overlay.Draw(ctx) {
+			ws.overlayNeedsRedraw = true
+		}
+	}
+}
+
+// discardFrameEncoder abandons an unsubmitted shared encoder on cancellation.
+func (ws *RenderTarget) discardFrameEncoder() {
+	if ws.frameEncoder == nil {
+		return
+	}
+	ws.frameEncoder.DiscardEncoding()
+	ws.frameEncoder = nil
 }
 
 // releaseFrame releases per-frame resources after presentation.
 func (ws *RenderTarget) releaseFrame() {
+	ws.discardFrameEncoder()
 	if ws.currentView != nil {
 		ws.currentView.Release()
 		ws.currentView = nil
 	}
 	// SurfaceTexture is consumed by Present, no need to destroy it
 	ws.currentSurfaceTexture = nil
+}
+
+// renderView returns the view that content renderers should target.
+// When a composition texture is active (ADR-067), content goes to
+// the intermediate texture; otherwise directly to the swapchain.
+func (ws *RenderTarget) renderView() *wgpu.TextureView {
+	// ADR-067: ensure composition texture exists before returning the view.
+	// Content renderers call SurfaceView() → renderView() at frame start,
+	// BEFORE drawDebugOverlays. Without this, composView is nil and content
+	// renders directly to swapchain, then blitComposToSwapchain overwrites it.
+	ws.ensureCompositionTexture()
+	if ws.composView != nil {
+		return ws.composView
+	}
+	return ws.currentView
+}
+
+// ensureCompositionTexture creates the intermediate composition texture
+// lazily when debug overlays are present. The texture matches the surface
+// dimensions and format. It uses RenderAttachment (content draws into it)
+// and TextureBinding (blit samples from it).
+func (ws *RenderTarget) ensureCompositionTexture() {
+	if ws.renderer == nil || ws.renderer.device == nil {
+		return
+	}
+	if ws.currentView == nil {
+		return
+	}
+	// Only create when debug overlays are registered or env vars indicate
+	// they will be. Without overlays, render directly to swapchain (zero overhead).
+	if len(ws.debugOverlays) == 0 && !ws.hasRegisteredOverlayEnv() {
+		return
+	}
+
+	// Already sized correctly.
+	if ws.composView != nil && ws.composW == ws.width && ws.composH == ws.height {
+		return
+	}
+
+	// Release stale texture.
+	ws.releaseCompositionTexture()
+
+	tex, err := ws.renderer.device.CreateTexture(&wgpu.TextureDescriptor{
+		Label:         "CompositionTexture",
+		Size:          wgpu.Extent3D{Width: ws.width, Height: ws.height, DepthOrArrayLayers: 1},
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+		Format:        ws.format,
+		Usage:         wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageTextureBinding,
+	})
+	if err != nil {
+		slog.Error("gogpu: create composition texture failed", "err", err)
+		return
+	}
+
+	view, err := ws.renderer.device.CreateTextureView(tex, nil)
+	if err != nil {
+		tex.Release()
+		slog.Error("gogpu: create composition texture view failed", "err", err)
+		return
+	}
+
+	ws.composTex = tex
+	ws.composView = view
+	ws.composW = ws.width
+	ws.composH = ws.height
+}
+
+// releaseCompositionTexture frees the intermediate composition texture.
+func (ws *RenderTarget) releaseCompositionTexture() {
+	if ws.composView != nil {
+		ws.composView.Release()
+		ws.composView = nil
+	}
+	if ws.composTex != nil {
+		ws.composTex.Release()
+		ws.composTex = nil
+	}
+	ws.composW = 0
+	ws.composH = 0
+}
+
+// hasRegisteredOverlayEnv checks if any debug overlay env vars are set,
+// indicating overlays will be registered during drawDebugOverlays. This
+// enables ensureCompositionTexture to be called proactively before overlays
+// self-register, so content renders into the composition texture from the
+// start of the frame.
+func (ws *RenderTarget) hasRegisteredOverlayEnv() bool {
+	mode := compositor.GetDamageDebugMode()
+	if mode.Overlay || mode.Log {
+		return true
+	}
+	fpsMode := compositor.GetFPSDebugMode()
+	return fpsMode.Overlay || fpsMode.Log
+}
+
+// initBlitPipeline delegates to the compositor BlitPipeline.Init with the
+// shared positionedQuadShaderSource (which stays in root — used by texQuadPipeline too).
+func (r *Renderer) initBlitPipeline() error {
+	return r.blitPipeline.Init(r.device, r.surfaceFormat, positionedQuadShaderSource)
+}
+
+// blitComposToSwapchain draws a full-screen quad sampling the composition
+// texture onto the swapchain image. Uses the dedicated blit pipeline (NOT
+// the shared texQuadPipeline) to avoid bind group lifetime conflicts with
+// gg's render session. See ADR-067.
+func (r *Renderer) blitComposToSwapchain(ws *RenderTarget) {
+	if ws.composView == nil || ws.currentView == nil {
+		return
+	}
+	if !r.blitPipeline.Inited {
+		if err := r.initBlitPipeline(); err != nil {
+			slog.Error("gogpu: blit pipeline init failed", "err", err)
+			return
+		}
+	}
+
+	encoder, err := ws.ensureFrameEncoder()
+	if err != nil {
+		slog.Error("gogpu: blit encoder unavailable", "err", err)
+		return
+	}
+
+	// Bind group is consumed by the shared frame encoder — do NOT defer
+	// Release() here. The encoder is submitted in submitFrameEncoder AFTER
+	// this function returns. Track for release at next frame boundary
+	// (BeginFrame), where VSync guarantees GPU completion.
+	texBindGrp, err := r.blitPipeline.BlitToSwapchain(encoder, ws.currentView, ws.composView, ws.width, ws.height)
+	if err != nil {
+		slog.Error("gogpu: blit to swapchain failed", "err", err)
+		return
+	}
+	ws.pendingBlitBindGroup = texBindGrp
 }
 
 // Clear defers a clear command to be applied at the start of the next render pass.
@@ -693,22 +1254,26 @@ func (ws *RenderTarget) clear(red, green, blue, alpha float64) {
 
 // flushClear applies any pending clear immediately as a standalone render pass.
 // Called by EndFrame if no draw calls consumed the pending clear.
-func (ws *RenderTarget) flushClear(device *wgpu.Device, r *Renderer) {
+func (ws *RenderTarget) flushClear(device *wgpu.Device, r *Renderer) bool {
 	if !ws.hasPendingClear || ws.currentView == nil {
-		return
+		return true
 	}
 
-	encoder, err := device.CreateCommandEncoder(&wgpu.CommandEncoderDescriptor{
-		Label: "Clear",
-	})
-	if err != nil {
-		return
+	encoder := ws.frameEncoder
+	shared := encoder != nil
+	if !shared {
+		var err error
+		encoder, err = device.CreateCommandEncoder(&wgpu.CommandEncoderDescriptor{Label: "Clear"})
+		if err != nil {
+			slog.Error("create clear command encoder failed", "err", err)
+			return false
+		}
 	}
 
 	renderPass, err := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{
 			{
-				View:       ws.currentView,
+				View:       ws.renderView(),
 				LoadOp:     gputypes.LoadOpClear,
 				StoreOp:    gputypes.StoreOpStore,
 				ClearValue: ws.pendingClearColor,
@@ -716,21 +1281,38 @@ func (ws *RenderTarget) flushClear(device *wgpu.Device, r *Renderer) {
 		},
 	})
 	if err != nil {
-		return
+		if shared {
+			ws.discardFrameEncoder()
+		} else {
+			encoder.DiscardEncoding()
+		}
+		slog.Error("begin clear render pass failed", "err", err)
+		return false
 	}
 
 	if err := renderPass.End(); err != nil {
-		return
+		if shared {
+			ws.discardFrameEncoder()
+		} else {
+			encoder.DiscardEncoding()
+		}
+		slog.Error("end clear render pass failed", "err", err)
+		return false
+	}
+	ws.hasPendingClear = false
+	ws.frameCleared = true
+	if shared {
+		return true
 	}
 
 	commands, err := encoder.Finish()
 	if err != nil {
-		return
+		slog.Error("finish clear command encoder failed", "err", err)
+		return false
 	}
 
 	r.submitTracked(commands)
-	ws.hasPendingClear = false
-	ws.frameCleared = true
+	return true
 }
 
 // submitTracked submits commands with non-blocking tracking.
@@ -794,11 +1376,11 @@ func (r *Renderer) initTrianglePipeline() error {
 		Layout: r.trianglePipelineLayout,
 		Vertex: wgpu.VertexState{
 			Module:     r.triangleShader,
-			EntryPoint: "vs_main",
+			EntryPoint: shaderEntryVS,
 		},
 		Fragment: &wgpu.FragmentState{
 			Module:     r.triangleShader,
-			EntryPoint: "fs_main",
+			EntryPoint: shaderEntryFS,
 			Targets: []gputypes.ColorTargetState{
 				{
 					Format:    r.surfaceFormat,
@@ -839,7 +1421,7 @@ func (r *Renderer) DrawTriangle(clearR, clearG, clearB, clearA float64) error {
 	renderPass, err := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{
 			{
-				View:       ws.currentView,
+				View:       ws.renderView(),
 				LoadOp:     gputypes.LoadOpClear,
 				StoreOp:    gputypes.StoreOpStore,
 				ClearValue: gputypes.Color{R: clearR, G: clearG, B: clearB, A: clearA},
@@ -851,7 +1433,7 @@ func (r *Renderer) DrawTriangle(clearR, clearG, clearB, clearA float64) error {
 	}
 
 	renderPass.SetPipeline(r.trianglePipeline)
-	renderPass.Draw(3, 1, 0, 0) // 3 vertices, 1 instance
+	renderPass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 
 	if err := renderPass.End(); err != nil {
 		return fmt.Errorf("gogpu: failed to end render pass: %w", err)
@@ -947,7 +1529,7 @@ func (r *Renderer) initTexturedQuadPipeline() error {
 		Layout: r.texQuadPipelineLayout,
 		Vertex: wgpu.VertexState{
 			Module:     r.texQuadShader,
-			EntryPoint: "vs_main",
+			EntryPoint: shaderEntryVS,
 		},
 		Primitive: gputypes.PrimitiveState{
 			Topology: gputypes.PrimitiveTopologyTriangleList,
@@ -955,7 +1537,7 @@ func (r *Renderer) initTexturedQuadPipeline() error {
 		},
 		Fragment: &wgpu.FragmentState{
 			Module:     r.texQuadShader,
-			EntryPoint: "fs_main",
+			EntryPoint: shaderEntryFS,
 			Targets: []gputypes.ColorTargetState{
 				{
 					Format:    r.surfaceFormat,
@@ -1129,7 +1711,7 @@ func (r *Renderer) drawTexturedQuad(tex *Texture, opts DrawTextureOptions) error
 	renderPass, err := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{
 			{
-				View:       ws.currentView,
+				View:       ws.renderView(),
 				LoadOp:     loadOp,
 				StoreOp:    gputypes.StoreOpStore,
 				ClearValue: clearValue,
@@ -1146,7 +1728,7 @@ func (r *Renderer) drawTexturedQuad(tex *Texture, opts DrawTextureOptions) error
 	renderPass.SetBindGroup(1, texBindGroup, nil)
 
 	// Draw 6 vertices (2 triangles for quad)
-	renderPass.Draw(6, 1, 0, 0)
+	renderPass.Draw(gputypes.DrawArgs{VertexCount: 6, InstanceCount: 1})
 
 	// End render pass
 	if err := renderPass.End(); err != nil {
@@ -1181,15 +1763,15 @@ func (r *Renderer) drawTexturedQuad(tex *Texture, opts DrawTextureOptions) error
 // without re-creation.
 //
 // Not safe for concurrent use with the same renderer instance.
-//
-// TODO: expose server-side / headless image generation via App or Context so
-// callers outside this package can use it without reaching into Renderer.
 func (r *Renderer) RenderToImage(width, height int, draw func(*Context)) (*image.RGBA, error) {
 	if r.device == nil {
 		return nil, errors.New("gogpu: RenderToImage: device not initialized")
 	}
 	if width <= 0 || height <= 0 {
 		return nil, fmt.Errorf("gogpu: RenderToImage: invalid size %dx%d", width, height)
+	}
+	if draw == nil {
+		return nil, errors.New("gogpu: RenderToImage: draw callback is nil")
 	}
 
 	// Use the renderer's surface format so existing pipelines (triangle, texquad)
@@ -1228,13 +1810,12 @@ func (r *Renderer) RenderToImage(width, height int, draw func(*Context)) (*image
 		frameStarted: true,
 	}
 	r.primary = synthetic
+	defer func() { r.primary = prevPrimary }()
 
 	ctx := newContext(r, 1.0)
 	draw(ctx)
 	// Flush Context.Clear() calls that were deferred as a pending clear.
 	synthetic.flushClear(r.device, r)
-
-	r.primary = prevPrimary
 
 	return r.renderToImageReadback(offscreen, texFmt, width, height)
 }
@@ -1377,8 +1958,11 @@ func (r *Renderer) Destroy() {
 		_ = r.device.WaitIdle()
 	}
 
-	// Wait for all tracked submissions and free their command buffers.
-	r.tracker.waitAll(r.device)
+	// Wait for all tracked submissions and free their command buffers. A
+	// partially initialized headless renderer may not have a device yet.
+	if r.device != nil {
+		r.tracker.waitAll(r.device)
+	}
 
 	// Destroy primary window surface (per-window resources first).
 	if r.primary != nil {
@@ -1390,6 +1974,8 @@ func (r *Renderer) Destroy() {
 		bg.Release()
 		delete(r.texBindGroupCache, view)
 	}
+
+	r.destroyBlitPipeline()
 
 	// Release textured quad pipeline resources (reverse order)
 	if r.texQuadUniformBindGrp != nil {
@@ -1458,8 +2044,16 @@ func (r *Renderer) ReleaseInstance() {
 	}
 }
 
+// destroyBlitPipeline releases the dedicated composition blit pipeline
+// resources. Extracted from Destroy to keep cyclomatic complexity bounded.
+func (r *Renderer) destroyBlitPipeline() {
+	r.blitPipeline.Destroy()
+}
+
 // destroy releases all resources owned by this window surface.
 func (ws *RenderTarget) destroy() {
+	ws.discardFrameEncoder()
+	ws.releaseCompositionTexture()
 	if ws.currentView != nil {
 		ws.currentView.Release()
 		ws.currentView = nil

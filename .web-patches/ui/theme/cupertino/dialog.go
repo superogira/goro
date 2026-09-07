@@ -73,6 +73,15 @@ func (p DialogPainter) paintActions(canvas widget.Canvas, ps dialog.PaintState, 
 		return
 	}
 
+	// Use pre-computed ActionRects when available (ADR-034 Phase 4).
+	if len(ps.ActionRects) == len(ps.Actions) {
+		for i, action := range ps.Actions {
+			canvas.DrawText(action.Label, ps.ActionRects[i], cupDlgActionFontSize, colors.ActionFg, false, cupDlgTextAlignCenter)
+		}
+		return
+	}
+
+	// Legacy fallback.
 	x := ps.Bounds.Max.X - cupDlgPadding
 	y := ps.Bounds.Max.Y - cupDlgPadding - cupDlgActionHeight
 
@@ -117,7 +126,20 @@ const (
 	cupDlgFocusRingOffset float32 = 3
 	cupDlgFocusRingStroke float32 = 2.5
 	cupDlgFocusRingAlpha  float32 = 0.6
+	cupDlgMaxWidth        float32 = 480
 )
 
-// Compile-time check that DialogPainter implements Painter.
-var _ dialog.Painter = DialogPainter{}
+// DialogPadding returns the Cupertino dialog padding.
+func (DialogPainter) DialogPadding() float32 { return cupDlgPadding }
+
+// DialogTitleHeight returns the Cupertino dialog title height.
+func (DialogPainter) DialogTitleHeight() float32 { return cupDlgTitleHeight }
+
+// DialogMaxWidth returns the Cupertino default maximum dialog width.
+func (DialogPainter) DialogMaxWidth() float32 { return cupDlgMaxWidth }
+
+// Compile-time checks.
+var (
+	_ dialog.Painter       = DialogPainter{}
+	_ dialog.LayoutMetrics = DialogPainter{}
+)

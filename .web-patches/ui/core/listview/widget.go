@@ -7,6 +7,7 @@ import (
 	"github.com/gogpu/ui/core/scrollview"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -28,6 +29,9 @@ type Widget struct {
 	widget.WidgetBase
 	cfg     config
 	painter Painter
+
+	// Gesture recognizer for item click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
 
 	// Internal scroll view (composition).
 	scroll  *scrollview.Widget
@@ -109,6 +113,18 @@ func New(opts ...Option) *Widget {
 	// Flutter: RenderObject.adoptChild sets parent on each child.
 	w.scroll.SetParent(w)
 
+	// Create ClickRecognizer for item click handling (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			// Item click is handled by content mouse event dispatch.
+			// The recognizer participates in the arena for this widget.
+		},
+	})
+
 	return w
 }
 
@@ -154,7 +170,7 @@ func (w *Widget) Layout(ctx widget.Context, constraints geometry.Constraints) ge
 
 	// Layout the internal scroll view with concrete (non-infinite) constraints.
 	svConstraints := geometry.Tight(size)
-	w.scroll.Layout(ctx, svConstraints)
+	widget.LayoutChild(w.scroll, ctx, svConstraints)
 
 	return size
 }
@@ -227,10 +243,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 
 	// Bind item count signals.
 	if w.cfg.readonlyItemCountSignal != nil {
-		b := state.BindToScheduler(w.cfg.readonlyItemCountSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyItemCountSignal, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.itemCountSignal != nil {
-		b := state.BindToScheduler(w.cfg.itemCountSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.itemCountSignal, w, sched)
 		w.AddBinding(b)
 	}
 
@@ -259,9 +275,23 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the list view is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.clickRec != nil {
+		w.clickRec.Dispose()
+	}
 	// Unmount internal scroll view.
 	w.scroll.Unmount()
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// ListView is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
 }
 
 // --- Public API ---
@@ -429,8 +459,9 @@ const (
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
-	_ a11y.Accessible  = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ a11y.Accessible      = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

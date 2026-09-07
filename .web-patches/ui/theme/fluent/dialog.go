@@ -72,6 +72,15 @@ func (p DialogPainter) paintActions(canvas widget.Canvas, ps dialog.PaintState, 
 		return
 	}
 
+	// Use pre-computed ActionRects when available (ADR-034 Phase 4).
+	if len(ps.ActionRects) == len(ps.Actions) {
+		for i, action := range ps.Actions {
+			canvas.DrawText(action.Label, ps.ActionRects[i], flDialogActionFontSize, colors.ActionFg, false, flDialogTextAlignCenter)
+		}
+		return
+	}
+
+	// Legacy fallback.
 	x := ps.Bounds.Max.X - flDialogPadding
 	y := ps.Bounds.Max.Y - flDialogPadding - flDialogActionHeight
 
@@ -99,6 +108,7 @@ const (
 	flDialogActionCharWidth float32 = 8
 	flDialogActionPaddingX  float32 = 12
 	flDialogActionSpacing   float32 = 8
+	flDialogMaxWidth        float32 = 560
 	flDialogTextAlignLeft           = widget.TextAlignLeft
 	flDialogTextAlignCenter         = widget.TextAlignCenter
 )
@@ -115,5 +125,17 @@ var flDefaultDialogColors = dialog.DialogColorScheme{
 	ActionBg: DefaultAccentColor,
 }
 
-// Compile-time check that DialogPainter implements Painter.
-var _ dialog.Painter = DialogPainter{}
+// DialogPadding returns the Fluent dialog padding.
+func (DialogPainter) DialogPadding() float32 { return flDialogPadding }
+
+// DialogTitleHeight returns the Fluent dialog title height.
+func (DialogPainter) DialogTitleHeight() float32 { return flDialogTitleHeight }
+
+// DialogMaxWidth returns the Fluent default maximum dialog width.
+func (DialogPainter) DialogMaxWidth() float32 { return flDialogMaxWidth }
+
+// Compile-time checks.
+var (
+	_ dialog.Painter       = DialogPainter{}
+	_ dialog.LayoutMetrics = DialogPainter{}
+)

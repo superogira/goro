@@ -63,7 +63,7 @@ func (e *ExpandedWidget) Child() widget.Widget { return e.child }
 
 // Layout delegates to the wrapped child and stores the resulting bounds.
 func (e *ExpandedWidget) Layout(ctx widget.Context, constraints geometry.Constraints) geometry.Size {
-	size := e.child.Layout(ctx, constraints)
+	size := widget.LayoutChild(e.child, ctx, constraints)
 	e.child.(interface{ SetBounds(geometry.Rect) }).SetBounds(
 		geometry.FromPointSize(geometry.Point{}, size),
 	)

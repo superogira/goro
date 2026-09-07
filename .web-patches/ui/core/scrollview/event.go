@@ -332,6 +332,10 @@ func setScroll(w *Widget, ctx widget.Context, rawX, rawY float32) {
 	ctx.InvalidateRect(w.Bounds())
 }
 
+// Gesture-based scroll helpers removed: ScrollView does not implement
+// GestureAware. Scrollbar drag is handled by Event() handler
+// (MousePress/Move/Release) with proper scrollbar hit-testing.
+
 // clampScroll clamps a scroll offset to [0, maxScroll].
 func clampScroll(offset, contentSize, viewportSize float32) float32 {
 	maxScroll := contentSize - viewportSize

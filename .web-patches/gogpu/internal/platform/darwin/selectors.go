@@ -43,6 +43,7 @@ var selectors struct {
 	deminiaturize                            SEL
 	zoom                                     SEL
 	setFrame                                 SEL
+	setFrameOrigin                           SEL
 	frame                                    SEL
 	contentRectForFrameRect                  SEL
 	frameRectForContentRect                  SEL
@@ -68,6 +69,9 @@ var selectors struct {
 	// NSWindow titlebar transparency / title visibility
 	setTitlebarAppearsTransparent SEL
 	setTitleVisibility            SEL
+	setOpaque                     SEL // NSWindow.setOpaque: / CALayer.setOpaque:
+	setHasShadow                  SEL // NSWindow.setHasShadow:
+	setBackgroundColor            SEL // NSWindow.setBackgroundColor:
 
 	// NSView - View management
 	setWantsLayer   SEL
@@ -102,6 +106,7 @@ var selectors struct {
 
 	// NSColor class methods
 	labelColor SEL
+	clearColor SEL
 
 	// CALayer - Contents (for software blitting)
 	setContents SEL
@@ -215,8 +220,17 @@ var selectors struct {
 	setTabbingIdentifier SEL
 
 	// Window size constraints
-	setMinSize SEL
-	setMaxSize SEL
+	setMinSize     SEL
+	setMaxSize     SEL
+	setContentSize SEL
+
+	// NSDragging protocol (drag-and-drop)
+	draggingLocation        SEL
+	draggingPasteboard      SEL
+	registerForDraggedTypes SEL
+	propertyListForType     SEL
+	count                   SEL // NSArray count
+	objectAtIndex           SEL // NSArray objectAtIndex:
 }
 
 // classes holds cached class references.
@@ -283,6 +297,7 @@ func initSelectors() {
 		selectors.deminiaturize = RegisterSelector("deminiaturize:")
 		selectors.zoom = RegisterSelector("zoom:")
 		selectors.setFrame = RegisterSelector("setFrame:display:")
+		selectors.setFrameOrigin = RegisterSelector("setFrameOrigin:")
 		selectors.frame = RegisterSelector("frame")
 		selectors.contentRectForFrameRect = RegisterSelector("contentRectForFrameRect:")
 		selectors.frameRectForContentRect = RegisterSelector("frameRectForContentRect:")
@@ -306,6 +321,9 @@ func initSelectors() {
 		selectors.windowDidResize = RegisterSelector("windowDidResize:")
 		selectors.setTitlebarAppearsTransparent = RegisterSelector("setTitlebarAppearsTransparent:")
 		selectors.setTitleVisibility = RegisterSelector("setTitleVisibility:")
+		selectors.setOpaque = RegisterSelector("setOpaque:")
+		selectors.setHasShadow = RegisterSelector("setHasShadow:")
+		selectors.setBackgroundColor = RegisterSelector("setBackgroundColor:")
 
 		// NSView
 		selectors.setWantsLayer = RegisterSelector("setWantsLayer:")
@@ -340,6 +358,7 @@ func initSelectors() {
 
 		// NSColor class methods
 		selectors.labelColor = RegisterSelector("labelColor")
+		selectors.clearColor = RegisterSelector("clearColor")
 
 		// CALayer - Contents
 		selectors.setContents = RegisterSelector("setContents:")
@@ -452,9 +471,22 @@ func initSelectors() {
 		selectors.accessibilityDisplayShouldIncreaseContrast = RegisterSelector(
 			"accessibilityDisplayShouldIncreaseContrast")
 
+		// TabbingMode (macOS 10.12+)
+		selectors.setTabbingMode = RegisterSelector("setTabbingMode:")
+		selectors.setTabbingIdentifier = RegisterSelector("setTabbingIdentifier:")
+
 		// Window size constraints
 		selectors.setMinSize = RegisterSelector("setMinSize:")
 		selectors.setMaxSize = RegisterSelector("setMaxSize:")
+		selectors.setContentSize = RegisterSelector("setContentSize:")
+
+		// NSDragging protocol (drag-and-drop)
+		selectors.draggingLocation = RegisterSelector("draggingLocation")
+		selectors.draggingPasteboard = RegisterSelector("draggingPasteboard")
+		selectors.registerForDraggedTypes = RegisterSelector("registerForDraggedTypes:")
+		selectors.propertyListForType = RegisterSelector("propertyListForType:")
+		selectors.count = RegisterSelector("count")
+		selectors.objectAtIndex = RegisterSelector("objectAtIndex:")
 	})
 }
 

@@ -34,6 +34,9 @@ func (p *browserPlatform) Init() error {
 // CreateWindow creates a browserWindow backed by a <canvas> element.
 // If no <canvas> exists in the DOM, one is created and appended to the body.
 func (p *browserPlatform) CreateWindow(config Config) (PlatformWindow, error) {
+	// TODO(#361, ADR-060): Browser transparency — CSS transparency (e.g.
+	// canvas background) is not implemented yet; Config.Transparent is
+	// silently ignored.
 	doc := js.Global().Get("document")
 
 	// Find or create a <canvas> element.
@@ -182,6 +185,12 @@ func (p *browserPlatform) SubpixelLayout() gpucontext.SubpixelLayout {
 	return gpucontext.SubpixelNone
 }
 
+// FontSmoothing returns FontSmoothingGrayscale on browser — text rendering
+// is controlled by the browser engine, not the application.
+func (p *browserPlatform) FontSmoothing() gpucontext.FontSmoothing {
+	return gpucontext.FontSmoothingGrayscale
+}
+
 // SetAppName is a no-op on browser — the page title is set via document.title.
 func (p *browserPlatform) SetAppName(_ string) {}
 
@@ -256,6 +265,7 @@ type browserWindow struct {
 	// page load (it auto-releases when the tab hides; the visibilitychange
 	// listener re-requests it).
 	wakeLockTried bool
+	lastScale     float64 // DPI scale change detection (ADR-059)
 
 	// JS callbacks stored for cleanup.
 	jsCallbacks []js.Func
@@ -728,8 +738,11 @@ func (w *browserWindow) PrepareFrame() PrepareFrameResult {
 		w.canvas.Set("height", physH)
 	}
 
+	scaleChanged := w.lastScale != 0 && w.lastScale != dpr
+	w.lastScale = dpr
+
 	return PrepareFrameResult{
-		ScaleChanged:   changed,
+		ScaleChanged:   changed || scaleChanged,
 		ScaleFactor:    dpr,
 		PhysicalWidth:  uint32(physW),
 		PhysicalHeight: uint32(physH),
@@ -758,6 +771,20 @@ func (w *browserWindow) SetMinSize(_, _ int) {}
 
 // SetMaxSize is a no-op on browser — window sizing is controlled by the page.
 func (w *browserWindow) SetMaxSize(_, _ int) {}
+
+// RequestSize sets the canvas element dimensions to the given logical size (DIP).
+// Adjusts both the CSS layout size and the canvas drawing buffer for HiDPI.
+func (w *browserWindow) RequestSize(width, height int) {
+	dpr := js.Global().Get("devicePixelRatio").Float()
+	if dpr <= 0 {
+		dpr = 1.0
+	}
+	style := w.canvas.Get("style")
+	style.Set("width", js.ValueOf(fmt.Sprintf("%dpx", width)))
+	style.Set("height", js.ValueOf(fmt.Sprintf("%dpx", height)))
+	w.canvas.Set("width", int(float64(width)*dpr))
+	w.canvas.Set("height", int(float64(height)*dpr))
+}
 
 // SetFrameless is a no-op on browser — there's no OS window chrome.
 func (w *browserWindow) SetFrameless(_ bool) {}
@@ -845,6 +872,12 @@ func (w *browserWindow) Close() { w.shouldClose = true }
 // Show is a no-op on browser -- the canvas is always visible.
 func (w *browserWindow) Show() {}
 
+// Hide is a no-op on browser — the canvas is always visible.
+func (w *browserWindow) Hide() {}
+
+// SetPosition is a no-op on browser — the page position is fixed.
+func (w *browserWindow) SetPosition(_, _ int) {}
+
 // SyncFrame is a no-op — browser compositing is handled by requestAnimationFrame.
 func (w *browserWindow) SyncFrame() {}
 
@@ -856,6 +889,25 @@ func (w *browserWindow) CursorMode() int { return 0 }
 
 // SetModalFrameCallback is a no-op — browser has no modal resize loops.
 func (w *browserWindow) SetModalFrameCallback(_ func()) {}
+
+// StartDrag initiates an outgoing drag via HTML5 Drag and Drop API.
+// In the browser, drag operations require user gesture context (dragstart event).
+// Since we cannot programmatically initiate a drag without a native dragstart,
+// this implementation sets up the data transfer so that the next native dragstart
+// on the canvas will carry the file paths. The done callback fires immediately
+// with DragCancelled because HTML5 drag requires the browser's own gesture.
+func (w *browserWindow) StartDrag(paths []string, done func(DragResult)) {
+	// HTML5 Drag and Drop requires the dragstart event to originate from the
+	// browser's native event handling. We cannot programmatically start a drag
+	// from Go/WASM. The proper pattern is to listen for dragstart on the canvas
+	// and populate dataTransfer there.
+	//
+	// For now, we report cancellation since programmatic drag initiation is not
+	// possible in the browser security model.
+	if done != nil {
+		done(DragCancelled)
+	}
+}
 
 // Destroy releases JS callbacks.
 func (w *browserWindow) Destroy() {

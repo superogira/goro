@@ -55,6 +55,20 @@ func (c *CommandEncoder) CopyTextureToTexture(_, _ hal.Texture, _ []hal.TextureC
 // ResolveQuerySet is a no-op.
 func (c *CommandEncoder) ResolveQuerySet(_ hal.QuerySet, _, _ uint32, _ hal.Buffer, _ uint64) {}
 
+// BuildAccelerationStructures is a no-op.
+func (c *CommandEncoder) BuildAccelerationStructures(_ []hal.BuildAccelerationStructureDescriptor) {}
+
+// PlaceAccelerationStructureBarrier is a no-op.
+func (c *CommandEncoder) PlaceAccelerationStructureBarrier(_ hal.AccelerationStructureBarrier) {}
+
+// CopyAccelerationStructure is a no-op.
+func (c *CommandEncoder) CopyAccelerationStructure(_, _ hal.AccelerationStructure, _ gputypes.AccelerationStructureCopyMode) {
+}
+
+// ReadAccelerationStructureCompactSize is a no-op.
+func (c *CommandEncoder) ReadAccelerationStructureCompactSize(_ hal.AccelerationStructure, _ hal.Buffer, _ uint64) {
+}
+
 // BeginRenderPass returns a noop render pass encoder.
 func (c *CommandEncoder) BeginRenderPass(_ *hal.RenderPassDescriptor) hal.RenderPassEncoder {
 	return &RenderPassEncoder{}
@@ -84,10 +98,10 @@ func (r *RenderPassEncoder) SetVertexBuffer(_ uint32, _ hal.Buffer, _ uint64) {}
 func (r *RenderPassEncoder) SetIndexBuffer(_ hal.Buffer, _ gputypes.IndexFormat, _ uint64) {}
 
 // SetViewport is a no-op.
-func (r *RenderPassEncoder) SetViewport(_, _, _, _, _, _ float32) {}
+func (r *RenderPassEncoder) SetViewport(_ gputypes.Viewport) {}
 
 // SetScissorRect is a no-op.
-func (r *RenderPassEncoder) SetScissorRect(_, _, _, _ uint32) {}
+func (r *RenderPassEncoder) SetScissorRect(_ gputypes.ScissorRect) {}
 
 // SetBlendConstant is a no-op.
 func (r *RenderPassEncoder) SetBlendConstant(_ *gputypes.Color) {}
@@ -96,16 +110,24 @@ func (r *RenderPassEncoder) SetBlendConstant(_ *gputypes.Color) {}
 func (r *RenderPassEncoder) SetStencilReference(_ uint32) {}
 
 // Draw is a no-op.
-func (r *RenderPassEncoder) Draw(_, _, _, _ uint32) {}
+func (r *RenderPassEncoder) Draw(_ gputypes.DrawArgs) {}
 
 // DrawIndexed is a no-op.
-func (r *RenderPassEncoder) DrawIndexed(_, _, _ uint32, _ int32, _ uint32) {}
+func (r *RenderPassEncoder) DrawIndexed(_ gputypes.DrawIndexedArgs) {}
 
 // DrawIndirect is a no-op.
-func (r *RenderPassEncoder) DrawIndirect(_ hal.Buffer, _ uint64) {}
+func (r *RenderPassEncoder) DrawIndirect(_ hal.Buffer, _ uint64, _ uint32) {}
 
 // DrawIndexedIndirect is a no-op.
-func (r *RenderPassEncoder) DrawIndexedIndirect(_ hal.Buffer, _ uint64) {}
+func (r *RenderPassEncoder) DrawIndexedIndirect(_ hal.Buffer, _ uint64, _ uint32) {}
+
+// DrawIndirectCount is a no-op.
+func (r *RenderPassEncoder) DrawIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
+
+// DrawIndexedIndirectCount is a no-op.
+func (r *RenderPassEncoder) DrawIndexedIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
 
 // ExecuteBundle is a no-op.
 func (r *RenderPassEncoder) ExecuteBundle(_ hal.RenderBundle) {}

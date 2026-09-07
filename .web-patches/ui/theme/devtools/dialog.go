@@ -73,6 +73,15 @@ func (p DialogPainter) paintActions(canvas widget.Canvas, ps dialog.PaintState, 
 		return
 	}
 
+	// Use pre-computed ActionRects when available (ADR-034 Phase 4).
+	if len(ps.ActionRects) == len(ps.Actions) {
+		for i, action := range ps.Actions {
+			canvas.DrawText(action.Label, ps.ActionRects[i], dtDialogActionFontSize, colors.ActionFg, false, dtDialogTextAlignCenter)
+		}
+		return
+	}
+
+	// Legacy fallback.
 	x := ps.Bounds.Max.X - dtDialogPadding
 	y := ps.Bounds.Max.Y - dtDialogPadding - dtDialogActionHeight
 
@@ -100,6 +109,7 @@ const (
 	dtDialogActionCharWidth float32 = 7
 	dtDialogActionPaddingX  float32 = 12
 	dtDialogActionSpacing   float32 = 8
+	dtDialogMaxWidth        float32 = 480
 	dtDialogTextAlignLeft           = widget.TextAlignLeft
 	dtDialogTextAlignCenter         = widget.TextAlignCenter
 )
@@ -116,5 +126,17 @@ var dtDefaultDialogColors = dialog.DialogColorScheme{
 	ActionBg: DefaultAccentColor,
 }
 
-// Compile-time check that DialogPainter implements Painter.
-var _ dialog.Painter = DialogPainter{}
+// DialogPadding returns the DevTools dialog padding.
+func (DialogPainter) DialogPadding() float32 { return dtDialogPadding }
+
+// DialogTitleHeight returns the DevTools dialog title height.
+func (DialogPainter) DialogTitleHeight() float32 { return dtDialogTitleHeight }
+
+// DialogMaxWidth returns the DevTools default maximum dialog width.
+func (DialogPainter) DialogMaxWidth() float32 { return dtDialogMaxWidth }
+
+// Compile-time checks.
+var (
+	_ dialog.Painter       = DialogPainter{}
+	_ dialog.LayoutMetrics = DialogPainter{}
+)

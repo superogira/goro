@@ -500,6 +500,16 @@ func (id ID) SendPtr(sel SEL, arg uintptr) ID {
 	return msgSend(id, sel, arg)
 }
 
+// SendPtrs sends a message with a variable number of pointer-sized arguments.
+// Objective-C uses pointer-sized registers for object, selector, integer, and
+// boolean arguments on the supported 64-bit macOS ABIs, so this helper is used
+// for selectors whose argument count is not covered by the fixed-arity helpers.
+// It is intentionally limited by msgSend to six arguments, which keeps all
+// call sites on the existing dynamically prepared FFI path.
+func (id ID) SendPtrs(sel SEL, args ...uintptr) ID {
+	return msgSend(id, sel, args...)
+}
+
 // Send5Ptr calls objc_msgSend with three additional pointer arguments.
 func (id ID) Send5Ptr(sel SEL, arg0, arg1, arg2 uintptr) ID {
 	if id == 0 || sel == 0 {
@@ -740,6 +750,140 @@ func (id ID) SendRect(sel SEL, rect NSRect) ID {
 
 	ret := ID(result)
 	return ret
+}
+
+// SendRectPtr sends a message with an NSRect and a pointer argument.
+// Used for -[NSDraggingItem setDraggingFrame:contents:], which returns void.
+// The ID return is the objc_msgSend register result and must be ignored for
+// void selectors.
+func (id ID) SendRectPtr(sel SEL, rect NSRect, arg uintptr) ID {
+	if id == 0 || sel == 0 {
+		return 0
+	}
+
+	if err := initRuntime(); err != nil {
+		return 0
+	}
+
+	argTypes := []*types.TypeDescriptor{
+		types.PointerTypeDescriptor, // self
+		types.PointerTypeDescriptor, // _cmd
+		nsRectType,                  // rect
+		types.PointerTypeDescriptor, // arg
+	}
+
+	cif := &types.CallInterface{}
+	err := ffi.PrepareCallInterface(
+		cif,
+		types.DefaultCall,
+		types.PointerTypeDescriptor,
+		argTypes,
+	)
+	if err != nil {
+		return 0
+	}
+
+	argBox := &struct {
+		self uintptr
+		sel  uintptr
+		rect NSRect
+		arg  uintptr
+	}{
+		self: uintptr(id),
+		sel:  uintptr(sel),
+		rect: rect,
+		arg:  arg,
+	}
+
+	argPtrs := []unsafe.Pointer{
+		unsafe.Pointer(&argBox.self),
+		unsafe.Pointer(&argBox.sel),
+		unsafe.Pointer(&argBox.rect),
+		unsafe.Pointer(&argBox.arg),
+	}
+
+	var result uintptr
+	_, err = ffi.CallFunction(
+		cif,
+		objcRT.objcMsgSend,
+		unsafe.Pointer(&result),
+		argPtrs,
+	)
+	if err != nil {
+		return 0
+	}
+
+	return ID(result)
+}
+
+// ConvertPointFromView calls -[NSView convertPoint:fromView:].
+// Pass fromView=0 (nil) to convert from window coordinates into the receiver.
+func (id ID) ConvertPointFromView(point NSPoint, fromView ID) NSPoint {
+	if id == 0 {
+		return point
+	}
+
+	if err := initRuntime(); err != nil {
+		return point
+	}
+
+	sel := RegisterSelector("convertPoint:fromView:")
+	if sel == 0 {
+		return point
+	}
+
+	argTypes := []*types.TypeDescriptor{
+		types.PointerTypeDescriptor, // self
+		types.PointerTypeDescriptor, // _cmd
+		nsPointType,                 // point
+		types.PointerTypeDescriptor, // fromView
+	}
+
+	cif := &types.CallInterface{}
+	err := ffi.PrepareCallInterface(
+		cif,
+		types.DefaultCall,
+		nsPointType,
+		argTypes,
+	)
+	if err != nil {
+		return point
+	}
+
+	argBox := &struct {
+		self     uintptr
+		sel      uintptr
+		point    NSPoint
+		fromView uintptr
+	}{
+		self:     uintptr(id),
+		sel:      uintptr(sel),
+		point:    point,
+		fromView: uintptr(fromView),
+	}
+
+	argPtrs := []unsafe.Pointer{
+		unsafe.Pointer(&argBox.self),
+		unsafe.Pointer(&argBox.sel),
+		unsafe.Pointer(&argBox.point),
+		unsafe.Pointer(&argBox.fromView),
+	}
+
+	// Result buffer sized to [4]float64 because goffi's handleHFAReturn always
+	// casts rvalue to *[4]float64 regardless of the actual element count, and
+	// Go 1.26's checkptr (enabled by -race) rejects a smaller allocation.
+	var result [4]float64
+	_, err = ffi.CallFunction(
+		cif,
+		objcMsgSendFn(nsPointType),
+		unsafe.Pointer(&result),
+		argPtrs,
+	)
+	if err != nil {
+		return point
+	}
+
+	return NSPoint{X: result[0], Y: result[1]}
 }
 
 // SendRectUintUintBool sends a message for initWithContentRect:styleMask:backing:defer:
@@ -1202,6 +1346,63 @@ func (id ID) SendSize(sel SEL, size NSSize) ID {
 
 	ret := ID(result)
 	return ret
+}
+
+// SendPoint sends a message with an NSPoint argument.
+func (id ID) SendPoint(sel SEL, point NSPoint) ID {
+	if id == 0 || sel == 0 {
+		return 0
+	}
+
+	if err := initRuntime(); err != nil {
+		return 0
+	}
+
+	argTypes := []*types.TypeDescriptor{
+		types.PointerTypeDescriptor, // self
+		types.PointerTypeDescriptor, // _cmd
+		nsPointType,                 // point
+	}
+
+	cif := &types.CallInterface{}
+	err := ffi.PrepareCallInterface(
+		cif,
+		types.DefaultCall,
+		types.PointerTypeDescriptor,
+		argTypes,
+	)
+	if err != nil {
+		return 0
+	}
+
+	argBox := &struct {
+		self  uintptr
+		sel   uintptr
+		point NSPoint
+	}{
+		self:  uintptr(id),
+		sel:   uintptr(sel),
+		point: point,
+	}
+
+	argPtrs := []unsafe.Pointer{
+		unsafe.Pointer(&argBox.self),
+		unsafe.Pointer(&argBox.sel),
+		unsafe.Pointer(&argBox.point),
+	}
+
+	var result uintptr
+	_, err = ffi.CallFunction(
+		cif,
+		objcRT.objcMsgSend,
+		unsafe.Pointer(&result),
+		argPtrs,
+	)
+	if err != nil {
+		return 0
+	}
+
+	return ID(result)
 }
 
 // AllocateClassPair creates a new ObjC class as a subclass of superclass.

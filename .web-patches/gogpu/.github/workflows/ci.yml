@@ -110,6 +110,30 @@ jobs:
         flags: unittests
         name: codecov-gogpu
 
+  # Deterministic headless rendering against committed software fixtures.
+  # Keep this separate from the broad matrix so a missing fixture or an
+  # accidental skip cannot make the visual contract appear green.
+  golden-tests:
+    name: Golden Image Tests
+    runs-on: ubuntu-latest
+    env:
+      GOGPU_GRAPHICS_API: software
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run golden tests
+      run: go test -count=1 -run '^TestGolden' ./...
+
   # Linting
   lint:
     name: Lint
@@ -224,3 +248,19 @@ jobs:
 
         [ $WARNINGS -gt 0 ] && echo "::warning::$WARNINGS ecosystem dep(s) outdated. Run: go get <dep>@latest"
         exit 0  # Non-blocking
+
+    - name: Verify go.mod is tidy
+      run: |
+        go mod tidy
+        if ! git diff --exit-code go.mod go.sum; then
+          echo "::error::go.mod/go.sum are not tidy — run 'go mod tidy' and commit"
+          exit 1
+        fi
+
+    - name: Verify compositor unidirectional deps
+      run: |
+        if grep -rn '"github.com/gogpu/gogpu"' internal/compositor/*.go 2>/dev/null; then
+          echo "::error::internal/compositor imports root package — circular dependency!"
+          exit 1
+        fi
+        echo "✅ internal/compositor has no reverse imports"

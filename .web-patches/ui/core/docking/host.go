@@ -3,6 +3,7 @@ package docking
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/widget"
 )
 
@@ -88,6 +89,9 @@ type Host struct {
 	cfg     hostConfig
 	painter Painter
 
+	// Gesture recognizer for zone tab click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
+
 	// Zone groups, indexed by Zone constant.
 	zones [zoneCount]group
 
@@ -126,6 +130,17 @@ func NewHost(opts ...HostOption) *Host {
 			ps.SetParent(h)
 		}
 	}
+
+	// Create ClickRecognizer for zone tab click handling (ADR-049).
+	h.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			// Zone tab click is handled by handleZoneTabEvents.
+		},
+	})
 
 	return h
 }
@@ -263,7 +278,7 @@ func (h *Host) Layout(ctx widget.Context, constraints geometry.Constraints) geom
 	if h.cfg.centerContent != nil {
 		centerRect := rects[Center]
 		cc := geometry.Tight(centerRect.Size())
-		h.cfg.centerContent.Layout(ctx, cc)
+		widget.LayoutChild(h.cfg.centerContent, ctx, cc)
 		if setter, ok := h.cfg.centerContent.(interface{ SetBounds(geometry.Rect) }); ok {
 			setter.SetBounds(centerRect)
 		}
@@ -376,7 +391,7 @@ func (h *Host) layoutZone(ctx widget.Context, z Zone, zoneRect geometry.Rect) {
 	}
 
 	cc := geometry.Tight(contentRect.Size())
-	panel.Content().Layout(ctx, cc)
+	widget.LayoutChild(panel.Content(), ctx, cc)
 	if setter, ok := panel.Content().(interface{ SetBounds(geometry.Rect) }); ok {
 		setter.SetBounds(contentRect)
 	}
@@ -428,7 +443,7 @@ func (h *Host) handleZoneTabEvents(ctx widget.Context, e event.Event) bool {
 
 	switch me.MouseType {
 	case event.MousePress:
-		return h.handleTabPress(ctx, me)
+		return h.handleTabPress(me)
 	case event.MouseMove:
 		return h.handleTabMove(ctx, me)
 	case event.MouseLeave:
@@ -439,7 +454,7 @@ func (h *Host) handleZoneTabEvents(ctx widget.Context, e event.Event) bool {
 }
 
 // handleTabPress handles mouse clicks on zone tab headers.
-func (h *Host) handleTabPress(ctx widget.Context, me *event.MouseEvent) bool {
+func (h *Host) handleTabPress(me *event.MouseEvent) bool {
 	if me.Button != event.ButtonLeft {
 		return false
 	}
@@ -461,7 +476,7 @@ func (h *Host) handleTabPress(ctx widget.Context, me *event.MouseEvent) bool {
 				continue
 			}
 			if ts.CloseButtonBounds.Contains(me.Position) {
-				h.closePanel(ctx, z, i)
+				h.closePanel(z, i)
 				return true
 			}
 		}
@@ -471,8 +486,8 @@ func (h *Host) handleTabPress(ctx widget.Context, me *event.MouseEvent) bool {
 			ts := &h.tabStates[z][i]
 			if ts.Bounds.Contains(me.Position) {
 				h.zones[z].activeIdx = i
-				// ADR-028: layout change — active panel switch changes zone content.
-				ctx.Invalidate()
+				// ADR-032: layout change — active panel switch changes zone content.
+				h.MarkNeedsLayout()
 				return true
 			}
 		}
@@ -530,7 +545,7 @@ func (h *Host) handleTabLeave(ctx widget.Context) bool {
 }
 
 // closePanel removes the panel at index idx from zone z.
-func (h *Host) closePanel(ctx widget.Context, z Zone, idx int) {
+func (h *Host) closePanel(z Zone, idx int) {
 	g := &h.zones[z]
 	if idx < 0 || idx >= len(g.panels) {
 		return
@@ -543,8 +558,8 @@ func (h *Host) closePanel(ctx widget.Context, z Zone, idx int) {
 		h.cfg.onPanelClose(panel, z)
 	}
 
-	// ADR-028: layout change — panel removed, zone layout changes.
-	ctx.Invalidate()
+	// ADR-032: layout change — panel removed, zone layout changes.
+	h.MarkNeedsLayout()
 }
 
 // updateTabStates refreshes tab states for a zone from the current panels.
@@ -725,5 +740,35 @@ const (
 	defaultHostHeight float32 = 600
 )
 
+// GestureHitTest returns the gesture recognizers for a pointer event at pos
+// (widget-local coordinates).
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+//
+// Docking host is a container widget — returns recognizers ONLY when pos is
+// within a zone tab bar area. Content-area clicks return nil so child
+// widgets' recognizers are the sole participants in the gesture arena.
+func (h *Host) GestureHitTest(pos geometry.Point) []gesture.Recognizer {
+	if h.clickRec == nil {
+		return nil
+	}
+	// Zone bounds are stored in parent-relative coordinates (include
+	// h.Bounds().Min offset). Convert pos to parent-relative for comparison.
+	origin := h.Bounds().Min
+	parentPos := geometry.Pt(pos.X+origin.X, pos.Y+origin.Y)
+	for z := Zone(0); z < zoneCount; z++ {
+		if z == Center || h.zones[z].isEmpty() {
+			continue
+		}
+		tabBar := zoneTabBarRect(h.zones[z].bounds)
+		if tabBar.Contains(parentPos) {
+			return []gesture.Recognizer{h.clickRec}
+		}
+	}
+	return nil
+}
+
 // Verify Host implements required interfaces at compile time.
-var _ widget.Widget = (*Host)(nil)
+var (
+	_ widget.Widget        = (*Host)(nil)
+	_ gesture.GestureAware = (*Host)(nil)
+)

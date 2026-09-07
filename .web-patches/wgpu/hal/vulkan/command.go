@@ -12,6 +12,7 @@ import (
 	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/hal"
 	"github.com/gogpu/wgpu/hal/vulkan/vk"
+	"github.com/gogpu/wgpu/internal/indirect"
 )
 
 // CommandBuffer holds a recorded Vulkan command buffer.
@@ -82,6 +83,25 @@ type CommandEncoder struct {
 
 	label       string
 	poolManaged bool // true when managed by wgpu-level encoder pool
+
+	// ADR-060: Inline present barrier optimization.
+	// Tracks the swapchain image targeted by BeginRenderPass so that
+	// EndEncoding can inject a pipeline barrier (COLOR_ATTACHMENT_OPTIMAL
+	// -> PRESENT_SRC_KHR) into the SAME command buffer, eliminating the
+	// separate vkQueueSubmit that ensurePresentLayout would otherwise need.
+	// Set by BeginRenderPass when a swapchain view is used; cleared by
+	// EndEncoding after the barrier is injected (or if no swapchain was used).
+	//
+	// For multi-submit frames (e.g. g3d + gg), each Submit's EndEncoding
+	// injects the barrier, and the next Submit's BeginRenderPass inserts a
+	// reverse barrier (PRESENT_SRC -> COLOR_ATTACHMENT) when LoadOp::Load
+	// needs the image back in COLOR_ATTACHMENT_OPTIMAL.
+	//
+	// Reference: Rust wgpu-core queue.rs:1284 — "Transition surface textures
+	// into Present state" is appended to the last baked encoder inline.
+	swapchainImage  vk.Image       // VkImage of the swapchain target (0 = none)
+	swapchainLayout vk.ImageLayout // layout the render pass leaves the image in
+	swapchain       *Swapchain     // back-pointer for layout tracking updates
 }
 
 // BeginEncoding begins command recording.
@@ -140,6 +160,12 @@ func (e *CommandEncoder) BeginEncoding(label string) error {
 	}
 
 	e.active = raw
+
+	// ADR-060: Reset inline present barrier tracking for this new recording.
+	e.swapchainImage = 0
+	e.swapchainLayout = 0
+	e.swapchain = nil
+
 	return nil
 }
 
@@ -151,10 +177,32 @@ func (e *CommandEncoder) BeginEncoding(label string) error {
 // In pool-managed mode: the encoder retains ownership of its VkCommandPool.
 // After GPU completion, call ResetAll to prepare for the next BeginEncoding cycle.
 //
+// ADR-060: Before closing the command buffer, injects an inline pipeline
+// barrier to transition the swapchain image from COLOR_ATTACHMENT_OPTIMAL
+// to PRESENT_SRC_KHR. This eliminates the separate vkQueueSubmit that
+// ensurePresentLayout would otherwise need, recovering ~30 FPS on Intel
+// Iris Xe. The barrier is recorded into the SAME command buffer as the
+// user's work — zero extra CB, zero extra submit.
+//
 // Reference: Rust wgpu-hal end_encoding (vulkan/command.rs:153-163).
+// Reference: Rust wgpu-core queue.rs:1284 — present barrier appended inline.
 func (e *CommandEncoder) EndEncoding() (hal.CommandBuffer, error) {
 	if e.active == 0 {
 		return nil, fmt.Errorf("vulkan: command encoder is not recording")
+	}
+
+	// ADR-060: Inject inline present barrier before closing the command buffer.
+	// If a render pass targeted a swapchain image and left it in
+	// COLOR_ATTACHMENT_OPTIMAL, append a pipeline barrier to transition it to
+	// PRESENT_SRC_KHR. This is the same barrier ensurePresentLayout would
+	// record in a separate submit — but here it is inside the user's CB.
+	//
+	// For multi-submit frames, the next BeginRenderPass inserts a reverse
+	// barrier (PRESENT_SRC -> COLOR_ATTACHMENT) when LoadOp::Load is used,
+	// so the inline barrier in the previous submit does not cause a layout
+	// mismatch.
+	if e.swapchainImage != 0 && e.swapchainLayout != vk.ImageLayoutPresentSrcKhr {
+		e.injectInlinePresentBarrier()
 	}
 
 	result := vkEndCommandBuffer(e.device.cmds, e.active)
@@ -186,10 +234,151 @@ func (e *CommandEncoder) EndEncoding() (hal.CommandBuffer, error) {
 		e.free = e.free[:0]
 		e.discarded = e.discarded[:0]
 		e.label = ""
+		e.swapchainImage = 0
+		e.swapchainLayout = 0
+		e.swapchain = nil
 		encoderPool.Put(e)
 	}
 
 	return cb, nil
+}
+
+// injectInlinePresentBarrier records a pipeline barrier inside the active
+// command buffer, transitioning the swapchain image from its current tracked
+// layout to PRESENT_SRC_KHR. Called from EndEncoding to avoid a separate
+// vkQueueSubmit in ensurePresentLayout.
+//
+// The source access mask and pipeline stage are determined by the layout the
+// render pass left the image in, matching ensurePresentLayout's switch logic.
+func (e *CommandEncoder) injectInlinePresentBarrier() {
+	// Determine source access mask and pipeline stage based on the tracked layout.
+	var srcAccess vk.AccessFlags
+	var srcStage vk.PipelineStageFlags
+	switch e.swapchainLayout {
+	case vk.ImageLayoutColorAttachmentOptimal:
+		srcAccess = vk.AccessFlags(vk.AccessColorAttachmentWriteBit)
+		srcStage = vk.PipelineStageFlags(vk.PipelineStageColorAttachmentOutputBit)
+	case vk.ImageLayoutTransferDstOptimal:
+		srcAccess = vk.AccessFlags(vk.AccessTransferWriteBit)
+		srcStage = vk.PipelineStageFlags(vk.PipelineStageTransferBit)
+	case vk.ImageLayoutTransferSrcOptimal:
+		srcAccess = vk.AccessFlags(vk.AccessTransferReadBit)
+		srcStage = vk.PipelineStageFlags(vk.PipelineStageTransferBit)
+	default:
+		srcAccess = 0
+		srcStage = vk.PipelineStageFlags(vk.PipelineStageTopOfPipeBit)
+	}
+
+	barrier := vk.ImageMemoryBarrier{
+		SType:               vk.StructureTypeImageMemoryBarrier,
+		SrcAccessMask:       srcAccess,
+		DstAccessMask:       0, // Present engine does not need explicit access
+		OldLayout:           e.swapchainLayout,
+		NewLayout:           vk.ImageLayoutPresentSrcKhr,
+		SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
+		DstQueueFamilyIndex: vk.QueueFamilyIgnored,
+		Image:               e.swapchainImage,
+		SubresourceRange: vk.ImageSubresourceRange{
+			AspectMask:     vk.ImageAspectFlags(vk.ImageAspectColorBit),
+			BaseMipLevel:   0,
+			LevelCount:     1,
+			BaseArrayLayer: 0,
+			LayerCount:     1,
+		},
+	}
+
+	e.device.cmds.CmdPipelineBarrier(
+		e.active,
+		srcStage,
+		vk.PipelineStageFlags(vk.PipelineStageBottomOfPipeBit),
+		0,      // dependencyFlags
+		0, nil, // memory barriers
+		0, nil, // buffer barriers
+		1, &barrier,
+	)
+
+	// Update the swapchain's layout tracking so ensurePresentLayout in
+	// present() sees PRESENT_SRC_KHR and returns early (zero-cost path).
+	if e.swapchain != nil {
+		e.swapchain.SetImageLayout(e.swapchain.currentImage, vk.ImageLayoutPresentSrcKhr)
+	}
+
+	// Prevent double-injection if EndEncoding is called again (should not
+	// happen, but defensive).
+	e.swapchainImage = 0
+}
+
+// setupInlinePresentBarrier prepares the encoder for inline present barrier
+// injection in EndEncoding. Called from BeginRenderPass when a swapchain
+// image is targeted.
+//
+// Two responsibilities:
+//  1. Record the swapchain image/layout so EndEncoding knows what to barrier.
+//  2. If the image is currently in PRESENT_SRC_KHR (from a previous submit's
+//     inline barrier) and LoadOp::Load requires COLOR_ATTACHMENT_OPTIMAL,
+//     insert a reverse barrier before vkCmdBeginRenderPass to prevent a
+//     Vulkan layout mismatch VUID violation.
+func (e *CommandEncoder) setupInlinePresentBarrier(
+	view, resolveView *TextureView,
+	hasMSAAResolve bool,
+	colorFinalLayout vk.ImageLayout,
+	loadOp gputypes.LoadOp,
+) {
+	swapView := swapchainTargetView(view, resolveView, hasMSAAResolve)
+	if swapView == nil || swapView.swapchain == nil {
+		return
+	}
+	sc := swapView.swapchain
+	idx := sc.currentImage
+
+	// Reverse barrier for multi-submit LoadOp::Load: if a previous submit's
+	// EndEncoding transitioned the image to PRESENT_SRC_KHR, we must
+	// transition back to COLOR_ATTACHMENT_OPTIMAL before the render pass.
+	if int(idx) < len(sc.imageLayouts) &&
+		sc.imageLayouts[idx] == vk.ImageLayoutPresentSrcKhr &&
+		loadOpToVk(loadOp) == vk.AttachmentLoadOpLoad {
+		e.injectReverseBarrier(sc, idx)
+	}
+
+	// Record the swapchain image for EndEncoding's forward barrier.
+	e.swapchainImage = sc.images[idx]
+	e.swapchainLayout = colorFinalLayout
+	e.swapchain = sc
+}
+
+// injectReverseBarrier transitions a swapchain image from PRESENT_SRC_KHR
+// back to COLOR_ATTACHMENT_OPTIMAL inside the active command buffer. This is
+// needed in multi-submit frames when a previous submit's EndEncoding injected
+// an inline forward barrier, but the current submit uses LoadOp::Load which
+// requires the image in COLOR_ATTACHMENT_OPTIMAL.
+func (e *CommandEncoder) injectReverseBarrier(sc *Swapchain, idx uint32) {
+	barrier := vk.ImageMemoryBarrier{
+		SType:               vk.StructureTypeImageMemoryBarrier,
+		SrcAccessMask:       0, // Present engine has no pending writes
+		DstAccessMask:       vk.AccessFlags(vk.AccessColorAttachmentWriteBit | vk.AccessColorAttachmentReadBit),
+		OldLayout:           vk.ImageLayoutPresentSrcKhr,
+		NewLayout:           vk.ImageLayoutColorAttachmentOptimal,
+		SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
+		DstQueueFamilyIndex: vk.QueueFamilyIgnored,
+		Image:               sc.images[idx],
+		SubresourceRange: vk.ImageSubresourceRange{
+			AspectMask:     vk.ImageAspectFlags(vk.ImageAspectColorBit),
+			BaseMipLevel:   0,
+			LevelCount:     1,
+			BaseArrayLayer: 0,
+			LayerCount:     1,
+		},
+	}
+	e.device.cmds.CmdPipelineBarrier(
+		e.active,
+		vk.PipelineStageFlags(vk.PipelineStageBottomOfPipeBit),
+		vk.PipelineStageFlags(vk.PipelineStageColorAttachmentOutputBit),
+		0,      // dependencyFlags
+		0, nil, // memory barriers
+		0, nil, // buffer barriers
+		1, &barrier,
+	)
+	sc.SetImageLayout(idx, vk.ImageLayoutColorAttachmentOptimal)
 }
 
 // DiscardEncoding discards the current recording without creating a command buffer.
@@ -204,6 +393,17 @@ func (e *CommandEncoder) DiscardEncoding() {
 		e.discarded = append(e.discarded, e.active)
 		e.active = 0
 	}
+
+	// ADR-060: Clear inline present barrier tracking — discarded work
+	// should not trigger a layout transition. Reset the swapchain image
+	// layout to UNDEFINED so ensurePresentLayout sees the real GPU state
+	// (the discarded render pass never executed).
+	if e.swapchain != nil {
+		e.swapchain.SetImageLayout(e.swapchain.currentImage, vk.ImageLayoutUndefined)
+	}
+	e.swapchainImage = 0
+	e.swapchainLayout = 0
+	e.swapchain = nil
 
 	if !e.poolManaged {
 		// Standalone mode: recycle pool and encoder struct (VK-POOL-001).
@@ -414,7 +614,7 @@ func (e *CommandEncoder) CopyBufferToBuffer(src, dst hal.Buffer, regions []hal.B
 // convertBufferImageCopyRegions converts HAL BufferTextureCopy regions to Vulkan BufferImageCopy.
 // The format parameter is the texture format, used to determine block copy size
 // for correct bytes-to-texels conversion of bufferRowLength.
-func convertBufferImageCopyRegions(regions []hal.BufferTextureCopy, format gputypes.TextureFormat) []vk.BufferImageCopy {
+func convertBufferImageCopyRegions(regions []hal.BufferTextureCopy, format gputypes.TextureFormat, dimension gputypes.TextureDimension) []vk.BufferImageCopy {
 	vkRegions := make([]vk.BufferImageCopy, len(regions))
 	blockSize := format.BlockCopySize()
 	if blockSize == 0 {
@@ -429,6 +629,19 @@ func convertBufferImageCopyRegions(regions []hal.BufferTextureCopy, format gputy
 		if r.BufferLayout.BytesPerRow > 0 {
 			bufferRowLength = r.BufferLayout.BytesPerRow / blockSize
 		}
+		baseArrayLayer := uint32(0)
+		layerCount := uint32(1)
+		imageOffsetZ := int32(r.TextureBase.Origin.Z)
+		imageExtentDepth := r.Size.DepthOrArrayLayers
+		if dimension != gputypes.TextureDimension3D {
+			baseArrayLayer = r.TextureBase.Origin.Z
+			layerCount = r.Size.DepthOrArrayLayers
+			if layerCount == 0 {
+				layerCount = 1
+			}
+			imageOffsetZ = 0
+			imageExtentDepth = 1
+		}
 
 		vkRegions[i] = vk.BufferImageCopy{
 			BufferOffset:      vk.DeviceSize(r.BufferLayout.Offset),
@@ -437,18 +650,18 @@ func convertBufferImageCopyRegions(regions []hal.BufferTextureCopy, format gputy
 			ImageSubresource: vk.ImageSubresourceLayers{
 				AspectMask:     textureAspectToVkSimple(r.TextureBase.Aspect),
 				MipLevel:       r.TextureBase.MipLevel,
-				BaseArrayLayer: 0,
-				LayerCount:     1,
+				BaseArrayLayer: baseArrayLayer,
+				LayerCount:     layerCount,
 			},
 			ImageOffset: vk.Offset3D{
 				X: int32(r.TextureBase.Origin.X),
 				Y: int32(r.TextureBase.Origin.Y),
-				Z: int32(r.TextureBase.Origin.Z),
+				Z: imageOffsetZ,
 			},
 			ImageExtent: vk.Extent3D{
 				Width:  r.Size.Width,
 				Height: r.Size.Height,
-				Depth:  r.Size.DepthOrArrayLayers,
+				Depth:  imageExtentDepth,
 			},
 		}
 	}
@@ -467,7 +680,7 @@ func (e *CommandEncoder) CopyBufferToTexture(src hal.Buffer, dst hal.Texture, re
 		return
 	}
 
-	vkRegions := convertBufferImageCopyRegions(regions, dstTex.format)
+	vkRegions := convertBufferImageCopyRegions(regions, dstTex.format, dstTex.dimension)
 	vkCmdCopyBufferToImage(
 		e.device.cmds,
 		e.active,
@@ -491,7 +704,7 @@ func (e *CommandEncoder) CopyTextureToBuffer(src hal.Texture, dst hal.Buffer, re
 		return
 	}
 
-	vkRegions := convertBufferImageCopyRegions(regions, srcTex.format)
+	vkRegions := convertBufferImageCopyRegions(regions, srcTex.format, srcTex.dimension)
 	vkCmdCopyImageToBuffer(
 		e.device.cmds,
 		e.active,
@@ -608,8 +821,10 @@ func (e *CommandEncoder) ResolveQuerySet(querySet hal.QuerySet, firstQuery, quer
 
 // BeginRenderPass begins a render pass using VkRenderPass (classic Vulkan approach).
 // This is compatible with Intel drivers that don't properly support dynamic rendering.
-// Supports MSAA render passes with resolve targets and depth/stencil attachments.
-// Uses sync.Pool for RenderPassEncoder reuse (VK-PERF-006).
+// Supports up to MaxColorAttachments (8) color attachments with optional MSAA resolve,
+// plus an optional depth/stencil attachment. Uses sync.Pool for RenderPassEncoder reuse.
+//
+// Reference: Rust wgpu-hal begin_render_pass (vulkan/command.rs:803-933).
 func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.RenderPassEncoder {
 	rpe := renderPassPool.Get().(*RenderPassEncoder)
 	rpe.encoder = e
@@ -623,77 +838,136 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 		return rpe
 	}
 
-	// Get first color attachment info
-	ca := desc.ColorAttachments[0]
-	view, ok := ca.View.(*TextureView)
-	if !ok {
-		return rpe
-	}
-
-	renderWidth := view.size.Width
-	renderHeight := view.size.Height
-
-	// Determine color format from the view
-	var colorFormat vk.Format
-	if view.texture != nil {
-		colorFormat = textureFormatToVk(view.texture.format)
-	} else if view.isSwapchain {
-		// Use the format stored in the view (set when creating swapchain view)
-		colorFormat = view.vkFormat
-	}
-
-	// Get sample count from the view's texture (defaults to 1)
-	sampleCount := vk.SampleCountFlagBits(1)
-	if view.texture != nil && view.texture.samples > 1 {
-		sampleCount = vk.SampleCountFlagBits(view.texture.samples)
-	}
-
-	// Check for MSAA resolve target.
-	// Resolve is only meaningful when the color attachment has multiple samples.
-	// The resolve attachment count must match between render pass and framebuffer,
-	// so we use hasMSAAResolve consistently for both.
-	var resolveView *TextureView
-	if ca.ResolveTarget != nil {
-		resolveView, _ = ca.ResolveTarget.(*TextureView)
-	}
-	hasMSAAResolve := resolveView != nil && sampleCount > vk.SampleCountFlagBits(1)
-
-	// Determine the final layout for the "output" attachment:
-	// - Without MSAA: the color attachment itself
-	// - With MSAA: the resolve target (the MSAA color stays ColorAttachmentOptimal)
-	//
-	// BUG-WGPU-VK-007: offscreen textures that are ALSO sampled (TextureBinding)
-	// must end in ImageLayoutGeneral, NOT ColorAttachmentOptimal. Without this,
-	// Intel CCS (Color Compression Subsystem) metadata written by the render pass
-	// is not decompressed on the next fragment-shader read, producing stale pixels
-	// ("trail artifacts"). The proper fix is automatic barrier tracking (CORE-007)
-	// with explicit transition to ShaderReadOnlyOptimal; until then, General is
-	// safe for both color-attachment writes and shader reads.
-	// Reference: Rust wgpu derive_image_layout() uses General for mixed usage.
-	colorFinalLayout := vk.ImageLayoutPresentSrcKhr // Default for swapchain
-	if !view.isSwapchain {
-		colorFinalLayout = offscreenFinalLayout(view)
-	}
-	if hasMSAAResolve {
-		// With resolve, the final layout applies to the resolve target.
-		if resolveView.isSwapchain {
-			colorFinalLayout = vk.ImageLayoutPresentSrcKhr
-		} else {
-			colorFinalLayout = offscreenFinalLayout(resolveView)
+	// Determine render area from the first valid color attachment.
+	var renderWidth, renderHeight uint32
+	for _, ca := range desc.ColorAttachments {
+		if ca.View == nil {
+			continue
 		}
+		view, ok := ca.View.(*TextureView)
+		if !ok {
+			continue
+		}
+		renderWidth = view.size.Width
+		renderHeight = view.size.Height
+		break
 	}
 
-	// BUG-WGPU-VK-006: Update swapchain image layout tracking.
-	updateSwapchainLayout(view, resolveView, hasMSAAResolve, colorFinalLayout)
+	// Determine sample count from the first valid color attachment (all must match).
+	sampleCount := vk.SampleCountFlagBits(1)
+	for _, ca := range desc.ColorAttachments {
+		if ca.View == nil {
+			continue
+		}
+		view, ok := ca.View.(*TextureView)
+		if !ok {
+			continue
+		}
+		if view.texture != nil && view.texture.samples > 1 {
+			sampleCount = vk.SampleCountFlagBits(view.texture.samples)
+		}
+		break
+	}
 
-	// Build render pass key
+	// Build render pass key and framebuffer key from ALL color attachments.
 	rpKey := RenderPassKey{
-		ColorFormat:      colorFormat,
-		ColorLoadOp:      loadOpToVk(ca.LoadOp),
-		ColorStoreOp:     storeOpToVk(ca.StoreOp),
-		SampleCount:      sampleCount,
-		ColorFinalLayout: colorFinalLayout,
-		HasResolve:       hasMSAAResolve,
+		ColorCount:  len(desc.ColorAttachments),
+		SampleCount: sampleCount,
+	}
+	fbKey := FramebufferKey{
+		Width:  renderWidth,
+		Height: renderHeight,
+	}
+
+	// Clear values array: one per VkAttachment (color + resolve + depth).
+	// Using a fixed-size array avoids heap allocation on this per-frame path.
+	var clearValuesArr [hal.MaxTotalAttachments]vk.ClearValue
+	clearValues := clearValuesArr[:0]
+
+	for i, ca := range desc.ColorAttachments {
+		if i >= hal.MaxColorAttachments {
+			break
+		}
+
+		view, ok := ca.View.(*TextureView)
+		if !ok || view == nil {
+			// Absent slot — leave the key entry zero-valued (FormatUndefined).
+			continue
+		}
+
+		// Determine color format from the view.
+		var colorFormat vk.Format
+		if view.texture != nil {
+			colorFormat = textureFormatToVk(view.texture.format)
+		} else if view.isSwapchain {
+			colorFormat = view.vkFormat
+		}
+
+		// Check for MSAA resolve target.
+		var resolveView *TextureView
+		if ca.ResolveTarget != nil {
+			resolveView, _ = ca.ResolveTarget.(*TextureView)
+		}
+		hasMSAAResolve := resolveView != nil && sampleCount > vk.SampleCountFlagBits(1)
+
+		// Determine the final layout for the "output" attachment.
+		// BUG-WGPU-VK-007: offscreen textures with TextureBinding must end in
+		// ImageLayoutGeneral to prevent Intel CCS stale-pixel artifacts.
+		colorFinalLayout := vk.ImageLayoutColorAttachmentOptimal
+		if !view.isSwapchain {
+			colorFinalLayout = offscreenFinalLayout(view)
+		}
+		if hasMSAAResolve {
+			if resolveView.isSwapchain {
+				colorFinalLayout = vk.ImageLayoutColorAttachmentOptimal
+			} else {
+				colorFinalLayout = offscreenFinalLayout(resolveView)
+			}
+		}
+
+		// ADR-060: Inline present barrier for swapchain targets.
+		// Only the FIRST swapchain attachment drives the barrier; additional
+		// swapchain attachments are unusual and would need separate tracking.
+		if e.swapchainImage == 0 {
+			e.setupInlinePresentBarrier(view, resolveView, hasMSAAResolve, colorFinalLayout, ca.LoadOp)
+		}
+
+		// BUG-WGPU-VK-006: Update swapchain image layout tracking.
+		updateSwapchainLayout(view, resolveView, hasMSAAResolve, colorFinalLayout)
+
+		rpKey.Colors[i] = ColorAttachmentKeyEntry{
+			Format:      colorFormat,
+			LoadOp:      loadOpToVk(ca.LoadOp),
+			StoreOp:     storeOpToVk(ca.StoreOp),
+			FinalLayout: colorFinalLayout,
+			HasResolve:  hasMSAAResolve,
+		}
+
+		// Framebuffer: color view
+		fbKey.Views[fbKey.ViewCount] = view.handle
+		fbKey.ViewCount++
+
+		// Clear value for color attachment
+		clearValues = append(clearValues, vk.ClearValueColor(
+			float32(ca.ClearValue.R),
+			float32(ca.ClearValue.G),
+			float32(ca.ClearValue.B),
+			float32(ca.ClearValue.A),
+		))
+
+		if hasMSAAResolve {
+			// Framebuffer: resolve view (immediately after color)
+			fbKey.Views[fbKey.ViewCount] = resolveView.handle
+			fbKey.ViewCount++
+
+			// Clear value for resolve attachment.
+			clearValues = append(clearValues, vk.ClearValueColor(
+				float32(ca.ClearValue.R),
+				float32(ca.ClearValue.G),
+				float32(ca.ClearValue.B),
+				float32(ca.ClearValue.A),
+			))
+		}
 	}
 
 	// Handle depth/stencil attachment
@@ -705,7 +979,11 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 			rpKey.DepthStoreOp = storeOpToVk(dsa.DepthStoreOp)
 			rpKey.StencilLoadOp = loadOpToVk(dsa.StencilLoadOp)
 			rpKey.StencilStoreOp = storeOpToVk(dsa.StencilStoreOp)
+
+			fbKey.Views[fbKey.ViewCount] = dsView.handle
+			fbKey.ViewCount++
 		}
+		clearValues = append(clearValues, vk.ClearValueDepthStencil(dsa.DepthClearValue, dsa.StencilClearValue))
 	}
 
 	// Get or create render pass from cache
@@ -716,21 +994,7 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 	}
 	rpe.renderPass = renderPass
 
-	// Build framebuffer key with all attachment views
-	fbKey := FramebufferKey{
-		RenderPass: renderPass,
-		ColorView:  view.handle,
-		Width:      renderWidth,
-		Height:     renderHeight,
-	}
-	if hasMSAAResolve {
-		fbKey.ResolveView = resolveView.handle
-	}
-	if desc.DepthStencilAttachment != nil {
-		if dsView, ok := desc.DepthStencilAttachment.View.(*TextureView); ok {
-			fbKey.DepthView = dsView.handle
-		}
-	}
+	fbKey.RenderPass = renderPass
 
 	// Get or create framebuffer from cache
 	framebuffer, err := cache.GetOrCreateFramebuffer(fbKey)
@@ -738,37 +1002,6 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 		return rpe
 	}
 	rpe.framebuffer = framebuffer
-
-	// Prepare clear values on the stack (max 3: color + resolve + depth/stencil).
-	// Using a fixed-size array avoids heap allocation on this per-frame path (VK-PERF-002).
-	var clearValuesArr [3]vk.ClearValue
-	clearValues := clearValuesArr[:0]
-	clearValues = append(clearValues, vk.ClearValueColor(
-		float32(ca.ClearValue.R),
-		float32(ca.ClearValue.G),
-		float32(ca.ClearValue.B),
-		float32(ca.ClearValue.A),
-	))
-
-	if hasMSAAResolve {
-		// Resolve attachment clear value — must match the MSAA color clear value so
-		// pixels without fragment coverage are cleared to the same color as the
-		// MSAA source. Vulkan requires one clear value per attachment when LoadOp
-		// is Clear (BUG-WGPU-MSAA-RESOLVE-001). Rust wgpu uses mem::zeroed() here
-		// because the resolve overwrites all pixels; we use the actual clear color
-		// for correctness on implementations that may skip uncovered pixels.
-		clearValues = append(clearValues, vk.ClearValueColor(
-			float32(ca.ClearValue.R),
-			float32(ca.ClearValue.G),
-			float32(ca.ClearValue.B),
-			float32(ca.ClearValue.A),
-		))
-	}
-
-	if desc.DepthStencilAttachment != nil {
-		dsa := desc.DepthStencilAttachment
-		clearValues = append(clearValues, vk.ClearValueDepthStencil(dsa.DepthClearValue, dsa.StencilClearValue))
-	}
 
 	// Begin render pass
 	renderPassBegin := vk.RenderPassBeginInfo{
@@ -780,25 +1013,21 @@ func (e *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 			Extent: vk.Extent2D{Width: renderWidth, Height: renderHeight},
 		},
 		ClearValueCount: uint32(len(clearValues)),
-		PClearValues:    &clearValues[0],
+	}
+	if len(clearValues) > 0 {
+		renderPassBegin.PClearValues = &clearValues[0]
 	}
 
 	vkCmdBeginRenderPass(e.device.cmds, e.active, &renderPassBegin, vk.SubpassContentsInline)
 	runtime.KeepAlive(clearValues)
 
 	// Set default viewport and scissor for the render area.
-	// These are required since the pipeline uses dynamic viewport/scissor state.
-	// NOTE: Viewport Y-flip is required for WebGPU/OpenGL coordinate system compatibility.
-	// Vulkan has Y pointing down, WebGPU has Y pointing up.
-	// Solution: Start Y at height and use negative height (matches Rust wgpu).
-	// Always set viewport/scissor -- the pipeline declares them as dynamic state,
+	// Always set viewport/scissor — the pipeline declares them as dynamic state,
 	// so they must be initialized before any draw call regardless of dimensions.
-	// Use max(1, dim) as safety net to satisfy Vulkan spec minimum extent.
 	viewW := max(float32(renderWidth), 1.0)
 	viewH := max(float32(renderHeight), 1.0)
 
 	// Y-flip for WebGPU compatibility: Vulkan Y points down, WebGPU Y points up.
-	// Use negative height and start Y at bottom (matches Rust wgpu approach).
 	viewport := vk.Viewport{
 		X:        0,
 		Y:        viewH, // Start at bottom
@@ -865,6 +1094,12 @@ type RenderPassEncoder struct {
 	renderPass  vk.RenderPass
 	framebuffer vk.Framebuffer
 }
+
+const (
+	drawIndirectStride        = uint32(16)
+	drawIndexedIndirectStride = uint32(20)
+	indexedIndirectStride     = drawIndexedIndirectStride
+)
 
 // End finishes the render pass.
 // Returns the encoder to the pool for reuse (VK-PERF-006).
@@ -954,33 +1189,33 @@ func (e *RenderPassEncoder) SetIndexBuffer(buffer hal.Buffer, format gputypes.In
 
 // SetViewport sets the viewport.
 // NOTE: Applies Y-flip for WebGPU/OpenGL coordinate system compatibility (matches Rust wgpu).
-func (e *RenderPassEncoder) SetViewport(x, y, width, height, minDepth, maxDepth float32) {
+func (e *RenderPassEncoder) SetViewport(vp gputypes.Viewport) {
 	if e.encoder.active == 0 {
 		return
 	}
 
 	// Y-flip: Start Y at y+height, use negative height
 	viewport := vk.Viewport{
-		X:        x,
-		Y:        y + height, // Y-flip: start at bottom
-		Width:    width,
-		Height:   -height, // Y-flip: negative height
-		MinDepth: minDepth,
-		MaxDepth: maxDepth,
+		X:        vp.X,
+		Y:        vp.Y + vp.Height, // Y-flip: start at bottom
+		Width:    vp.Width,
+		Height:   -vp.Height, // Y-flip: negative height
+		MinDepth: vp.MinDepth,
+		MaxDepth: vp.MaxDepth,
 	}
 
 	vkCmdSetViewport(e.encoder.device.cmds, e.encoder.active, 0, 1, &viewport)
 }
 
 // SetScissorRect sets the scissor rectangle.
-func (e *RenderPassEncoder) SetScissorRect(x, y, width, height uint32) {
+func (e *RenderPassEncoder) SetScissorRect(rect gputypes.ScissorRect) {
 	if e.encoder.active == 0 {
 		return
 	}
 
 	scissor := vk.Rect2D{
-		Offset: vk.Offset2D{X: int32(x), Y: int32(y)},
-		Extent: vk.Extent2D{Width: width, Height: height},
+		Offset: vk.Offset2D{X: int32(rect.X), Y: int32(rect.Y)},
+		Extent: vk.Extent2D{Width: rect.Width, Height: rect.Height},
 	}
 
 	vkCmdSetScissor(e.encoder.device.cmds, e.encoder.active, 0, 1, &scissor)
@@ -1013,40 +1248,142 @@ func (e *RenderPassEncoder) SetStencilReference(ref uint32) {
 }
 
 // Draw draws primitives.
-func (e *RenderPassEncoder) Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32) {
+func (e *RenderPassEncoder) Draw(args gputypes.DrawArgs) {
 	if e.encoder.active == 0 {
 		return
 	}
-	vkCmdDraw(e.encoder.device.cmds, e.encoder.active, vertexCount, instanceCount, firstVertex, firstInstance)
+	vkCmdDraw(e.encoder.device.cmds, e.encoder.active, args.VertexCount, args.InstanceCount, args.FirstVertex, args.FirstInstance)
 }
 
 // DrawIndexed draws indexed primitives.
-func (e *RenderPassEncoder) DrawIndexed(indexCount, instanceCount, firstIndex uint32, baseVertex int32, firstInstance uint32) {
+func (e *RenderPassEncoder) DrawIndexed(args gputypes.DrawIndexedArgs) {
 	if e.encoder.active == 0 {
 		return
 	}
 
-	vkCmdDrawIndexed(e.encoder.device.cmds, e.encoder.active, indexCount, instanceCount, firstIndex, baseVertex, firstInstance)
+	vkCmdDrawIndexed(e.encoder.device.cmds, e.encoder.active, args.IndexCount, args.InstanceCount, args.FirstIndex, args.BaseVertex, args.FirstInstance)
 }
 
 // DrawIndirect draws primitives with GPU-generated parameters.
-func (e *RenderPassEncoder) DrawIndirect(buffer hal.Buffer, offset uint64) {
+func (e *RenderPassEncoder) DrawIndirect(buffer hal.Buffer, offset uint64, drawCount uint32) {
 	buf, ok := buffer.(*Buffer)
-	if !ok || e.encoder.active == 0 {
+	if !ok || e.encoder.active == 0 || drawCount == 0 {
 		return
 	}
-
-	vkCmdDrawIndirect(e.encoder.device.cmds, e.encoder.active, buf.handle, vk.DeviceSize(offset), 1, 0)
+	if !indirect.RangeFits(buf.size, offset, uint64(drawIndirectStride), drawCount) {
+		return
+	}
+	call, batched, ok := indirectCallPlan(e.encoder.device.supportsMultiDrawIndirect,
+		e.encoder.device.maxDrawIndirectCount, offset, drawCount, drawIndirectStride)
+	if !ok {
+		return
+	}
+	if batched {
+		vkCmdDrawIndirect(e.encoder.device.cmds, e.encoder.active, buf.handle, vk.DeviceSize(call.offset), call.count, call.stride)
+		return
+	}
+	for i := uint32(0); i < drawCount; i++ {
+		recordOffset, _ := indirect.RecordOffset(offset, uint64(drawIndirectStride), i)
+		vkCmdDrawIndirect(e.encoder.device.cmds, e.encoder.active, buf.handle, vk.DeviceSize(recordOffset), 1, drawIndirectStride)
+	}
 }
 
 // DrawIndexedIndirect draws indexed primitives with GPU-generated parameters.
-func (e *RenderPassEncoder) DrawIndexedIndirect(buffer hal.Buffer, offset uint64) {
+// Vulkan can encode a span in one command only when the optional
+// multiDrawIndirect feature is enabled and the count fits the device limit;
+// otherwise emit the exact single-record loop.
+func (e *RenderPassEncoder) DrawIndexedIndirect(buffer hal.Buffer, offset uint64, drawCount uint32) {
 	buf, ok := buffer.(*Buffer)
-	if !ok || e.encoder.active == 0 {
+	if !ok || e.encoder.active == 0 || drawCount == 0 {
+		return
+	}
+	if !indirect.RangeFits(buf.size, offset, uint64(drawIndexedIndirectStride), drawCount) {
+		return
+	}
+	call, batched, ok := indirectCallPlan(
+		e.encoder.device.supportsMultiDrawIndirect,
+		e.encoder.device.maxDrawIndirectCount,
+		offset,
+		drawCount,
+		drawIndexedIndirectStride,
+	)
+	if !ok {
 		return
 	}
 
-	vkCmdDrawIndexedIndirect(e.encoder.device.cmds, e.encoder.active, buf.handle, vk.DeviceSize(offset), 1, 0)
+	if batched {
+		vkCmdDrawIndexedIndirect(e.encoder.device.cmds, e.encoder.active, buf.handle, vk.DeviceSize(call.offset), call.count, call.stride)
+		return
+	}
+	for i := uint32(0); i < drawCount; i++ {
+		recordOffset, ok := indirect.RecordOffset(offset, uint64(drawIndexedIndirectStride), i)
+		if !ok {
+			return
+		}
+		vkCmdDrawIndexedIndirect(e.encoder.device.cmds, e.encoder.active, buf.handle, vk.DeviceSize(recordOffset), call.count, call.stride)
+	}
+}
+
+// DrawIndirectCount draws primitives using a GPU-provided draw count.
+func (e *RenderPassEncoder) DrawIndirectCount(
+	buffer hal.Buffer, offset uint64,
+	countBuffer hal.Buffer, countOffset uint64,
+	maxDrawCount uint32,
+) {
+	var native vulkanIndirectCountNativeCmd
+	if e.encoder.device.cmdDrawIndirectCount != nil {
+		cmd := e.encoder.device.cmdDrawIndirectCount
+		native = func(cmdBuf vk.CommandBuffer, indirect vk.Buffer, off vk.DeviceSize, count vk.Buffer, countOff vk.DeviceSize, maxCount uint32) {
+			cmd(cmdBuf, indirect, off, count, countOff, maxCount)
+		}
+	}
+	e.drawIndirectCount(buffer, offset, countBuffer, countOffset, maxDrawCount, drawIndirectStride, native, vkCmdDrawIndirect)
+}
+
+// DrawIndexedIndirectCount draws indexed primitives using a GPU-provided draw count.
+func (e *RenderPassEncoder) DrawIndexedIndirectCount(
+	buffer hal.Buffer, offset uint64,
+	countBuffer hal.Buffer, countOffset uint64,
+	maxDrawCount uint32,
+) {
+	var native vulkanIndirectCountNativeCmd
+	if e.encoder.device.cmdDrawIndexedIndirectCount != nil {
+		cmd := e.encoder.device.cmdDrawIndexedIndirectCount
+		native = func(cmdBuf vk.CommandBuffer, indirect vk.Buffer, off vk.DeviceSize, count vk.Buffer, countOff vk.DeviceSize, maxCount uint32) {
+			cmd(cmdBuf, indirect, off, count, countOff, maxCount)
+		}
+	}
+	e.drawIndirectCount(buffer, offset, countBuffer, countOffset, maxDrawCount, drawIndexedIndirectStride, native, vkCmdDrawIndexedIndirect)
+}
+
+type indexedIndirectCall struct {
+	offset uint64
+	count  uint32
+	stride uint32
+}
+
+// indexedIndirectCallPlan returns the first native call shape for an indexed
+// indirect draw. The plan is pure so count/stride policy can be tested without
+// constructing a Vulkan command buffer or invoking FFI.
+func indirectCallPlan(supportsMultiDraw bool, maxDrawCount uint32, offset uint64, drawCount, stride uint32) (indexedIndirectCall, bool, bool) {
+	if drawCount == 0 {
+		return indexedIndirectCall{}, false, false
+	}
+	if _, ok := indirect.RecordOffset(offset, uint64(stride), drawCount-1); !ok {
+		return indexedIndirectCall{}, false, false
+	}
+	if supportsMultiDraw && drawCount <= maxDrawCount {
+		return indexedIndirectCall{offset: offset, count: drawCount, stride: stride}, true, true
+	}
+	return indexedIndirectCall{offset: offset, count: 1, stride: stride}, false, true
+}
+
+func indexedIndirectCallPlan(supportsMultiDraw bool, maxDrawCount uint32, offset uint64, drawCount uint32) (indexedIndirectCall, bool, bool) {
+	return indirectCallPlan(supportsMultiDraw, maxDrawCount, offset, drawCount, drawIndexedIndirectStride)
+}
+
+func indexedIndirectRecordOffset(offset uint64, index uint32) (uint64, bool) {
+	return indirect.RecordOffset(offset, uint64(drawIndexedIndirectStride), index)
 }
 
 // ExecuteBundle executes a pre-recorded render bundle.
@@ -1204,6 +1541,9 @@ func (e *ComputePassEncoder) insertComputeBarrier() {
 	)
 }
 
+// Ray tracing methods (BuildAccelerationStructures, PlaceAccelerationStructureBarrier,
+// CopyAccelerationStructure, ReadAccelerationStructureCompactSize) are in raytracing.go.
+
 // --- Helper functions ---
 
 // offscreenFinalLayout returns the Vulkan image layout that an offscreen
@@ -1237,6 +1577,20 @@ func updateSwapchainLayout(view *TextureView, resolveView *TextureView, hasMSAAR
 		// MSAA: the resolve target IS the swapchain image.
 		resolveView.swapchain.SetImageLayout(resolveView.swapchain.currentImage, finalLayout)
 	}
+}
+
+// swapchainTargetView returns the TextureView that represents the swapchain
+// image in a render pass, or nil if the render pass does not target a swapchain.
+// With MSAA, the resolve target is the swapchain image; without MSAA, it is
+// the color attachment directly.
+func swapchainTargetView(view *TextureView, resolveView *TextureView, hasMSAAResolve bool) *TextureView {
+	if !hasMSAAResolve && view.isSwapchain && view.swapchain != nil {
+		return view
+	}
+	if hasMSAAResolve && resolveView != nil && resolveView.isSwapchain && resolveView.swapchain != nil {
+		return resolveView
+	}
+	return nil
 }
 
 //nolint:unparam // stage will be used when barrier optimization is implemented

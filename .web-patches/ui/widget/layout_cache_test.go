@@ -14,14 +14,12 @@ import (
 type clwWidget struct {
 	widget.WidgetBase
 	size        geometry.Size
-	raw         bool // return size unconstrained (to test the debug constraints assert)
 	layoutCalls int
 }
 
 func (w *clwWidget) Layout(_ widget.Context, c geometry.Constraints) geometry.Size {
-	w.layoutCalls++
-	if w.raw {
-		return w.size
+	if !widget.IsLayoutVerifying() {
+		w.layoutCalls++
 	}
 	return c.Constrain(w.size)
 }
@@ -316,19 +314,18 @@ func TestDebugVerifier_NoPanicWhenStable(t *testing.T) {
 	widget.LayoutChild(w, ctx, c) // hit, verified, matches — must not panic
 }
 
-func TestDebugVerifier_PanicsOnConstraintsViolation(t *testing.T) {
+func TestDebugVerifier_SentinelSuppressesCount(t *testing.T) {
 	defer widget.SetLayoutDebug(widget.SetLayoutDebug(true))
-	w := &clwWidget{size: geometry.Sz(1000, 1000), raw: true} // ignores constraints
-	w.SetVisible(true)
+	w := newWB()
 	ctx := uitest.NewMockContext()
-	tight := geometry.Constraints{MinWidth: 0, MaxWidth: 10, MinHeight: 0, MaxHeight: 10}
+	c := looseConstraints()
 
-	defer func() {
-		if recover() == nil {
-			t.Error("expected panic: returned size violates constraints")
-		}
-	}()
-	widget.LayoutChild(w, ctx, tight) // miss → assertConstraintsSatisfied → panic
+	widget.LayoutChild(w, ctx, c) // miss: layoutCalls=1
+	widget.LayoutChild(w, ctx, c) // hit: verifier re-runs but sentinel suppresses count
+
+	if w.layoutCalls != 1 {
+		t.Errorf("layoutCalls = %d, want 1 (verifier pass should be invisible)", w.layoutCalls)
+	}
 }
 
 func TestSetLayoutDebug_RestoresPrevious(t *testing.T) {

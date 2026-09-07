@@ -3,6 +3,7 @@ package radio
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/widget"
 )
 
@@ -27,6 +28,9 @@ type Item struct {
 	group   *Group
 	state   interactionState
 	painter Painter
+
+	// Gesture recognizer for click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
 }
 
 // newItem creates a new radio item linked to the given group.
@@ -39,6 +43,31 @@ func newItem(def ItemDef, group *Group, painter Painter) *Item {
 	}
 	it.SetVisible(true)
 	it.SetEnabled(true)
+
+	// Create ClickRecognizer for unified pointer pipeline (ADR-049).
+	it.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClickDown: func(details gesture.ClickDownDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			it.state = statePressed
+			it.SetNeedsRedraw(true)
+		},
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			it.state = stateNormal
+			it.SetNeedsRedraw(true)
+			it.group.selectValue(it.value)
+		},
+		OnClickCancel: func() {
+			it.state = stateNormal
+			it.SetNeedsRedraw(true)
+		},
+	})
+
 	return it
 }
 
@@ -60,12 +89,20 @@ func (it *Item) IsFocusable() bool {
 
 // Layout calculates the item's preferred size within the given constraints.
 func (it *Item) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
-	totalWidth := outerRadius*2 + itemPadding*2
-	totalHeight := outerRadius*2 + itemPadding*2
+	// Query LayoutMetrics from painter (type assert with default fallback).
+	lm := resolveRadioLayoutMetrics(it.painter)
+
+	radius := lm.RadioCircleRadius()
+	pad := lm.RadioItemPadding()
+	gap := lm.RadioLabelGap()
+	fontSize := lm.RadioFontSize()
+
+	totalWidth := radius*2 + pad*2
+	totalHeight := radius*2 + pad*2
 
 	if it.label != "" {
-		textWidth := float32(len(it.label)) * defaultFontSize * charWidthRatio
-		totalWidth += labelGap + textWidth
+		textWidth := float32(len(it.label)) * fontSize * charWidthRatio
+		totalWidth += gap + textWidth
 	}
 
 	if totalHeight < itemMinHeight {
@@ -110,8 +147,32 @@ func (it *Item) Children() []widget.Widget {
 	return nil
 }
 
+// Mount is called when the item is added to the widget tree.
+// Implements [widget.Lifecycle].
+func (it *Item) Mount(_ widget.Context) {}
+
+// Unmount disposes gesture recognizers. Implements [widget.Lifecycle].
+func (it *Item) Unmount() {
+	if it.clickRec != nil {
+		it.clickRec.Dispose()
+	}
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// Radio item is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (it *Item) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if it.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{it.clickRec}
+}
+
 // Verify Item implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Item)(nil)
-	_ widget.Focusable = (*Item)(nil)
+	_ widget.Widget        = (*Item)(nil)
+	_ widget.Focusable     = (*Item)(nil)
+	_ widget.Lifecycle     = (*Item)(nil)
+	_ gesture.GestureAware = (*Item)(nil)
 )

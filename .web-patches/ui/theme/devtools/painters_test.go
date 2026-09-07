@@ -1,7 +1,6 @@
 package devtools_test
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -97,7 +96,7 @@ func (c *recordCanvas) PopTransform()                                {}
 func (c *recordCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *recordCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *recordCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *recordCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *recordCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 // Method name constants to satisfy goconst.
 const (
@@ -509,7 +508,7 @@ func TestTextFieldPainterImplementsInterface(t *testing.T) {
 func TestPaintTextField(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:   "Hello",
 		Bounds: testBounds(),
 	})
@@ -528,7 +527,7 @@ func TestPaintTextField(t *testing.T) {
 func TestPaintTextFieldEmpty(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{Bounds: geometry.Rect{}})
+	painter.PaintTextField(canvas, &textfield.PaintState{Bounds: geometry.Rect{}})
 	if len(canvas.calls) != 0 {
 		t.Errorf("empty bounds should produce no calls, got %d", len(canvas.calls))
 	}
@@ -537,7 +536,7 @@ func TestPaintTextFieldEmpty(t *testing.T) {
 func TestPaintTextFieldPlaceholder(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:        "",
 		Placeholder: "Enter value...",
 		Bounds:      testBounds(),
@@ -555,10 +554,16 @@ func TestPaintTextFieldPlaceholder(t *testing.T) {
 func TestPaintTextFieldFocused(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
-		Text:    "Focus",
-		Bounds:  testBounds(),
-		Focused: true,
+	bounds := testBounds()
+	painter.PaintTextField(canvas, &textfield.PaintState{
+		Text:        "Focus",
+		DisplayText: "Focus",
+		Bounds:      bounds,
+		ContentRect: geometry.NewRect(bounds.Min.X+8, bounds.Min.Y+6, bounds.Width()-16, bounds.Height()-12),
+		Focused:     true,
+		ShowCursor:  true,
+		CursorRect:  geometry.NewRect(bounds.Min.X+8, bounds.Min.Y+6, 1, 18),
+		FontSize:    13,
 	})
 
 	// Should draw cursor line when focused.
@@ -571,7 +576,7 @@ func TestPaintTextFieldFocused(t *testing.T) {
 func TestPaintTextFieldError(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:     "Bad",
 		Bounds:   testBounds(),
 		HasError: true,
@@ -596,7 +601,7 @@ func TestPaintTextFieldWithTheme(t *testing.T) {
 	painter := devtools.TextFieldPainter{Theme: theme}
 	canvas := &recordCanvas{}
 
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:   "Themed",
 		Bounds: testBounds(),
 	})
@@ -1153,7 +1158,7 @@ func TestPaintRadioDisabled(t *testing.T) {
 func TestPaintTextFieldPassword(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:      "secret",
 		InputType: textfield.TypePassword,
 		Bounds:    testBounds(),
@@ -1172,12 +1177,19 @@ func TestPaintTextFieldPassword(t *testing.T) {
 func TestPaintTextFieldSelection(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
-		Text:        "Hello World",
-		Bounds:      testBounds(),
-		Focused:     true,
-		SelectStart: 0,
-		SelectEnd:   5,
+	bounds := testBounds()
+	contentRect := geometry.NewRect(bounds.Min.X+8, bounds.Min.Y+6, bounds.Width()-16, bounds.Height()-12)
+	painter.PaintTextField(canvas, &textfield.PaintState{
+		Text:          "Hello World",
+		DisplayText:   "Hello World",
+		Bounds:        bounds,
+		ContentRect:   contentRect,
+		Focused:       true,
+		SelectStart:   0,
+		SelectEnd:     5,
+		ShowSelection: true,
+		SelectionRect: geometry.NewRect(contentRect.Min.X, contentRect.Min.Y, 30, contentRect.Height()),
+		FontSize:      13,
 	})
 
 	// Should draw selection rectangle.
@@ -1190,7 +1202,7 @@ func TestPaintTextFieldSelection(t *testing.T) {
 func TestPaintTextFieldDisabled(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:     "Disabled",
 		Bounds:   testBounds(),
 		Disabled: true,
@@ -1204,7 +1216,7 @@ func TestPaintTextFieldDisabled(t *testing.T) {
 func TestPaintTextFieldDisabledPlaceholder(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:        "",
 		Placeholder: "Disabled placeholder",
 		Bounds:      testBounds(),
@@ -1220,7 +1232,7 @@ func TestPaintTextFieldDisabledPlaceholder(t *testing.T) {
 func TestPaintTextFieldHovered(t *testing.T) {
 	canvas := &recordCanvas{}
 	painter := devtools.TextFieldPainter{}
-	painter.PaintTextField(canvas, textfield.PaintState{
+	painter.PaintTextField(canvas, &textfield.PaintState{
 		Text:    "Hovered",
 		Bounds:  testBounds(),
 		Hovered: true,
@@ -1371,7 +1383,7 @@ func TestAllPaintersWithLightTheme(t *testing.T) {
 			})
 		}},
 		{"TextFieldPainter", func(c *recordCanvas) {
-			devtools.TextFieldPainter{Theme: theme}.PaintTextField(c, textfield.PaintState{
+			devtools.TextFieldPainter{Theme: theme}.PaintTextField(c, &textfield.PaintState{
 				Text: "Light", Bounds: testBounds(),
 			})
 		}},

@@ -4,6 +4,7 @@ package platform
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -129,6 +130,7 @@ func (p *darwinPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 		Resizable:         config.Resizable,
 		Fullscreen:        config.Fullscreen,
 		Frameless:         config.Frameless,
+		Transparent:       config.Transparent,
 		TabbingMode:       config.TabbingMode,
 		TabbingIdentifier: config.TabbingIdentifier,
 	}
@@ -142,7 +144,7 @@ func (p *darwinPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 	// Create Metal surface for GPU rendering.
 	// Note: Surface is created before window is shown, but drawable size
 	// is set after Show() when window has valid dimensions.
-	surface, err := darwin.NewSurface(window)
+	surface, err := darwin.NewSurface(window, config.Transparent)
 	if err != nil {
 		// Non-fatal: window works without Metal surface
 		// This allows the window to still be used with software rendering
@@ -157,6 +159,51 @@ func (p *darwinPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 		p.primary = w
 	}
 	p.mu.Unlock()
+
+	// Install drag-and-drop handler on the content view.
+	// The handler receives NSDragging protocol events from GoGPUView and pushes
+	// them to the window's event queue, matching the event queue pattern used
+	// by Windows (WM_DROPFILES) and X11 (XDND).
+	contentView := window.ContentView()
+	if !contentView.IsNil() {
+		darwin.SetViewDragHandler(contentView, func(de darwin.DragEvent) {
+			// Y-flip: macOS uses bottom-left origin, we use top-left.
+			// w.config.Height is in logical points, matching macOS coordinates.
+			flippedY := float64(w.config.Height) - de.Y
+
+			switch de.Type {
+			case darwin.DragEventEnter:
+				w.events.Push(Event{
+					WindowID:  w.id,
+					Type:      EventDragEnter,
+					DragPaths: de.Paths,
+					DragX:     de.X,
+					DragY:     flippedY,
+				})
+			case darwin.DragEventMove:
+				w.events.Push(Event{
+					WindowID: w.id,
+					Type:     EventDragMove,
+					DragX:    de.X,
+					DragY:    flippedY,
+				})
+			case darwin.DragEventDrop:
+				w.events.Push(Event{
+					WindowID:  w.id,
+					Type:      EventDragDrop,
+					DragPaths: de.Paths,
+					DragX:     de.X,
+					DragY:     flippedY,
+				})
+			case darwin.DragEventLeave:
+				w.events.Push(Event{
+					WindowID: w.id,
+					Type:     EventDragLeave,
+				})
+			}
+			darwin.WakeEventLoop()
+		})
+	}
 
 	dw := &darwinPlatformWindow{
 		platform:  p,
@@ -252,6 +299,16 @@ func (p *darwinPlatform) WakeUp() {
 func (p *darwinPlatform) Destroy() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Clean up drag handlers for all windows before destroying them.
+	for _, w := range p.windows {
+		if w.window != nil {
+			cv := w.window.ContentView()
+			if !cv.IsNil() {
+				darwin.ClearViewDragHandler(cv)
+			}
+		}
+	}
 
 	w := p.primary
 	if w != nil {
@@ -380,6 +437,15 @@ func (dw *darwinPlatformWindow) SetMaxSize(width, height int) {
 	}
 }
 
+// RequestSize resizes the window's content area to the given logical size.
+// Delegates to darwin.Window.RequestSize which uses setContentSize: and
+// skips fullscreen/zoomed windows.
+func (dw *darwinPlatformWindow) RequestSize(width, height int) {
+	if dw.window != nil {
+		dw.window.RequestSize(width, height)
+	}
+}
+
 func (dw *darwinPlatformWindow) PrepareFrame() PrepareFrameResult {
 	if dw.window == nil {
 		return PrepareFrameResult{ScaleFactor: 1.0}
@@ -478,6 +544,20 @@ func (dw *darwinPlatformWindow) Show() {
 	}
 }
 
+// Hide hides the window.
+func (dw *darwinPlatformWindow) Hide() {
+	if dw.window != nil {
+		dw.window.Hide()
+	}
+}
+
+// SetPosition moves the window to the given logical screen position.
+func (dw *darwinPlatformWindow) SetPosition(x, y int) {
+	if dw.window != nil {
+		dw.window.SetPosition(x, y)
+	}
+}
+
 func (dw *darwinPlatformWindow) SetOnClose(fn func() bool) {
 	if dw.window != nil {
 		dw.window.SetOnClose(fn)
@@ -536,6 +616,11 @@ func (dw *darwinPlatformWindow) BlitPixels(pixels []byte, width, height int) err
 	return nil
 }
 
+// StartDrag initiates an outgoing drag-and-drop via macOS NSDragging.
+func (dw *darwinPlatformWindow) StartDrag(paths []string, done func(DragResult)) {
+	startDragDarwin(dw.window, paths, done)
+}
+
 func (dw *darwinPlatformWindow) Destroy() {
 	// Destruction handled by platform.Destroy()
 }
@@ -588,6 +673,20 @@ func (w *darwinWindow) pollEvents(app *darwin.Application) Event {
 			w.config.Height = newHeight
 			w.physW = newPhysW
 			w.physH = newPhysH
+
+			// Detect scale change — emit ScaleChanged before Resize (ADR-059).
+			newScale := w.window.BackingScaleFactor()
+			if w.lastScale != 0 && w.lastScale != newScale {
+				w.events.Push(Event{
+					WindowID:    w.id,
+					Type:        EventScaleChanged,
+					ScaleFactor: newScale,
+					Width:       newWidth,
+					Height:      newHeight,
+				})
+			}
+			w.lastScale = newScale
+
 			w.events.Push(Event{
 				WindowID:       w.id,
 				Type:           EventResize,
@@ -1063,6 +1162,9 @@ func buttonsFromNumber(buttonNumber int64) gpucontext.Buttons {
 }
 
 // createPointerEvent creates a PointerEvent with common fields filled in.
+// createPointerEvent builds a PointerEvent from macOS NSEvent data.
+// Coordinates are already in logical points (NSEvent.locationInWindow) —
+// no DPI scaling needed. Consistent with App.Size() on all platforms.
 // Detects pen/tablet input from NSEvent subtype and sets PointerType,
 // Pressure, TiltX, TiltY, and Twist accordingly.
 func (w *darwinWindow) createPointerEvent(
@@ -1479,6 +1581,16 @@ func (p *darwinPlatform) SubpixelLayout() gpucontext.SubpixelLayout {
 	return gpucontext.SubpixelNone
 }
 
+// FontSmoothing returns the OS text anti-aliasing mode.
+// macOS disabled subpixel AA system-wide starting with Mojave (10.14, 2018).
+// All modern macOS versions use grayscale AA only. A user can disable all
+// smoothing via `defaults write -g AppleFontSmoothing -int 0`, but this is
+// rare and would require NSUserDefaults access to detect.
+// Returns FontSmoothingGrayscale as the safe default.
+func (p *darwinPlatform) FontSmoothing() gpucontext.FontSmoothing {
+	return gpucontext.FontSmoothingGrayscale
+}
+
 func (p *darwinPlatform) SetAppName(name string) {
 	if p.app != nil {
 		p.app.SetAppName(name)
@@ -1514,6 +1626,20 @@ func (p *darwinPlatform) SetApplicationMenu(items []MenuItem) {
 // regular items via initWithTitle:action:keyEquivalent: and linked to their
 // Go callback through the application delegate (handleMenuItem:).
 //
+// macOS menu bar only renders items that have submenus. Leaf items with an
+// App Menu role (About, Quit, Preferences, etc.) and top-level separators are
+// routed to the App Menu submenu automatically (GLFW/Electron pattern).
+// Leaf items without a role or submenu are logged and skipped — they would be
+// invisible on macOS.
+//
+// SetMenu uses Electron-style replace semantics: the App Menu submenu is
+// cleared before applying caller items, so Role items are not appended after
+// the default About/Hide/Quit entries.
+//
+// The system Window menu (Minimize, Zoom, Close/Cmd+W, Full Screen, Bring All
+// to Front) is preserved across replace — same as GLFW, Qt6, Flutter, and
+// Electron. Without it, Cmd+W and the Window menu bar entry disappear (#463, #464).
+//
 // Must only be called after NSApplication has been initialized.
 func (p *darwinPlatform) applyMenu(items []MenuItem) {
 	nsApp := p.app.NSApp()
@@ -1526,6 +1652,20 @@ func (p *darwinPlatform) applyMenu(items []MenuItem) {
 	}
 
 	appMenuItem := mainMenu.SendInt(darwin.RegisterSelector("itemAtIndex:"), 0)
+	windowMenuItem := p.findWindowsMenuItem(mainMenu)
+
+	// Detach + retain Window menu before ClearMenuActions/removeAllItems so
+	// system items (Close/Cmd+W) and AddToSystemMenu(Window) Go callbacks
+	// survive SetMenu replace (#463, #464).
+	if !windowMenuItem.IsNil() {
+		windowMenuItem.Send(darwin.Selectors().Retain())
+		mainMenu.SendPtr(darwin.RegisterSelector("removeItem:"), windowMenuItem.Ptr())
+	}
+
+	// Drop Go callbacks before AppKit deallocates the items. Recurses into
+	// App Menu / custom submenus so replace SetMenu cannot leave stale
+	// menuActionMap entries keyed by reused pointers.
+	darwin.ClearMenuActions(mainMenu)
 
 	mainMenu.Send(darwin.RegisterSelector("removeAllItems"))
 
@@ -1533,10 +1673,114 @@ func (p *darwinPlatform) applyMenu(items []MenuItem) {
 		mainMenu.SendPtr(darwin.RegisterSelector("addItem:"), appMenuItem.Ptr())
 	}
 
-	// Add items as separate menu items.
-	for _, item := range items {
-		p.addPlatformItem(mainMenu, item)
+	appMenu := p.getAppMenu()
+	if !appMenu.IsNil() {
+		// Replace, don't append — matches Electron Menu.setApplicationMenu().
+		darwin.ClearMenuActions(appMenu)
+		appMenu.Send(darwin.RegisterSelector("removeAllItems"))
 	}
+
+	for _, item := range items {
+		switch macOSMenuDestination(item) {
+		case menuDestMenuBar:
+			p.addPlatformItem(mainMenu, item)
+		case menuDestAppMenu:
+			if !appMenu.IsNil() {
+				p.addPlatformItem(appMenu, item)
+			}
+		default:
+			slog.Warn("gogpu: macOS menu bar requires submenus — leaf item skipped",
+				"title", item.Title)
+		}
+	}
+
+	// Re-insert Window menu after user items (GLFW/Qt/Electron pattern).
+	p.restoreWindowsMenu(mainMenu, windowMenuItem)
+	if !windowMenuItem.IsNil() {
+		windowMenuItem.Send(darwin.Selectors().Release())
+	}
+}
+
+// findWindowsMenuItem returns the main-menu NSMenuItem whose submenu is
+// NSApp.windowsMenu, or 0 if the Window menu is not currently in the bar.
+func (p *darwinPlatform) findWindowsMenuItem(mainMenu darwin.ID) darwin.ID {
+	windowMenu := p.getWindowMenu()
+	if windowMenu.IsNil() || mainMenu.IsNil() {
+		return 0
+	}
+
+	count := mainMenu.GetInt64(darwin.RegisterSelector("numberOfItems"))
+	for i := int64(0); i < count; i++ {
+		item := mainMenu.SendInt(darwin.RegisterSelector("itemAtIndex:"), i)
+		if item.IsNil() {
+			continue
+		}
+		submenu := item.Send(darwin.RegisterSelector("submenu"))
+		if !submenu.IsNil() && submenu.Ptr() == windowMenu.Ptr() {
+			return item
+		}
+	}
+	return 0
+}
+
+// restoreWindowsMenu puts the system Window menu back on the menu bar after
+// SetMenu replace. If the previous NSMenuItem was captured, it is re-added;
+// otherwise a new item is wrapped around NSApp.windowsMenu (still retained by
+// the application after a prior strip).
+func (p *darwinPlatform) restoreWindowsMenu(mainMenu, windowMenuItem darwin.ID) {
+	if mainMenu.IsNil() || p.app == nil {
+		return
+	}
+
+	nsApp := p.app.NSApp()
+	if nsApp.IsNil() {
+		return
+	}
+
+	created := false
+	if windowMenuItem.IsNil() {
+		windowMenu := p.getWindowMenu()
+		if windowMenu.IsNil() {
+			return
+		}
+		windowMenuItem = darwin.NewMenuItemWithSubmenu("Window", windowMenu)
+		if windowMenuItem.IsNil() {
+			return
+		}
+		created = true
+	}
+
+	mainMenu.SendPtr(darwin.RegisterSelector("addItem:"), windowMenuItem.Ptr())
+	if created {
+		// Balance alloc from NewMenuItemWithSubmenu; addItem: retains the item.
+		windowMenuItem.Send(darwin.Selectors().Release())
+	}
+	if submenu := windowMenuItem.Send(darwin.RegisterSelector("submenu")); !submenu.IsNil() {
+		nsApp.SendPtr(darwin.RegisterSelector("setWindowsMenu:"), submenu.Ptr())
+	}
+}
+
+// menuDestination classifies where a top-level SetMenu item is installed on macOS.
+type menuDestination int
+
+const (
+	menuDestSkip menuDestination = iota
+	menuDestAppMenu
+	menuDestMenuBar
+)
+
+// macOSMenuDestination returns where a top-level menu item should be installed.
+//
+// Separators go to the App Menu: on the menu bar they are invisible, and GLFW
+// cocoa_init.m adds separators directly to appMenu between Role items.
+func macOSMenuDestination(item MenuItem) menuDestination {
+	if len(item.Submenu) > 0 {
+		return menuDestMenuBar
+	}
+	if item.Separator || item.Role != MenuRoleNone {
+		return menuDestAppMenu
+	}
+	return menuDestSkip
 }
 
 func (p *darwinPlatform) addPlatformItem(parentMenu darwin.ID, item MenuItem) {
@@ -1547,6 +1791,16 @@ func (p *darwinPlatform) addPlatformItem(parentMenu darwin.ID, item MenuItem) {
 
 	if item.Role != MenuRoleNone {
 		roleStr := roleToString(item.Role)
+		if item.Action != nil {
+			// Keep the system role selector so AppKit still draws role icons
+			// (e.g. ⓘ for About). Custom Action is wired via setTarget:.
+			if roleStr != "" {
+				darwin.AddMenuItemWithRoleAndCallback(parentMenu, item.Title, roleStr, item.Action)
+				return
+			}
+			darwin.AddMenuItemWithCallback(parentMenu, item.Title, item.Action, roleKeyEquivalent(item.Role))
+			return
+		}
 		if roleStr != "" {
 			darwin.AddMenuItemWithRole(parentMenu, item.Title, roleStr)
 			return
@@ -1564,9 +1818,14 @@ func (p *darwinPlatform) addPlatformItem(parentMenu darwin.ID, item MenuItem) {
 		}
 
 		menuItem := darwin.NewMenuItemWithSubmenu(item.Title, submenu)
-		if !menuItem.IsNil() {
-			parentMenu.SendPtr(darwin.RegisterSelector("addItem:"), menuItem.Ptr())
+		if menuItem.IsNil() {
+			submenu.Send(darwin.Selectors().Release())
+			return
 		}
+		parentMenu.SendPtr(darwin.RegisterSelector("addItem:"), menuItem.Ptr())
+		// Balance allocs: addItem:/setSubmenu: retain item and submenu.
+		menuItem.Send(darwin.Selectors().Release())
+		submenu.Send(darwin.Selectors().Release())
 		return
 	}
 
@@ -1604,6 +1863,27 @@ func roleToString(role MenuRole) string {
 	return ""
 }
 
+// roleKeyEquivalent returns the standard macOS keyboard shortcut for a menu
+// role. Used when a custom Action overrides the role's default selector but
+// the item should still show the expected key equivalent in the menu.
+func roleKeyEquivalent(role MenuRole) string {
+	switch role {
+	case MenuRoleQuit:
+		return "q"
+	case MenuRoleClose:
+		return "w"
+	case MenuRoleMinimize:
+		return "m"
+	case MenuRolePreferences:
+		return ","
+	case MenuRoleHide:
+		return "h"
+	case MenuRoleFullScreen:
+		return "f"
+	}
+	return ""
+}
+
 // AddToSystemMenu adds items to a standard system menu (e.g., the Apple menu
 // or the Window menu). This enables the Godot-style system menu extension:
 // users can add custom items to existing menus without replacing them entirely.
@@ -1626,18 +1906,7 @@ func (p *darwinPlatform) AddToSystemMenu(menu SystemMenu, items []MenuItem) bool
 	}
 
 	for _, item := range items {
-		if item.Separator {
-			darwin.AddSeparatorItem(nsMenu)
-			continue
-		}
-		if item.Role != MenuRoleNone {
-			roleStr := roleToString(item.Role)
-			if roleStr != "" {
-				darwin.AddMenuItemWithRole(nsMenu, item.Title, roleStr)
-				continue
-			}
-		}
-		darwin.AddMenuItemWithCallback(nsMenu, item.Title, item.Action, "")
+		p.addPlatformItem(nsMenu, item)
 	}
 	return true
 }
@@ -1657,6 +1926,9 @@ func (p *darwinPlatform) getSystemMenu(menu SystemMenu) darwin.ID {
 // getAppMenu returns the NSMenu of the Apple menu (the first submenu of the main menu).
 // This is the menu that contains About, Preferences, Services, Quit, etc.
 func (p *darwinPlatform) getAppMenu() darwin.ID {
+	if p.app == nil {
+		return 0
+	}
 	nsApp := p.app.NSApp()
 	if nsApp.IsNil() {
 		return 0
@@ -1677,6 +1949,9 @@ func (p *darwinPlatform) getAppMenu() darwin.ID {
 // NSApplication automatically manages the Window menu when setWindowsMenu: is called,
 // which createMenuBar already does during Init().
 func (p *darwinPlatform) getWindowMenu() darwin.ID {
+	if p.app == nil {
+		return 0
+	}
 	nsApp := p.app.NSApp()
 	if nsApp.IsNil() {
 		return 0

@@ -3,6 +3,7 @@ package popover
 import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -18,6 +19,9 @@ type Popover struct {
 	cfg     config
 	painter Painter
 	visible bool
+
+	// Gesture recognizer for trigger click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
 
 	// overlayWidget is the content wrapper pushed to the overlay stack.
 	overlayWidget *overlayContent
@@ -57,6 +61,18 @@ func NewPopover(opts ...Option) *Popover {
 		}
 	}
 
+	// Create ClickRecognizer for trigger click handling (ADR-049).
+	p.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			// Toggle is handled by Event() which has access to ctx.
+			// The recognizer just marks that a click occurred.
+		},
+	})
+
 	return p
 }
 
@@ -69,7 +85,7 @@ func (p *Popover) IsFocusable() bool {
 // of its trigger widget.
 func (p *Popover) Layout(ctx widget.Context, constraints geometry.Constraints) geometry.Size {
 	if p.cfg.trigger != nil {
-		return p.cfg.trigger.Layout(ctx, constraints)
+		return widget.LayoutChild(p.cfg.trigger, ctx, constraints)
 	}
 	return constraints.Constrain(geometry.Sz(0, 0))
 }
@@ -225,7 +241,7 @@ func (p *Popover) resolveContentSize(ctx widget.Context) geometry.Size {
 
 	windowSize := ctx.WindowSize()
 	loose := geometry.Loose(windowSize)
-	size := p.cfg.content.Layout(ctx, loose)
+	size := widget.LayoutChild(p.cfg.content, ctx, loose)
 
 	if p.cfg.contentWidth > 0 {
 		size.Width = p.cfg.contentWidth
@@ -291,7 +307,21 @@ func (p *Popover) Mount(ctx widget.Context) {
 
 // Unmount is called when the popover is removed from the widget tree.
 func (p *Popover) Unmount() {
+	if p.clickRec != nil {
+		p.clickRec.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// Popover is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (p *Popover) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if p.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{p.clickRec}
 }
 
 // overlayContent wraps the popover content widget for the overlay stack.
@@ -324,7 +354,7 @@ func (oc *overlayContent) Layout(ctx widget.Context, constraints geometry.Constr
 
 	if oc.content != nil {
 		contentConstraints := geometry.Tight(size)
-		oc.content.Layout(ctx, contentConstraints)
+		widget.LayoutChild(oc.content, ctx, contentConstraints)
 		if setter, ok := oc.content.(interface{ SetBounds(geometry.Rect) }); ok {
 			setter.SetBounds(geometry.FromPointSize(oc.Bounds().Min, size))
 		}
@@ -402,8 +432,9 @@ func triggerScreenBoundsOf(w widget.Widget) geometry.Rect {
 
 // Compile-time interface checks.
 var (
-	_ widget.Widget    = (*Popover)(nil)
-	_ widget.Focusable = (*Popover)(nil)
-	_ widget.Lifecycle = (*Popover)(nil)
-	_ widget.Widget    = (*overlayContent)(nil)
+	_ widget.Widget        = (*Popover)(nil)
+	_ widget.Focusable     = (*Popover)(nil)
+	_ widget.Lifecycle     = (*Popover)(nil)
+	_ gesture.GestureAware = (*Popover)(nil)
+	_ widget.Widget        = (*overlayContent)(nil)
 )

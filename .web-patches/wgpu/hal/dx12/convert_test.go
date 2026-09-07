@@ -236,6 +236,7 @@ func TestDepthFormatToTypeless(t *testing.T) {
 		{"Depth24PlusStencil8", gputypes.TextureFormatDepth24PlusStencil8, d3d12.DXGI_FORMAT_R24G8_TYPELESS},
 		{"Depth32Float", gputypes.TextureFormatDepth32Float, d3d12.DXGI_FORMAT_R32_TYPELESS},
 		{"Depth32FloatStencil8", gputypes.TextureFormatDepth32FloatStencil8, d3d12.DXGI_FORMAT_R32G8X24_TYPELESS},
+		{"Stencil8", gputypes.TextureFormatStencil8, d3d12.DXGI_FORMAT_R24G8_TYPELESS},
 		{"Non-depth returns UNKNOWN", gputypes.TextureFormatRGBA8Unorm, d3d12.DXGI_FORMAT_UNKNOWN},
 	}
 
@@ -244,6 +245,30 @@ func TestDepthFormatToTypeless(t *testing.T) {
 			got := depthFormatToTypeless(tt.format)
 			if got != tt.expect {
 				t.Errorf("depthFormatToTypeless(%v) = %v, want %v", tt.format, got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestTextureFormatToSRVSelectsAspectPlane(t *testing.T) {
+	tests := []struct {
+		name       string
+		format     gputypes.TextureFormat
+		aspect     gputypes.TextureAspect
+		wantFormat d3d12.DXGI_FORMAT
+		wantPlane  uint32
+	}{
+		{"D24S8 depth", gputypes.TextureFormatDepth24PlusStencil8, gputypes.TextureAspectDepthOnly, d3d12.DXGI_FORMAT_R24_UNORM_X8_TYPELESS, 0},
+		{"D24S8 stencil", gputypes.TextureFormatDepth24PlusStencil8, gputypes.TextureAspectStencilOnly, d3d12.DXGI_FORMAT_X24_TYPELESS_G8_UINT, 1},
+		{"D32S8 stencil", gputypes.TextureFormatDepth32FloatStencil8, gputypes.TextureAspectStencilOnly, d3d12.DXGI_FORMAT_X32_TYPELESS_G8X24_UINT, 1},
+		{"standalone stencil defaults to stencil plane", gputypes.TextureFormatStencil8, gputypes.TextureAspectAll, d3d12.DXGI_FORMAT_X24_TYPELESS_G8_UINT, 1},
+		{"color", gputypes.TextureFormatRGBA8Unorm, gputypes.TextureAspectAll, d3d12.DXGI_FORMAT_R8G8B8A8_UNORM, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			format, plane := textureFormatToSRV(test.format, test.aspect)
+			if format != test.wantFormat || plane != test.wantPlane {
+				t.Fatalf("SRV selection = (%d, %d), want (%d, %d)", format, plane, test.wantFormat, test.wantPlane)
 			}
 		})
 	}
@@ -524,7 +549,7 @@ func TestPrimitiveTopologyToD3D12(t *testing.T) {
 func TestStencilOpToD3D12(t *testing.T) {
 	tests := []struct {
 		name   string
-		op     hal.StencilOperation
+		op     gputypes.StencilOperation
 		expect d3d12.D3D12_STENCIL_OP
 	}{
 		{"Keep", hal.StencilOperationKeep, d3d12.D3D12_STENCIL_OP_KEEP},
@@ -535,7 +560,7 @@ func TestStencilOpToD3D12(t *testing.T) {
 		{"DecrementClamp", hal.StencilOperationDecrementClamp, d3d12.D3D12_STENCIL_OP_DECR_SAT},
 		{"IncrementWrap", hal.StencilOperationIncrementWrap, d3d12.D3D12_STENCIL_OP_INCR},
 		{"DecrementWrap", hal.StencilOperationDecrementWrap, d3d12.D3D12_STENCIL_OP_DECR},
-		{"Unknown defaults to Keep", hal.StencilOperation(99), d3d12.D3D12_STENCIL_OP_KEEP},
+		{"Unknown defaults to Keep", gputypes.StencilOperation(99), d3d12.D3D12_STENCIL_OP_KEEP},
 	}
 
 	for _, tt := range tests {
@@ -723,14 +748,14 @@ func TestTextureFormatToDXGI(t *testing.T) {
 func TestCompositeAlphaModeToDXGI(t *testing.T) {
 	tests := []struct {
 		name   string
-		mode   hal.CompositeAlphaMode
+		mode   gputypes.CompositeAlphaMode
 		expect dxgi.DXGI_ALPHA_MODE
 	}{
 		{"Premultiplied", hal.CompositeAlphaModePremultiplied, dxgi.DXGI_ALPHA_MODE_PREMULTIPLIED},
 		{"Unpremultiplied", hal.CompositeAlphaModeUnpremultiplied, dxgi.DXGI_ALPHA_MODE_STRAIGHT},
 		{"Inherit", hal.CompositeAlphaModeInherit, dxgi.DXGI_ALPHA_MODE_UNSPECIFIED},
 		{"Opaque", hal.CompositeAlphaModeOpaque, dxgi.DXGI_ALPHA_MODE_IGNORE},
-		{"Unknown defaults to Ignore", hal.CompositeAlphaMode(99), dxgi.DXGI_ALPHA_MODE_IGNORE},
+		{"Unknown defaults to Ignore", gputypes.CompositeAlphaMode(99), dxgi.DXGI_ALPHA_MODE_IGNORE},
 	}
 
 	for _, tt := range tests {

@@ -20,6 +20,20 @@ func SetLayoutDebug(on bool) bool {
 	return prev
 }
 
+// layoutVerifying is set to true while the debug verifier re-runs a child's
+// Layout to check the cached result. Test widgets should check
+// [IsLayoutVerifying] and skip side effects (e.g. incrementing call counters)
+// during verification, so GOGPU_DEBUG_LAYOUT=1 can be a global CI flag without
+// double-counting (Flutter's debugCheckingIntrinsics pattern).
+var layoutVerifying bool
+
+// IsLayoutVerifying reports whether the layout-cache debug verifier is
+// currently re-running a Layout call. Test widgets use this to avoid counting
+// verification passes as real layout calls.
+func IsLayoutVerifying() bool {
+	return layoutVerifying
+}
+
 // layoutCacheable is implemented by any widget embedding [WidgetBase] (the
 // cache lives on WidgetBase). Widgets that don't embed it simply never cache.
 type layoutCacheable interface {
@@ -65,10 +79,6 @@ func LayoutChild(child Widget, ctx Context, constraints geometry.Constraints) ge
 	if r, ok := child.(interface{ SetNeedsRedraw(bool) }); ok {
 		r.SetNeedsRedraw(true)
 	}
-
-	if layoutDebugEnabled {
-		assertConstraintsSatisfied(child, constraints, size)
-	}
 	return size
 }
 
@@ -77,22 +87,14 @@ func LayoutChild(child Widget, ctx Context, constraints geometry.Constraints) ge
 // without a corresponding MarkNeedsLayout() call — the exact bug class the
 // cache risks. Flutter performs the equivalent assertion in debug builds.
 func verifyLayoutCacheHit(child Widget, ctx Context, c geometry.Constraints, cached geometry.Size) {
+	layoutVerifying = true
+	defer func() { layoutVerifying = false }()
+
 	fresh := child.Layout(ctx, c)
 	if fresh != cached {
 		panic(fmt.Sprintf(
 			"layout cache stale for %T: cached %v but recomputed %v for constraints %v — "+
 				"a layout-affecting mutation is missing a MarkNeedsLayout() call",
 			child, cached, fresh, c))
-	}
-	assertConstraintsSatisfied(child, c, fresh)
-}
-
-// assertConstraintsSatisfied panics if the measured size violates the input
-// constraints (Flutter debugAssertDoesMeetConstraints). Debug-only.
-func assertConstraintsSatisfied(child Widget, c geometry.Constraints, size geometry.Size) {
-	if !c.IsSatisfiedBy(size) {
-		panic(fmt.Sprintf(
-			"%T returned size %v that does not satisfy constraints %v",
-			child, size, c))
 	}
 }

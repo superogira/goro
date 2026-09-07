@@ -140,13 +140,12 @@ type Surface interface {
 	// Use this if rendering failed or was canceled.
 	DiscardTexture(texture SurfaceTexture)
 
-	// ActualExtent returns the actual swapchain dimensions after driver clamping.
+	// ActualExtent returns the dimensions selected for the swapchain.
 	//
-	// On Vulkan, the driver may clamp the requested extent to its supported
-	// range (e.g., on X11 HiDPI where the compositor reports a different
-	// physical size). The returned values reflect what the swapchain was
-	// actually created with, which may differ from the requested
-	// SurfaceConfiguration.Width/Height.
+	// On Vulkan, a defined CurrentExtent is compositor-owned and used verbatim
+	// (common on Android). When CurrentExtent is undefined, the requested extent
+	// is clamped to the driver's supported range. The result may therefore differ
+	// from SurfaceConfiguration.Width/Height.
 	//
 	// On non-Vulkan backends (DX12, Metal, GLES, Software), the returned
 	// values match the configured dimensions since those backends do not
@@ -172,6 +171,18 @@ type PixelPresenter interface {
 // Extension: not part of WebGPU specification.
 type PixelWriter interface {
 	WritePixels(data []byte, width, height uint32) error
+}
+
+// PixelReader is an optional Surface capability for capturing the current
+// framebuffer without exposing backend-owned memory.
+//
+// ReadPixels returns a caller-owned, tightly packed RGBA8 snapshot in top-left,
+// row-major order. The returned slice remains valid after later rendering or
+// surface destruction.
+//
+// Extension: not part of WebGPU specification.
+type PixelReader interface {
+	ReadPixels() []byte
 }
 
 // SurfaceTexture is a texture acquired from a surface.

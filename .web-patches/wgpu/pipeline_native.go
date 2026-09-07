@@ -3,6 +3,7 @@
 package wgpu
 
 import (
+	"github.com/gogpu/gputypes"
 	"github.com/gogpu/naga/ir"
 	"github.com/gogpu/wgpu/core"
 	"github.com/gogpu/wgpu/hal"
@@ -75,7 +76,7 @@ type RenderPipeline struct {
 	// Nil for non-strip topologies. When non-nil, DrawIndexed/DrawIndexedIndirect
 	// validate that the bound index buffer format matches this value.
 	// Matches Rust wgpu-core RenderPipeline.strip_index_format (render.rs:568-582).
-	stripIndexFormat *IndexFormat
+	stripIndexFormat *gputypes.IndexFormat
 	// blendConstantRequired is true if any color target uses BlendFactorConstant
 	// or BlendFactorOneMinusConstant. Draw calls validate that SetBlendConstant
 	// has been called when this is true.
@@ -90,30 +91,21 @@ type RenderPipeline struct {
 	ref *core.ResourceRef
 }
 
-// Release destroys the render pipeline. Destruction is deferred until the GPU
-// completes any submission that may reference this pipeline.
+// Release drops the application's ownership reference to the render pipeline.
+//
+// If the pipeline is still referenced by in-flight GPU submissions (Clone'd
+// via SetPipeline), the HAL pipeline stays alive until the GPU completes and
+// Triage drops all tracked refs. The onZero callback (set at CreateRenderPipeline)
+// fires only when the last reference drops. ADR-056: unified resource lifecycle.
 func (p *RenderPipeline) Release() {
 	if p.released {
 		return
 	}
 	p.released = true
 
-	halDevice := p.device.halDevice()
-	if halDevice == nil {
-		return
+	if p.ref != nil {
+		p.ref.Drop()
 	}
-
-	dq := p.device.destroyQueue()
-	if dq == nil {
-		halDevice.DestroyRenderPipeline(p.hal)
-		return
-	}
-
-	subIdx := p.device.lastSubmissionIndex()
-	halPipeline := p.hal
-	dq.Defer(subIdx, "RenderPipeline", func() {
-		halDevice.DestroyRenderPipeline(halPipeline)
-	})
 }
 
 // ComputePipeline represents a configured compute pipeline.
@@ -137,28 +129,19 @@ type ComputePipeline struct {
 	ref *core.ResourceRef
 }
 
-// Release destroys the compute pipeline. Destruction is deferred until the GPU
-// completes any submission that may reference this pipeline.
+// Release drops the application's ownership reference to the compute pipeline.
+//
+// If the pipeline is still referenced by in-flight GPU submissions (Clone'd
+// via SetPipeline), the HAL pipeline stays alive until the GPU completes and
+// Triage drops all tracked refs. The onZero callback (set at CreateComputePipeline)
+// fires only when the last reference drops. ADR-056: unified resource lifecycle.
 func (p *ComputePipeline) Release() {
 	if p.released {
 		return
 	}
 	p.released = true
 
-	halDevice := p.device.halDevice()
-	if halDevice == nil {
-		return
+	if p.ref != nil {
+		p.ref.Drop()
 	}
-
-	dq := p.device.destroyQueue()
-	if dq == nil {
-		halDevice.DestroyComputePipeline(p.hal)
-		return
-	}
-
-	subIdx := p.device.lastSubmissionIndex()
-	halPipeline := p.hal
-	dq.Defer(subIdx, "ComputePipeline", func() {
-		halDevice.DestroyComputePipeline(halPipeline)
-	})
 }

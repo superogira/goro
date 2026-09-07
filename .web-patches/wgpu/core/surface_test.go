@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gogpu/gputypes"
@@ -18,13 +19,13 @@ import (
 func newTestSurface(t *testing.T) (*Surface, *Device, hal.Queue) {
 	t.Helper()
 
-	api := noop.API{}
+	api := noop.NewBackend()
 	inst, err := api.CreateInstance(nil)
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
 
-	halSurface, err := inst.CreateSurface(0, 0)
+	halSurface, err := inst.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("CreateSurface: %v", err)
 	}
@@ -97,6 +98,135 @@ func TestSurfaceConfigure(t *testing.T) {
 	}
 }
 
+func TestSurfaceConfigureCopiesInputConfig(t *testing.T) {
+	surface, device, _ := newTestSurface(t)
+	config := testSurfaceConfig()
+
+	if err := surface.Configure(device, config); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	config.Width = 1024
+	config.Height = 768
+	config.EnableDamagePresent = true
+
+	got := surface.Config()
+	if got == nil {
+		t.Fatal("Config() returned nil after Configure")
+	}
+	if got == config {
+		t.Fatal("Configure retained the caller's configuration pointer")
+	}
+	if got.Width != 800 || got.Height != 600 || got.EnableDamagePresent {
+		t.Fatalf("stored config changed with caller mutation: %+v", *got)
+	}
+}
+
+func TestSurfaceConfigReturnsCopy(t *testing.T) {
+	surface, device, _ := newTestSurface(t)
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	got := surface.Config()
+	if got == nil {
+		t.Fatal("Config() returned nil after Configure")
+	}
+	got.Width = 1024
+	got.Height = 768
+	got.EnableDamagePresent = true
+
+	stored := surface.Config()
+	if stored == nil {
+		t.Fatal("Config() returned nil after returned-copy mutation")
+	}
+	if stored == got {
+		t.Fatal("Config() returned the internal configuration pointer")
+	}
+	if stored.Width != 800 || stored.Height != 600 || stored.EnableDamagePresent {
+		t.Fatalf("returned config mutation changed surface state: %+v", *stored)
+	}
+}
+
+func TestSurfaceConfigOwnershipDoesNotRace(t *testing.T) {
+	surface, device, _ := newTestSurface(t)
+	config := testSurfaceConfig()
+	if err := surface.Configure(device, config); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			config.Width = uint32(800 + i%2)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			_ = surface.Config().Width
+		}
+	}()
+	close(start)
+	wg.Wait()
+}
+
+var errTestSurfaceConfigure = errors.New("test surface configure failed")
+
+type failingConfigureSurface struct {
+	noop.Surface
+	fail bool
+}
+
+func (s *failingConfigureSurface) Configure(_ hal.Device, config *hal.SurfaceConfiguration) error {
+	if s.fail {
+		return errTestSurfaceConfigure
+	}
+	return s.Surface.Configure(nil, config)
+}
+
+func TestSurfaceFailedConfigureDoesNotCommit(t *testing.T) {
+	_, device, _ := newTestSurface(t)
+	raw := &failingConfigureSurface{}
+	surface := NewSurface(raw, "failed-configure-test")
+	initial := testSurfaceConfig()
+	if err := surface.Configure(device, initial); err != nil {
+		t.Fatalf("initial Configure: %v", err)
+	}
+
+	raw.fail = true
+	replacement := *initial
+	replacement.Width = 1024
+	replacement.Height = 768
+	if err := surface.Configure(device, &replacement); !errors.Is(err, errTestSurfaceConfigure) {
+		t.Fatalf("failed Configure = %v, want %v", err, errTestSurfaceConfigure)
+	}
+
+	got := surface.Config()
+	if got == nil {
+		t.Fatal("Config() returned nil after failed reconfigure")
+	}
+	if got.Width != initial.Width || got.Height != initial.Height {
+		t.Fatalf("failed reconfigure committed config %+v, want %dx%d", *got, initial.Width, initial.Height)
+	}
+	if surface.State() != SurfaceStateConfigured {
+		t.Fatalf("state after failed reconfigure = %v, want configured", surface.State())
+	}
+
+	initialSurface := NewSurface(&failingConfigureSurface{fail: true}, "failed-initial-configure-test")
+	if err := initialSurface.Configure(device, initial); !errors.Is(err, errTestSurfaceConfigure) {
+		t.Fatalf("failed initial Configure = %v, want %v", err, errTestSurfaceConfigure)
+	}
+	if initialSurface.State() != SurfaceStateUnconfigured || initialSurface.Config() != nil {
+		t.Fatalf("failed initial Configure committed state=%v config=%v", initialSurface.State(), initialSurface.Config())
+	}
+}
+
 func TestSurfaceConfigureNilDevice(t *testing.T) {
 	surface, _, _ := newTestSurface(t)
 	config := testSurfaceConfig()
@@ -144,6 +274,175 @@ func TestSurfaceAcquirePresent(t *testing.T) {
 	if surface.State() != SurfaceStateConfigured {
 		t.Errorf("state after Present = %d, want SurfaceStateConfigured (%d)",
 			surface.State(), SurfaceStateConfigured)
+	}
+}
+
+func TestSurfaceAcquisitionLeaseExpiresAtLifecycleBoundaries(t *testing.T) {
+	surface, device, queue := newTestSurface(t)
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	_, first, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if !surface.AcquisitionValid(first) {
+		t.Fatal("first lease was not valid after acquire")
+	}
+	if err := surface.Present(queue); err != nil {
+		t.Fatalf("Present: %v", err)
+	}
+	if surface.AcquisitionValid(first) {
+		t.Fatal("presented lease remained valid")
+	}
+
+	_, second, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	if second == first || !surface.AcquisitionValid(second) {
+		t.Fatalf("second lease = %d, first = %d, valid = %v", second, first, surface.AcquisitionValid(second))
+	}
+	surface.DiscardTexture()
+	if surface.AcquisitionValid(second) {
+		t.Fatal("discarded lease remained valid")
+	}
+
+	_, third, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("third acquire: %v", err)
+	}
+	surface.Unconfigure()
+	if surface.AcquisitionValid(third) {
+		t.Fatal("unconfigured lease remained valid")
+	}
+
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("reconfigure: %v", err)
+	}
+	_, fourth, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("fourth acquire: %v", err)
+	}
+	surface.Destroy()
+	if surface.AcquisitionValid(fourth) {
+		t.Fatal("destroyed lease remained valid")
+	}
+}
+
+func TestSurfaceAcquisitionLeaseWrapSkipsZero(t *testing.T) {
+	surface, device, _ := newTestSurface(t)
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	surface.nextAcquisition = ^uint64(0)
+	_, lease, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("AcquireTextureWithLease: %v", err)
+	}
+	if lease != 1 {
+		t.Fatalf("wrapped lease = %d, want 1", lease)
+	}
+	if !surface.AcquisitionValid(lease) {
+		t.Fatal("wrapped non-zero lease was not valid")
+	}
+	if surface.AcquisitionValid(0) {
+		t.Fatal("zero lease was accepted")
+	}
+	var nilSurface *Surface
+	if nilSurface.AcquisitionValid(lease) {
+		t.Fatal("nil surface accepted a lease")
+	}
+	surface.DiscardTexture()
+}
+
+func TestSurfaceRawReplacementRetiresPriorGeneration(t *testing.T) {
+	var nilSurface *Surface
+	if nilSurface.RawSurface() != nil {
+		t.Fatal("nil surface exposed a raw surface")
+	}
+
+	surface, device, _ := newTestSurface(t)
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	_, lease, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("AcquireTextureWithLease: %v", err)
+	}
+	replacement := &noop.Surface{}
+	surface.SetRawSurface(replacement)
+
+	if surface.RawSurface() != replacement {
+		t.Fatal("RawSurface did not expose the replacement surface")
+	}
+	if surface.AcquisitionValid(lease) {
+		t.Fatal("raw-surface replacement retained the prior acquisition")
+	}
+	if surface.State() != SurfaceStateUnconfigured || surface.Config() != nil {
+		t.Fatalf("replacement state = (%v, %v), want unconfigured with nil config", surface.State(), surface.Config())
+	}
+}
+
+func TestSurfaceRetireDeviceInvalidatesOnlyMatchingDevice(t *testing.T) {
+	var nilSurface *Surface
+	nilSurface.RetireDevice(nil)
+
+	surface, device, _ := newTestSurface(t)
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	_, lease, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("AcquireTextureWithLease: %v", err)
+	}
+
+	other := NewDevice(&noop.Device{}, nil, 0, gputypes.DefaultLimits(), "other-device")
+	defer other.Destroy()
+	surface.RetireDevice(nil)
+	surface.RetireDevice(other)
+	if !surface.AcquisitionValid(lease) {
+		t.Fatal("unrelated device retirement invalidated the acquisition")
+	}
+
+	surface.RetireDevice(device)
+	if surface.AcquisitionValid(lease) {
+		t.Fatal("matching device retirement retained the acquisition")
+	}
+	if surface.State() != SurfaceStateUnconfigured || surface.Config() != nil {
+		t.Fatalf("retired state = (%v, %v), want unconfigured with nil config", surface.State(), surface.Config())
+	}
+}
+
+type surfaceDestroyObserver struct {
+	noop.Surface
+	discards     int
+	unconfigures int
+	destroys     int
+}
+
+func (s *surfaceDestroyObserver) DiscardTexture(hal.SurfaceTexture) { s.discards++ }
+func (s *surfaceDestroyObserver) Unconfigure(hal.Device)            { s.unconfigures++ }
+func (s *surfaceDestroyObserver) Destroy()                          { s.destroys++ }
+
+func TestSurfaceDestroyRetiresAcquisitionBeforePlatformSurface(t *testing.T) {
+	_, device, _ := newTestSurface(t)
+	raw := &surfaceDestroyObserver{}
+	surface := NewSurface(raw, "destroy-order-test")
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if _, _, err := surface.AcquireTextureWithLease(nil); err != nil {
+		t.Fatalf("AcquireTextureWithLease: %v", err)
+	}
+
+	surface.Destroy()
+	surface.Destroy()
+	if raw.discards != 1 || raw.unconfigures != 1 || raw.destroys != 1 {
+		t.Fatalf("destroy calls = discard:%d unconfigure:%d destroy:%d; want 1,1,1",
+			raw.discards, raw.unconfigures, raw.destroys)
 	}
 }
 
@@ -696,11 +995,10 @@ func TestPresentPixels_UnsupportedBackend(t *testing.T) {
 	}
 }
 
-func TestPresentPixels_DiscardsAcquiredTexture(t *testing.T) {
-	// After AcquireTexture, PresentPixels should discard the stale texture
-	// and succeed (on a backend that supports it). Since noop doesn't support
-	// PresentPixels, we verify the state transition: acquired → configured,
-	// then the "not supported" error comes from the duck-type check.
+func TestPresentPixels_PreservesAcquiredOnUnsupported(t *testing.T) {
+	// On backends that don't support PixelPresenter (like noop), PresentPixels
+	// should return an error WITHOUT discarding the acquired texture. This
+	// preserves the surface state so the normal render→Present path still works.
 	surface, device, _ := newTestSurface(t)
 	config := testSurfaceConfig()
 
@@ -708,7 +1006,6 @@ func TestPresentPixels_DiscardsAcquiredTexture(t *testing.T) {
 		t.Fatalf("Configure: %v", err)
 	}
 
-	// Acquire a texture
 	_, err := surface.AcquireTexture(nil)
 	if err != nil {
 		t.Fatalf("AcquireTexture: %v", err)
@@ -717,21 +1014,56 @@ func TestPresentPixels_DiscardsAcquiredTexture(t *testing.T) {
 		t.Fatalf("state = %d, want SurfaceStateAcquired", surface.State())
 	}
 
-	// PresentPixels discards the acquired texture, then fails because noop
-	// doesn't implement the interface.
+	// PresentPixels on noop should fail without side effects.
 	err = surface.PresentPixels([]byte{0, 0, 0, 0}, 1, 1, nil)
 	if err == nil {
 		t.Error("PresentPixels on noop should return error")
 	}
 
-	// State should be Configured (texture was discarded before the duck-type check).
-	if surface.State() != SurfaceStateConfigured {
-		t.Errorf("state after PresentPixels = %d, want SurfaceStateConfigured", surface.State())
+	// State must stay Acquired — texture NOT discarded on unsupported backend.
+	if surface.State() != SurfaceStateAcquired {
+		t.Errorf("state after PresentPixels = %d, want SurfaceStateAcquired", surface.State())
+	}
+}
+
+type pixelPresentingTestSurface struct {
+	noop.Surface
+	discards int
+	presents int
+}
+
+func (s *pixelPresentingTestSurface) DiscardTexture(texture hal.SurfaceTexture) {
+	s.discards++
+	s.Surface.DiscardTexture(texture)
+}
+
+func (s *pixelPresentingTestSurface) PresentPixels([]byte, uint32, uint32, []image.Rectangle) error {
+	s.presents++
+	return nil
+}
+
+func TestPresentPixelsExpiresActiveAcquisition(t *testing.T) {
+	_, device, _ := newTestSurface(t)
+	raw := &pixelPresentingTestSurface{}
+	surface := NewSurface(raw, "pixel-presenting-test")
+	if err := surface.Configure(device, testSurfaceConfig()); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	_, lease, err := surface.AcquireTextureWithLease(nil)
+	if err != nil {
+		t.Fatalf("AcquireTextureWithLease: %v", err)
 	}
 
-	// Should be able to acquire again (proves discard happened).
-	_, err = surface.AcquireTexture(nil)
-	if err != nil {
-		t.Errorf("AcquireTexture after PresentPixels: %v", err)
+	if err := surface.PresentPixels([]byte{0, 0, 0, 0}, 1, 1, nil); err != nil {
+		t.Fatalf("PresentPixels: %v", err)
+	}
+	if surface.State() != SurfaceStateConfigured {
+		t.Fatalf("surface state = %v, want configured", surface.State())
+	}
+	if surface.AcquisitionValid(lease) {
+		t.Fatal("PresentPixels left the replaced acquisition valid")
+	}
+	if raw.discards != 1 || raw.presents != 1 {
+		t.Fatalf("backend calls = %d discards, %d presents; want one each", raw.discards, raw.presents)
 	}
 }

@@ -168,12 +168,15 @@ type Surface struct {
 	format        gputypes.TextureFormat
 	framebuffer   []byte
 	mu            sync.RWMutex // Protects framebuffer access
-	presentMode   hal.PresentMode
-	alphaMode     hal.CompositeAlphaMode
+	presentMode   gputypes.PresentMode
+	alphaMode     gputypes.CompositeAlphaMode
+	targetKind    hal.SurfaceTargetKind
 	displayHandle uintptr // X11: Display*, macOS/Windows: 0
 	hwnd          uintptr // window handle for platform blit (0 = headless)
 	platformBlit          // platform-specific blit resources (Windows: DIB section, Linux: X11 GC)
 }
+
+var _ hal.PixelReader = (*Surface)(nil)
 
 // Configure configures the surface with the given settings.
 //
@@ -346,11 +349,11 @@ func (s *Surface) ActualExtent() (width, height uint32) {
 	return s.width, s.height
 }
 
-// GetFramebuffer returns a copy of the current framebuffer data in RGBA byte
+// ReadPixels returns a copy of the current framebuffer data in RGBA byte
 // order (thread-safe). If the surface format is BGRA, R and B channels are
-// swapped so callers always receive consistent RGBA data. This allows
-// platform blit code to do a single RGBA→BGRA conversion for GDI/X11.
-func (s *Surface) GetFramebuffer() []byte {
+// swapped so callers always receive consistent RGBA data. The returned slice
+// is caller-owned and remains valid after later rendering or surface release.
+func (s *Surface) ReadPixels() []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -371,6 +374,13 @@ func (s *Surface) GetFramebuffer() []byte {
 	}
 
 	return result
+}
+
+// GetFramebuffer returns an owned RGBA snapshot for compatibility with
+// existing software HAL callers. New root-wgpu callers should use
+// Surface.ReadPixels.
+func (s *Surface) GetFramebuffer() []byte {
+	return s.ReadPixels()
 }
 
 // SurfaceTexture implements hal.SurfaceTexture.
@@ -414,12 +424,13 @@ type bufferSlice struct {
 
 type BindGroup struct {
 	Resource
-	desc           *hal.BindGroupDescriptor
-	textureViews   map[uint32]*TextureView     // binding index -> resolved texture view
-	buffers        map[uint32]*Buffer          // binding index -> resolved buffer (legacy, offset=0)
-	bufferBindings map[uint32]bufferSlice      // binding index -> buffer + offset/size
-	samplers       map[uint32]*SamplerResource // binding index -> resolved sampler
-	dynamicOffsets []uint32                    // applied via SetBindGroup
+	desc             *hal.BindGroupDescriptor
+	textureViews     map[uint32]*TextureView     // binding index -> resolved texture view
+	buffers          map[uint32]*Buffer          // binding index -> resolved buffer (legacy, offset=0)
+	bufferBindings   map[uint32]bufferSlice      // binding index -> buffer + offset/size
+	samplers         map[uint32]*SamplerResource // binding index -> resolved sampler
+	dynamicOffsets   []uint32                    // applied via SetBindGroup
+	hasDynamicOffset map[uint32]bool             // binding index -> true if HasDynamicOffset
 }
 
 // ComputePipeline stores compute pipeline configuration for the software backend.

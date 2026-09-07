@@ -570,6 +570,7 @@ func (s *stubWindow) ShouldClose() bool                                         
 func (s *stubWindow) SetTitle(_ string)                                                    {}
 func (s *stubWindow) SetMinSize(_, _ int)                                                  {}
 func (s *stubWindow) SetMaxSize(_, _ int)                                                  {}
+func (s *stubWindow) RequestSize(_, _ int)                                                 {}
 func (s *stubWindow) SetCursor(_ int)                                                      {}
 func (s *stubWindow) SetFrameless(_ bool)                                                  {}
 func (s *stubWindow) IsFrameless() bool                                                    { return false }
@@ -581,11 +582,18 @@ func (s *stubWindow) Maximize()                                                 
 func (s *stubWindow) IsMaximized() bool                                                    { return s.maximized }
 func (s *stubWindow) Close()                                                               { s.closed = true }
 func (s *stubWindow) Show()                                                                {}
+func (s *stubWindow) Hide()                                                                {}
+func (s *stubWindow) SetPosition(_, _ int)                                                 {}
 func (s *stubWindow) SyncFrame()                                                           {}
 func (s *stubWindow) SetCursorMode(_ int)                                                  {}
 func (s *stubWindow) CursorMode() int                                                      { return 0 }
 func (s *stubWindow) SetModalFrameCallback(_ func())                                       {}
 func (s *stubWindow) Destroy()                                                             {}
+func (s *stubWindow) StartDrag(_ []string, done func(DragResult)) {
+	if done != nil {
+		done(DragCancelled)
+	}
+}
 
 func TestRoleQuit_ClosesWindow(t *testing.T) {
 	m := newLinuxMenuState()

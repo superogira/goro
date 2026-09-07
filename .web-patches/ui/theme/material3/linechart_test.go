@@ -1,7 +1,6 @@
 package material3
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -18,7 +17,7 @@ func TestLineChartPainter_EmptyBounds(t *testing.T) {
 	p := LineChartPainter{}
 	canvas := &chartMockCanvas{}
 
-	p.PaintChart(canvas, geometry.Rect{}, linechart.PaintState{})
+	p.PaintChart(canvas, linechart.PaintState{})
 
 	if canvas.drawCount > 0 {
 		t.Error("should not draw anything with empty bounds")
@@ -37,7 +36,8 @@ func TestLineChartPainter_NilTheme_UsesDefaults(t *testing.T) {
 		ShowGrid:  true,
 	}
 
-	p.PaintChart(canvas, geometry.NewRect(0, 0, 200, 100), state)
+	state.Bounds = geometry.NewRect(0, 0, 200, 100)
+	p.PaintChart(canvas, state)
 
 	if canvas.drawCount == 0 {
 		t.Error("should draw with nil theme (default colors)")
@@ -56,7 +56,8 @@ func TestLineChartPainter_WithTheme(t *testing.T) {
 		YMax:      10,
 	}
 
-	p.PaintChart(canvas, geometry.NewRect(0, 0, 200, 100), state)
+	state.Bounds = geometry.NewRect(0, 0, 200, 100)
+	p.PaintChart(canvas, state)
 
 	if canvas.drawCount == 0 {
 		t.Error("should draw with theme")
@@ -74,7 +75,8 @@ func TestLineChartPainter_WithGrid(t *testing.T) {
 		YMax:      100,
 	}
 
-	p.PaintChart(canvas, geometry.NewRect(0, 0, 200, 100), state)
+	state.Bounds = geometry.NewRect(0, 0, 200, 100)
+	p.PaintChart(canvas, state)
 
 	// Grid draws m3ChartGridDivisions+1 lines.
 	if canvas.lineCount < m3ChartGridDivisions+1 {
@@ -93,7 +95,8 @@ func TestLineChartPainter_WithLabels(t *testing.T) {
 		YMax:       100,
 	}
 
-	p.PaintChart(canvas, geometry.NewRect(0, 0, 200, 100), state)
+	state.Bounds = geometry.NewRect(0, 0, 200, 100)
+	p.PaintChart(canvas, state)
 
 	if canvas.textCount < m3ChartGridDivisions+1 {
 		t.Errorf("labels should draw at least %d texts, got %d", m3ChartGridDivisions+1, canvas.textCount)
@@ -133,7 +136,8 @@ func TestLineChartPainter_NoSeries(t *testing.T) {
 	}
 
 	// Should not panic.
-	p.PaintChart(canvas, geometry.NewRect(0, 0, 200, 100), state)
+	state.Bounds = geometry.NewRect(0, 0, 200, 100)
+	p.PaintChart(canvas, state)
 }
 
 func TestLineChartPainter_SinglePoint(t *testing.T) {
@@ -148,7 +152,8 @@ func TestLineChartPainter_SinglePoint(t *testing.T) {
 	}
 
 	// Should not draw lines for single point.
-	p.PaintChart(canvas, geometry.NewRect(0, 0, 200, 100), state)
+	state.Bounds = geometry.NewRect(0, 0, 200, 100)
+	p.PaintChart(canvas, state)
 }
 
 // --- chartMockCanvas ---
@@ -194,4 +199,4 @@ func (c *chartMockCanvas) PopTransform()                                {}
 func (c *chartMockCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *chartMockCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *chartMockCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *chartMockCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *chartMockCanvas) ReplayScene(_ widget.SceneCache)              {}

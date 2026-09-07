@@ -1,7 +1,6 @@
 package app
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -49,7 +48,7 @@ func (c *recordingCanvas) PopTransform()                                {}
 func (c *recordingCanvas) TransformOffset() geometry.Point              { return geometry.Point{} }
 func (c *recordingCanvas) ScreenOriginBase() geometry.Point             { return geometry.Point{} }
 func (c *recordingCanvas) ClipBounds() geometry.Rect                    { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *recordingCanvas) ReplayScene(_ *scene.Scene)                   {}
+func (c *recordingCanvas) ReplayScene(_ widget.SceneCache)              {}
 
 // drawTrackingWidget tracks whether Draw was called and has configurable bounds.
 type drawTrackingWidget struct {
@@ -327,6 +326,27 @@ func TestDrawTo_DirtyTrackerRegionCount(t *testing.T) {
 	regionCount := w.dirtyTracker.RegionCount()
 	if regionCount == 0 {
 		t.Error("dirtyTracker.RegionCount() should be > 0 during dirty frame")
+	}
+}
+
+func TestDrawTo_DirtyClipIncludesStrokeFringe(t *testing.T) {
+	a := New(WithRenderMode(RenderModeFrameworkManaged))
+	w := a.Window()
+	bounds := geometry.NewRect(10, 20, 100, 50)
+	root := newDrawTrackingWidget(bounds)
+	w.SetRoot(root)
+
+	w.DrawTo(&recordingCanvas{}) // Full repaint.
+	root.SetNeedsRedraw(true)
+
+	canvas := &recordingCanvas{}
+	w.DrawTo(canvas)
+	if len(canvas.pushClipCalls) != 1 {
+		t.Fatalf("dirty clip calls = %d, want 1", len(canvas.pushClipCalls))
+	}
+	want := bounds.Expand(1)
+	if got := canvas.pushClipCalls[0]; got != want {
+		t.Fatalf("dirty clip = %v, want %v", got, want)
 	}
 }
 

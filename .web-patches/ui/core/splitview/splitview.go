@@ -5,6 +5,7 @@ import (
 
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 )
@@ -196,6 +197,9 @@ type Widget struct {
 	cfg     config
 	painter Painter
 
+	// Gesture recognizer for divider drag (ADR-049).
+	dragRec *gesture.DragRecognizer
+
 	// Interaction state.
 	hovered        bool
 	dragging       bool
@@ -243,6 +247,24 @@ func New(opts ...Option) *Widget {
 			ps.SetParent(w)
 		}
 	}
+
+	// Create DragRecognizer for divider drag (ADR-049).
+	w.dragRec = gesture.NewDragRecognizer(gesture.DragConfig{
+		OnDragStart: func(_ gesture.DragStartDetails) {
+			w.dragging = true
+		},
+		OnDragUpdate: func(details gesture.DragUpdateDetails) {
+			w.updateRatioFromDrag(details.LocalPosition)
+		},
+		OnDragEnd: func(_ gesture.DragEndDetails) {
+			w.dragging = false
+			w.SetNeedsRedraw(true)
+		},
+		OnDragCancel: func() {
+			w.dragging = false
+			w.SetNeedsRedraw(true)
+		},
+	})
 
 	return w
 }
@@ -309,7 +331,7 @@ func (w *Widget) layoutChild(ctx widget.Context, child widget.Widget, rect geome
 		MinHeight: rect.Height(),
 		MaxHeight: rect.Height(),
 	}
-	child.Layout(ctx, childConstraints)
+	widget.LayoutChild(child, ctx, childConstraints)
 	if setter, ok := child.(interface{ SetBounds(geometry.Rect) }); ok {
 		setter.SetBounds(rect)
 	}
@@ -464,7 +486,7 @@ func (w *Widget) handleMouseMove(ctx widget.Context, me *event.MouseEvent) bool 
 			return false
 		}
 
-		w.updateRatioFromDrag(ctx, me.Position)
+		w.updateRatioFromDrag(me.Position)
 		w.updateCursor(ctx) // Maintain drag cursor on every move
 		return true
 	}
@@ -497,7 +519,7 @@ func (w *Widget) handleMousePress(ctx widget.Context, me *event.MouseEvent) bool
 	if w.cfg.collapsible {
 		now := ctx.Now()
 		if now.Sub(w.lastClickAt) < doubleClickThreshold && w.isNearLastClick(me.Position) {
-			w.toggleCollapse(ctx)
+			w.toggleCollapse()
 			w.lastClickAt = time.Time{} // Reset to prevent triple-click.
 			return true
 		}
@@ -549,21 +571,21 @@ func (w *Widget) isNearLastClick(p geometry.Point) bool {
 }
 
 // toggleCollapse toggles the collapsed state of the first panel.
-func (w *Widget) toggleCollapse(ctx widget.Context) {
+func (w *Widget) toggleCollapse() {
 	if w.collapsed {
 		// Restore previous ratio.
 		w.collapsed = false
-		w.setRatio(ctx, w.preCollapse)
+		w.setRatio(w.preCollapse)
 	} else {
 		// Collapse first panel.
 		w.preCollapse = w.effectiveRatio()
 		w.collapsed = true
-		w.setRatio(ctx, 0)
+		w.setRatio(0)
 	}
 }
 
 // updateRatioFromDrag calculates the new ratio based on drag position.
-func (w *Widget) updateRatioFromDrag(ctx widget.Context, pos geometry.Point) {
+func (w *Widget) updateRatioFromDrag(pos geometry.Point) {
 	bounds := w.Bounds()
 	divW := w.cfg.resolvedDividerWidth()
 
@@ -590,7 +612,7 @@ func (w *Widget) updateRatioFromDrag(ctx widget.Context, pos geometry.Point) {
 		w.collapsed = false
 	}
 
-	w.setRatio(ctx, newRatio)
+	w.setRatio(newRatio)
 }
 
 // clampRatioToConstraints applies min panel constraints to the ratio.
@@ -622,7 +644,7 @@ func (w *Widget) clampRatioToConstraints(ratio, totalSpace float32) float32 {
 
 // setRatio updates the split ratio, writes to signal if bound, and fires callback.
 // If fixedFirst is active, the pixel size is updated from the new ratio.
-func (w *Widget) setRatio(ctx widget.Context, ratio float32) {
+func (w *Widget) setRatio(ratio float32) {
 	ratio = clampRatio(ratio)
 	current := w.cfg.ResolvedRatio()
 
@@ -654,9 +676,8 @@ func (w *Widget) setRatio(ctx widget.Context, ratio float32) {
 		w.cfg.onRatioChange(ratio)
 	}
 
-	w.SetNeedsRedraw(true)
-	// ADR-028: layout change — ratio change resizes child panels.
-	ctx.Invalidate()
+	// ADR-032: layout change — ratio change resizes child panels.
+	w.MarkNeedsLayout()
 }
 
 // effectiveRatio returns the current ratio, accounting for collapsed state.
@@ -734,10 +755,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 		return
 	}
 	if w.cfg.readonlyRatioSignal != nil {
-		b := state.BindToScheduler(w.cfg.readonlyRatioSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.readonlyRatioSignal, w, sched)
 		w.AddBinding(b)
 	} else if w.cfg.ratioSignal != nil {
-		b := state.BindToScheduler(w.cfg.ratioSignal, w, sched)
+		b := state.BindToSchedulerLayout(w.cfg.ratioSignal, w, sched)
 		w.AddBinding(b)
 	}
 }
@@ -745,7 +766,21 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the split view is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	if w.dragRec != nil {
+		w.dragRec.Dispose()
+	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
+}
+
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// SplitView is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.dragRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.dragRec}
 }
 
 // Ratio returns the current split ratio.
@@ -801,6 +836,7 @@ func clampRatio(r float32) float32 {
 
 // Verify Widget implements required interfaces at compile time.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Lifecycle = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Lifecycle     = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

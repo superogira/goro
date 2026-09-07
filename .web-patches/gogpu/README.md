@@ -36,13 +36,14 @@ Built on [gogpu/wgpu](https://github.com/gogpu/wgpu) — the unified Go WebGPU p
 | **Backends** | Pure Go (default), Rust FFI (`-tags rust`), Browser WASM — via [gogpu/wgpu](https://github.com/gogpu/wgpu) |
 | **Graphics API** | Runtime selection: Vulkan, DX12, Metal, GLES, Software |
 | **Platforms** | Windows (Vulkan/DX12/GLES), Linux X11/Wayland (Vulkan/GLES), macOS (Metal), Browser/WASM (WebGPU) |
-| **Rendering** | Event-driven three-state model (idle/animating/continuous), zero-copy surface rendering, damage-aware presentation |
-| **Graphics** | Windowing, input handling, multi-keyboard layout (X11 XKB + Wayland xkbcommon), AltGr/international text input (unified xkbcommon, ADR-029), key repeat on all platforms (Wayland client-side timer, ADR-033), texture loading, frameless windows, mouse grab / pointer lock (Win32 + X11 + Wayland, SDL parity), GPU adapter power preference, native macOS window tabbing, native system menus (macOS + Windows), native file dialogs (macOS + Windows + Linux D-Bus/zenity/kdialog) |
+| **Rendering** | Event-driven three-state model (idle/animating/continuous), 0% CPU when idle (lazy acquire), zero-copy surface rendering, damage-aware presentation |
+| **Input Models** | Three coexisting models: callbacks (`EventSource`), state polling (`Input()`, Ebiten-style), SDL-style event queue (`PollInputEvent()`) |
+| **Graphics** | Windowing, input handling, multi-keyboard layout (X11 XKB + Wayland xkbcommon), AltGr/international text input (unified xkbcommon, ADR-029), key repeat on all platforms (Wayland client-side timer, ADR-033), texture loading, frameless windows, runtime window resize (`RequestSize`), mouse grab / pointer lock (Win32 + X11 + Wayland, SDL parity), OS drag-and-drop: incoming (all 4 desktop platforms) + outgoing drag source (`StartDrag`, all 5 platforms), GPU adapter power preference, native macOS window tabbing, native system menus (macOS + Windows), native file dialogs (macOS + Windows + Linux D-Bus/zenity/kdialog), native print contract and desktop backends (Windows/macOS/Linux portal) |
 | **Scroll** | ScrollPhase + IsMomentum for macOS trackpad momentum detection (ADR-032), pixel/line/page delta modes |
-| **Sound** | Platform system sounds for UI feedback (winmm, NSSound, canberra/PulseAudio) |
+| **Sound** | 12 UI sound types (UWP ElementSoundPlayer parity): Click, Invoke, Focus, Navigate, Show/Hide, feedback. winmm, NSSound, canberra |
 | **Compute** | Full compute shader support |
 | **Window Chrome** | Frameless windows with custom title bars, DWM shadow, hit-test regions |
-| **HiDPI** | Per-monitor DPI, WM_DPICHANGED, logical/physical coordinate split, WithSize in logical DIP (ADR-030) |
+| **HiDPI** | Per-monitor DPI, runtime DPI change (`ScaleChangedEvent` on all platforms), WM_DPICHANGED, logical/physical coordinate split, WithSize in logical DIP (ADR-030, ADR-059) |
 | **Integration** | DeviceProvider, WindowProvider, PlatformProvider, WindowChrome, SurfaceView |
 | **Logging** | Structured logging via `log/slog`, silent by default |
 | **Build** | Zero CGO with Pure Go backend |
@@ -160,13 +161,14 @@ All settings can be overridden via environment variables (no code changes needed
 | `GOGPU_POWER_PREFERENCE` | `low`, `high` | none | GPU power/performance trade-off |
 | `GOGPU_RENDER_MODE` | `auto`, `cpu`, `gpu` | auto | 2D rendering path (ADR-020) |
 | `GOGPU_DEBUG_DAMAGE` | `1` | off | Show damage region overlay (ADR-021) |
+| `GOGPU_STATS` | `1` | off | Enable GPU upload/resource stats (#484) |
 
 ```bash
 # Examples:
 GOGPU_GRAPHICS_API=vulkan ./myapp        # Force Vulkan
 GOGPU_GRAPHICS_API=software ./myapp      # Force software renderer
 GOGPU_RENDER_MODE=cpu ./myapp            # Force CPU rasterizer (benchmarking)
-GOGPU_DEBUG_DAMAGE=1 ./myapp             # Show green overlay on dirty regions
+GOGPU_DEBUG_DAMAGE=overlay ./myapp             # Show green overlay on dirty regions
 ```
 
 `Config.With*()` methods in code take precedence over environment variables.
@@ -287,6 +289,7 @@ This eliminates the GPU→CPU→GPU round-trip when integrating with gg/ggcanvas
 w, h := app.Size()              // logical points (DIP)
 fw, fh := app.PhysicalSize()    // physical pixels (framebuffer)
 scale := app.ScaleFactor()      // 1.0 = standard, 2.0 = Retina/HiDPI
+app.RequestSize(1024, 768)      // resize at runtime (all platforms, DPI-aware)
 
 // Clipboard
 text, _ := app.ClipboardRead()
@@ -307,6 +310,28 @@ if app.ReduceMotion() { /* disable animations */ }
 if app.HighContrast() { /* increase contrast */ }
 fontMul := app.FontScale() // user's font size preference
 ```
+
+### Native printing contract
+
+Applications provide complete PDF/document bytes and can submit them to the
+desktop native print backends without coupling UI code to an operating system:
+
+```go
+job, err := app.Print(ctx, gogpu.NewPDFDocument("report.pdf", pdfBytes), gogpu.PrintOptions{})
+if err != nil {
+	// Invalid input, unavailable native services, or an unsupported platform.
+	return err
+}
+if err := <-job.Done(); err != nil {
+	// context.Canceled means cancellation; other errors are native/spool errors.
+	return err
+}
+```
+
+See [docs/PRINTING.md](docs/PRINTING.md) for parent-window, ownership, and
+lifecycle semantics. The desktop backends accept PDF input through Windows
+PrintDlgEx/GDI, macOS PDFKit/AppKit, and the Linux xdg-desktop-portal; browser
+printing remains unsupported.
 
 ### macOS System Menu
 
@@ -358,6 +383,31 @@ app.OnUpdate(func(dt float64) {
 ```
 
 All input methods are thread-safe and work with the frame-based update loop.
+
+### SDL-Style Event Queue
+
+For game developers who prefer explicit event processing (SDL/Pygame pattern):
+
+```go
+app.OnUpdate(func(dt float64) {
+    for ev, ok := app.PollInputEvent(); ok; ev, ok = app.PollInputEvent() {
+        switch e := ev.(type) {
+        case gpucontext.KeyEvent:
+            if e.Pressed && e.Key == gpucontext.KeyEscape {
+                app.Quit()
+            }
+        case gpucontext.PointerEvent:
+            if e.Type == gpucontext.PointerDown {
+                player.Shoot(e.X, e.Y)
+            }
+        case gpucontext.ScrollEvent:
+            camera.Zoom(e.DeltaY)
+        }
+    }
+})
+```
+
+Three input models coexist — callbacks, polling, and event queue — all driven from the same internal dispatch. Use whichever fits your use case. Zero overhead for unused models.
 
 ### Multi-Window Input
 
@@ -581,7 +631,7 @@ Vulkan     DX12  Metal  GLES   Software
 | `gmath/` | Vec2, Vec3, Vec4, Mat4, Color |
 | `window/` | Window configuration |
 | `input/` | Keyboard and mouse input |
-| `sound/` | Platform system sounds (Click, Alert, Error, Warning, Success) |
+| `sound/` | Platform system sounds — 12 types: Click, Invoke, Focus, Navigate, Show/Hide, Alert, Error, Warning, Success (UWP parity) |
 | `internal/platform/` | Platform-specific windowing (Win32, Cocoa, X11, Wayland, Browser) |
 | `internal/thread/` | Multi-thread rendering (RenderLoop) |
 
@@ -753,11 +803,11 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Star History
 
-<a href="https://star-history.com/#gogpu/gogpu&Date">
+<a href="https://starhistory.io">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=gogpu/gogpu&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=gogpu/gogpu&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=gogpu/gogpu&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.starhistory.io/png?repos=gogpu/gogpu&style=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.starhistory.io/png?repos=gogpu/gogpu&style=professional" />
+   <img alt="Star History Chart" src="https://api.starhistory.io/png?repos=gogpu/gogpu" width="800" />
  </picture>
 </a>
 

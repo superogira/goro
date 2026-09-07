@@ -5,6 +5,573 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.3] - 2026-09-02
+
+### Added
+
+- **Validation Phase C** (#333) — usage-time feature gates and texture usage validation toward ~70% Rust wgpu-core parity.
+  - **`core.RequireFeature`** / **`FeatureError`** — canonical helper for all feature-gated operations (VAL-C0).
+  - **Feature registry** — `AllFeatureRequirements` documents 25 WebGPU features with resource entry points and Rust references.
+  - **Format feature gates** (VAL-C5..C11) — BC/ETC2/ASTC compression, Depth32FloatStencil8, RG11B10Ufloat renderable, BGRA8 storage, unclipped depth in `ValidateTextureDescriptor` / `ValidateRenderPipelineDescriptor`.
+  - **Shader feature gates** (VAL-C12/C19/C20) — WGSL f16/f64 via naga capability validation; subgroup operations/barrier via source scan in `ValidateShaderModuleDescriptor`.
+  - **Texture usage matrix** (VAL-C14..C18) — `ValidateTextureUsageFlags` rejects invalid compressed usages, depth+storage, and multisampled storage; storage+render and depth+render allowed at creation (W3C); exhaustive `IsCompatible` matrix tests in `core/track`.
+  - **Render pass gates** (VAL-C1/C3) — `FeatureMultiDrawIndirect` when `drawCount > 1`; `FeatureIndirectFirstInstance` when `firstInstance != 0`.
+  - **Query set gates** (VAL-C24) — `ValidateQuerySetDescriptor` for timestamp queries; public `Device.CreateQuerySet` (#330).
+  - **Float32 filterable** (VAL-C21) — bind-time validation in `ValidateBindGroupDescriptor` when filtering 32-bit float textures.
+  - **SPIR-V capability introspection** — `OpCapability` scan for f16/f64/subgroup features in `ValidateShaderModuleDescriptor`.
+  - **MultiDrawIndirectCount** (VAL-C2) — public `MultiDrawIndirectCount` / `MultiDrawIndexedIndirectCount` with `FeatureMultiDrawIndirectCount` gate; Vulkan `vkCmdDrawIndirectCount` when available.
+  - **Test infrastructure** — `core/testutil.ValidationEnv` fixture builder; registry-driven `featureGateCases`; root `wgpu_feature_gate_test.go` smoke tests.
+
+## [0.34.2] - 2026-08-31
+
+### Added
+
+- **Pipeline disk cache** (#331, @lkmavi) — driver-compiled GPU ISA persistence for faster cold starts on repeat launches. Extends existing in-memory shader cache to disk.
+  - **Vulkan**: `VkPipelineCache` created at device init, passed to all `vkCreateGraphicsPipelines` / `vkCreateComputePipelines`, saved via `vkGetPipelineCacheData` on device destroy. Graceful fallback on stale/corrupt cache. Adapter key includes vendorID + deviceID + driverVersion + PipelineCacheUUID. Disk path: `UserCacheDir()/gogpu/vulkan/<adapterKey>/pipeline.cache`
+  - **DX12**: `GetCachedBlob` after PSO creation, `D3D12_CACHED_PIPELINE_STATE` on restore. Per-PSO blobs keyed by root signature + shader bytecode + fixed-function state SHA-256 (including full depth/stencil hash with all stencil ops). Stale blob → E_INVALIDARG → automatic retry without cache. DX12 PSO caching is **ahead of Rust wgpu** (which has an empty stub). Disk path: `UserCacheDir()/gogpu/dx12/<adapterKey>/`
+  - **`internal/pipelinecache`**: shared atomic blob I/O (`write-tmp + rename` for crash safety) and adapter-scoped cache path helpers. Follows ADR-069 internal package pattern. 179 LOC tests.
+  - Pipeline cache init is **non-fatal** — failure logs warning and continues with `pipelineCache = 0` (VK_NULL_HANDLE) or nil PSO cache.
+
+### Fixed
+
+- **Race conditions** (@lkmavi) — `RegisterHALBackends()` wrapped in `sync.Once` (prevents double registration on concurrent `CreateInstance`), `instanceEnumerateMu` mutex serializes adapter probing (Windows driver init not thread-safe).
+- **codecov.yml** — `hal/**` glob pattern for nested packages (was `hal/` which missed sub-packages), patch coverage target 85%.
+
+## [0.34.1] - 2026-08-31
+
+### Changed
+
+- **Remove ALL type aliases** (ADR-073) — 35 type aliases in `types.go` + 7 in `hal/` replaced with direct `gputypes.X` qualified imports. Go type aliases (`type X = Y`) are designed for gradual migration (Russ Cox proposal, Go 1.9), not permanent architecture. Google Go style guide: "Don't use type aliasing when it is not needed." Our data: 94.6% of ecosystem callers (580/613) already used `gputypes` directly — aliases served 33 of 613 use cases. Users import `gputypes` alongside `wgpu` (IDE auto-import, zero friction). 99 files changed, net -63 LOC.
+
+## [0.34.0] - 2026-08-31
+
+### Changed
+
+- **Public API struct params** (ADR-072, #342) — `SetViewport`, `SetScissorRect`, `Draw`, `DrawIndexed` now take struct params instead of 4-6 positional same-type args. Go has no named arguments — struct params prevent silent swap bugs. Extensible for v1.0+ (new fields with zero-value defaults).
+  - `SetViewport(vp gputypes.Viewport)` — was `(x, y, w, h, minDepth, maxDepth float32)`
+  - `SetScissorRect(rect gputypes.ScissorRect)` — was `(x, y, w, h uint32)`
+  - `Draw(args gputypes.DrawArgs)` — was `(vertexCount, instanceCount, firstVertex, firstInstance uint32)`
+  - `DrawIndexed(args gputypes.DrawIndexedArgs)` — was `(indexCount, instanceCount, firstIndex uint32, baseVertex int32, firstInstance uint32)`
+  - `Dispatch(x, y, z uint32)` — stays positional (3 params, convention strong)
+  - Struct field order byte-identical to VkDrawIndirectCommand / D3D12_DRAW_ARGUMENTS (GPU ABI compatible)
+- **HAL type aliases** — `hal.Viewport`, `hal.ScissorRect`, `hal.DrawArgs`, `hal.DrawIndexedArgs` are now type aliases to `gputypes` (no local struct definitions). `renderpass_native.go` no longer imports `hal/`. Unblocks ADR-070 (hal/ → internal/).
+- **deps:** gputypes v0.7.0 → v0.8.0, gpucontext v0.31.2 → v0.31.3
+
+### Why
+
+Go has no named arguments — 4-6 same-type positional params (e.g., `SetViewport(x, y, w, h, minDepth, maxDepth float32)`) are a silent swap bug risk. The compiler cannot distinguish `width` from `height` when both are `float32`. Every native GPU API (Vulkan, Metal, DX12, SDL3, Qt6 QRhi) uses structs for viewport/scissor/draw. The W3C WebGPU spec uses positional because JavaScript has no cheap value types — Go does. Struct params are extensible after v1.0 (new fields with zero-value defaults = backward compatible); positional params are frozen forever. ADR-072 documents this decision with enterprise references.
+
+## [0.33.1] - 2026-08-30
+
+### Changed
+
+- **HAL: SetViewport/SetScissorRect struct params** (#340) — positional parameters replaced with `hal.Viewport` and `hal.ScissorRect` structs on `hal.RenderPassEncoder` interface. Maps 1:1 to native GPU API structs (VkViewport, MTLViewport, D3D12_VIEWPORT). Public API unchanged (still positional per W3C spec). Rust wgpu HAL uses `Rect<f32>` + `Range<f32>` (`lib.rs:1667`); our monolithic `Viewport` avoids the split because Go interfaces don't support generic methods.
+- **deps:** gpucontext v0.30.0 → v0.31.2
+
+## [0.33.0] - 2026-08-30
+
+### Added
+
+- **DownlevelCapabilities** (ADR-071) — 27 Rust-parity capability flags for graceful degradation on non-conformant adapters. The W3C WebGPU spec excludes non-conformant adapters; as a native Go library, we degrade gracefully instead of refusing to run.
+  - **Public API**: `Adapter.DownlevelCapabilities()` on native, browser, and Rust FFI variants. Matches Rust wgpu `Adapter::get_downlevel_capabilities()` (`adapter.rs:174`)
+  - **Types**: `gputypes.DownlevelCapabilities` struct (Flags, Limits, ShaderModel — 3 fields), 27 `DownlevelFlags` with explicit `1 << N` bit positions matching Rust wgpu-types (`limits.rs:1102-1246`)
+  - **Device validation**: `core.Device.RequireDownlevelFlags()` validates at pipeline creation time. `CreateComputePipeline` gates on `DownlevelFlagsComputeShaders` (Rust `resource.rs:4367` parity)
+  - **gpucontext**: `DeviceProvider.DownlevelCapabilities()` — 7th interface method, follows `Features()` precedent. Flutter pattern: "check capabilities, not backend type"
+
+### Fixed
+
+- **Vulkan/Metal**: `DownlevelFlags: 0` → `DefaultDownlevelCapabilities()`. All modern Vulkan/Metal hardware supports all capabilities
+- **Vulkan**: 8 conditional flags queried from `VkPhysicalDeviceFeatures` (Rust `adapter.rs:684-719` parity): CubeArrayTextures, AnisotropicFiltering, FragmentWritableStorage, MultisampledShading, IndependentBlend, FullDrawIndexUint32, DepthBiasClamp, TextureCompression
+- **DX12**: Both `Adapter` and `AdapterLegacy` use `DefaultDownlevelCapabilities()` (DX12 FL 11.0+ guarantees all)
+- **GLES**: `queryDownlevelFlags()` expanded from 4 to ~20 dynamic checks (Rust `adapter.rs:387-452` parity). IndirectExecution exact Rust logic. MSL2_1 unconditional. Both OES + GL_EXT extension variants
+- **Software**: 1 flag → 13 flags, each verified against implementation code (BaseVertex, IndependentBlend, FullDrawIndexUint32, etc.)
+- **Noop**: `DefaultDownlevelCapabilities()` (Rust `noop/mod.rs:188-192` parity)
+- **TEXTURE_COMPRESSION**: `BC || (ETC2 && ASTC)` per W3C WebGPU spec (was `BC || ETC2 || ASTC`)
+- **Flag naming**: `IndirectFirstInstance` → `IndirectExecution` (different concept), `BaseVertexBaseInstance` → `BaseVertex` (Rust name)
+- **Bit positions**: `AnisotropicFiltering` moved from bit 5 to bit 10 (Rust position). Dead backward-compat aliases removed
+
+### Changed
+
+- **deps**: gputypes v0.6.0 → v0.7.0 (DownlevelCapabilities types), gpucontext v0.29.0 → v0.30.0 (DeviceProvider method)
+- **hal/descriptor.go**: Local DownlevelFlags/DownlevelCapabilities types replaced with gputypes imports
+- **ShaderModel**: Raw `uint32` (50, 60) → `gputypes.ShaderModel` named type (Sm2/Sm4/Sm5)
+
+## [0.32.1] - 2026-08-28
+
+### Fixed
+
+- **Software backend**: `FeatureRayQuery` now advertised in adapter features — consumers can discover RT capability via `device.Features().Contains(FeatureRayQuery)`. RT limits set (MaxBlasPrimitiveCount=1M, MaxBlasGeometryCount=64, MaxTlasInstanceCount=65K).
+- **RT example**: copyright header + proper error handling on `WriteBuffer`/`Submit`
+- **CHANGELOG**: Software backend description — "full RT on any platform without GPU" (was "CI/testing only")
+
+### Changed
+
+- **docs**: `docs/RAY-TRACING.md` — public RT documentation (backends, architecture, limitations)
+- **docs**: AGENTS.md updated to v0.32.0 with RT section and corrected dependency versions
+- **docs**: README.md — ray tracing added to features table and examples
+- **docs**: ROADMAP.md + ARCHITECTURE.md updated for v0.32.0
+
+## [0.32.0] - 2026-08-27
+
+### Added
+
+- **Ray Tracing Extensions** (experimental, ADR-062) — inline ray queries across 4 GPU backends + CPU
+  - **HAL interface**: `AccelerationStructure`, 5 Device + 4 CommandEncoder methods
+  - **Vulkan**: VK_KHR_acceleration_structure + VK_KHR_ray_query (real FFI calls)
+  - **DX12**: DXR Tier 1.1 + SM 6.5 (COM bindings for ID3D12Device5/CommandList4)
+  - **Metal**: MTLAccelerationStructure (macOS 15.0+)
+  - **Software**: CPU BVH build + Möller-Trumbore intersection — full RT on any platform without GPU (servers, CI, containers, embedded)
+  - **`internal/raytracing/`**: build orchestration, compaction state machine, 9 validation checks (96.8% coverage)
+  - **Example**: `examples/raytracing-headless/` — visual RT verification on software backend
+- **`NewBackend()` constructors** on all 6 backends (enterprise API consistency)
+
+### Changed
+
+- `software.API` / `noop.API` renamed to `Backend` (consistent with Vulkan/DX12/Metal/GLES)
+- **deps**: gputypes v0.5.2 → v0.6.0, gpucontext v0.28.0 → v0.29.0
+
+## [0.31.8] - 2026-08-27
+
+### Fixed
+
+- **all backends:** Multiple Render Targets (MRT) — render passes now honor all `ColorAttachments`, not just `[0]` (#322, @dvoyni, @darkliquid)
+  - **Vulkan:** `RenderPassKey`/`FramebufferKey` refactored from scalar to `[MaxColorAttachments]` arrays; `BeginRenderPass` iterates all attachments; `createRenderPass` builds N `VkAttachmentReference` entries; `CreateRenderPipeline` multi-target blend (ADR-061)
+  - **DX12:** `IndependentBlendEnable` set to TRUE (was hardcoded 0 — D3D12 replicated `RenderTarget[0]` across all targets)
+  - **GLES:** `glDrawBuffers` + per-attachment `glClearBufferfv` + FBO multi-attachment + `ColorTargetDesc` per-target blend (Rust wgpu parity)
+  - **Software:** SPIR-V interpreter multi-output (`@location(N)`), per-target blend, `MRTFragmentShaderFunc`
+  - **Metal:** verified already MRT-ready (iterates all attachments)
+  - **Core validation:** `ValidateRenderPassDescriptor` (attachment count/sampleCount/dimensions), `RenderPassContext.CheckCompatible` (pipeline/pass format+sampleCount+depthStencil match)
+  - Constants: `MaxColorAttachments=8`, `MaxTotalAttachments=17` (Rust wgpu parity)
+  - Zero heap allocations in MRT hot paths (benchmarked: RenderPassKey 192B stack, FramebufferKey 160B stack)
+  - Validated against Rust wgpu reference and WebGPU specification
+
+## [0.31.7] - 2026-08-27
+
+### Fixed
+
+- **vulkan:** Fix array texture uploads — `Origin.Z` now maps to `BaseArrayLayer` for 2D textures (#323, @dvoyni)
+  - Non-3D textures: `Origin.Z` / `DepthOrArrayLayers` → array layers (was incorrectly mapped to depth offset)
+  - Pending-write barriers now target correct array subresources (was hardcoded `BaseArrayLayer: 0`)
+  - Barrier `Aspect` uses caller-supplied value instead of hardcoded `TextureAspectAll`
+
+### Changed
+
+- **deps:** naga v0.18.0 → v0.19.0
+
+## [0.31.6] - 2026-08-23
+
+### Added
+
+- **core:** Atomic copy usage tracking for all 4 copy commands (#312, @besmpl)
+  - `CopyBufferToBuffer`, `CopyBufferToTexture`, `CopyTextureToBuffer`, `CopyTextureToTexture` — preflight validates ALL endpoints before committing any scope mutation
+  - `ReplaceUsage` on `BufferUsageScope` / `TextureUsageScope` for post-preflight unconditional commit
+  - `RecordTextureUsage` / `ReplaceTextureUsage` on `CoreCommandEncoder`
+  - `explicitTextureTransitions` map for barrier-aware scope resolution
+  - Released buffer check in `CopyBufferToBuffer` (was silently returning)
+  - 1,100+ LOC tests: atomicity invariants, refcount lifecycle, guard branches
+
+### Fixed
+
+- **docs:** Update stale dependency versions in AGENTS.md, README.md, ARCHITECTURE.md
+
+## [0.31.5] - 2026-08-18
+
+### Added
+
+- **mapped-range:** `MappedRange.BytesMut()` and `MappedRange.Flush()` on native backend (#318, @tarmo888)
+  - API parity with browser and Rust backends — cross-backend code compiles without build tags
+  - Native `BytesMut()` aliases `Bytes()` (direct mapping already writable); `Flush()` is a no-op (direct pointer, no staging)
+  - Prerequisite for `gogpu/g3d` geometry upload API
+
+## [0.31.4] - 2026-08-13
+
+### Changed
+
+- **deps:** gpucontext v0.27.0 → v0.28.0
+
+## [0.31.3] - 2026-08-13
+
+### Fixed
+
+- **browser:** Nil descriptor guards for all `Device.Create*` methods (#315, @darkliquid)
+  - `CreateTextureView` panicked on nil descriptor — now defaults to empty view (WebGPU spec)
+  - `CreateSampler` panicked on nil descriptor — now defaults to empty sampler (WebGPU spec)
+  - `CreateBuffer`, `CreateTexture`, `CreateShaderModule`, `CreateBindGroupLayout`, `CreatePipelineLayout`, `CreateBindGroup`, `CreateRenderPipeline`, `CreateComputePipeline` — return error on nil (consistent with native/rust backends)
+  - Unblocks ironwail-go WASM HUD rendering in Chrome/Edge
+
+## [0.31.2] - 2026-08-11
+
+### Changed
+
+- **deps:** gpucontext v0.26.0 → v0.27.0 (Key enum + InputState)
+
+## [0.31.1] - 2026-08-11
+
+### Fixed
+
+- **core:** Own surface configuration state — defensive copy prevents aliasing (#311, @besmpl)
+  - `Surface.Configure` copies input config, `Config()` returns independent copy
+  - Failed configure/reconfigure preserves previous state
+  - Race-safe under concurrent access
+
+### Changed
+
+- **deps:** gputypes v0.5.1 → v0.5.2 (`Features.Contains` all-bits fix)
+
+## [0.31.0] - 2026-08-10
+
+### Added
+
+- **core:** Full resource tracker — TextureTracker + BufferTracker + DeviceTracker (ADR-060, #308)
+  - `core/track/texture.go` — TextureUses flags (10 states, Rust wgpu-types bit-exact parity), SkipBarrier, TextureUsageScope with conflict detection, TextureTracker with Merge + barrier generation
+  - `core/device_tracker.go` — DeviceTracker wrapping texture + buffer trackers, MergeTextureScope/MergeBufferScope, TrackPresentTexture, BarrierCBFromAllTransitions
+  - Wire dormant BufferTracker (built 8 months ago, never used) to Submit path
+  - TrackerIndex allocation for Texture + Buffer resources via real allocators
+  - Usage conflict validation in BeginRenderPass (WebGPU spec: no concurrent COLOR_TARGET + RESOURCE)
+
+- **core:** Multi-CB encoder — Rust wgpu `InnerCommandEncoder` parity (ADR-060, #308)
+  - `OpenPass`/`CloseCB`/`CloseAndSwap`/`CloseAndPushFront`/`CloseIfOpen` methods
+  - `Finish()` returns ALL CBs, `Submit()` flattens via `halBufferList()`
+  - Enables barrier CB injection before/after render passes in same submit
+
+- **core:** Submit-time texture + buffer barrier injection via DeviceTracker (ADR-060, #308)
+  - `prependTextureBarriers` merges scopes into device tracker, generates PendingTransitions
+  - Barrier CB prepended before user CBs in same `vkQueueSubmit`
+
+### Fixed
+
+- **vulkan:** Inline present barrier in EndEncoding — zero extra `vkQueueSubmit` (ADR-060, #308)
+  - Barrier `COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR` injected inside user's command buffer before `vkEndCommandBuffer`
+  - `ensurePresentLayout()` becomes fallback (early-returns when inline barrier fired)
+  - Reverse barrier `PRESENT_SRC → COLOR_ATTACHMENT` for multi-submit `LoadOp::Load`
+  - Single-submit frames: 1 `vkQueueSubmit` (was 2 in v0.30.37)
+- **vulkan:** Barrier submit signals present semaphore (ADR-060)
+  - `ensurePresentLayout()` fallback now allocates present semaphore via `allocPresentSemaphore()`
+  - `present()` reordered: `ensurePresentLayout` before `presentWaitSemaphores` — barrier semaphore included in wait list
+- **surface:** Cache swapchain `core.Texture` per-surface, not per-frame (#307, ADR-060)
+  - `GetCurrentTexture()` was creating new `core.Texture` + `TrackerIndex` every frame — leaked monotonically
+  - Now cached on `Surface.swapchainTexture`, destroyed on Unconfigure/Release
+- **core:** Barrier encoder deferred recycling uses actual submission index (not stale `lastSubmissionIndex`)
+- **core:** `Texture.Release()` now frees TrackerIndex — prevents leak for user-created textures
+- **vulkan:** `DiscardEncoding` resets swapchain layout tracking to UNDEFINED
+
+### Changed
+
+- **core:** Removed `pendingBufferBarriers`/`pendingTextureBarriers` unused stubs from `core/command.go`
+- **core:** `populateTextureScope` records COLOR_TARGET/DEPTH_STENCIL usage in BeginRenderPass
+- **core:** Activated `TrackingData` — wired to real `TrackerIndexAllocator` (was returning `InvalidTrackerIndex`)
+- **docs:** Updated stale comments in `core/resource.go`, `hal/software/shader/interpreter.go`, `hal/vulkan/swapchain.go`
+- **lint:** Moved `maintidx` exclusion to `.golangci.yml` HAL path, removed 10 redundant `//nolint:maintidx`
+- **deps:** gpucontext v0.24.0 → v0.26.0 (damage tracking interfaces, Key enum redesign)
+
+## [0.30.37] - 2026-08-07
+
+### Fixed
+
+- **vulkan:** Align swapchain render pass FinalLayout with Rust wgpu / Dawn (ADR-059)
+  - Render passes for swapchain images now use `COLOR_ATTACHMENT_OPTIMAL` instead of `PRESENT_SRC_KHR` as FinalLayout
+  - Explicit barrier `COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR` in `ensurePresentLayout()` before present
+  - Eliminated synchronous `vkWaitForFences` GPU stall — barrier submit uses no fence, command pool reset deferred to next `acquireNextImage()` where acquire fence guarantees completion
+  - Matches Rust wgpu (`device.rs:119-120`) and Dawn (`RenderPassCache.cpp:173-174`) — both use `InitialLayout == FinalLayout == COLOR_ATTACHMENT_OPTIMAL`
+  - Removes unnecessary PRESENT_SRC_KHR round-trip on multi-pass frames (TBDR: no extra decompress/compress cycle)
+
+## [0.30.36] - 2026-08-06
+
+### Fixed
+
+- **vulkan:** Accumulated present semaphores for multi-submit synchronization (ADR-058)
+  - Fixed race condition when multiple `queue.Submit()` calls target the same swapchain image per frame
+  - Present semaphore was previously signaled only by the first submit; subsequent submits had no synchronization with `vkQueuePresentKHR`
+  - New per-image semaphore pool (Rust wgpu `SwapchainPresentSemaphores` pattern): each submit signals a new semaphore, present waits on all accumulated semaphores
+  - Pools grow on demand, recycle after present (zero overhead for single-submit-per-frame common case)
+  - Fixes visual glitches on TBDR GPUs (Apple Silicon via Asahi Linux) when using multi-pass rendering (g3d#22)
+  - Acquire wait and present signal are now separate concerns: acquire waits once per frame, present signals every submit
+
+## [0.30.35] - 2026-08-02
+
+### Fixed
+
+- **dx12:** DirectComposition path for per-pixel alpha transparency (#298, PR #299)
+  - `CompositeAlphaModePremultiplied` now works on DX12 via `CreateSwapChainForComposition`
+  - Lazy-loaded `dcomp.dll` bindings (IDCompositionDevice/Target/Visual)
+  - Auto-select: Premultiplied → DComp path, Opaque → HWND path (unchanged)
+  - Adapter correctly reports Premultiplied only when `dcomp.dll` available
+  - Alpha mode change detection in Configure (forces full recreate vs ResizeBuffers)
+  - MakeWindowAssociation skipped on DComp path (Rust wgpu parity)
+  - `GOGPU_DX12_FORCE_HWND=1` env var override for RenderDoc compatibility
+  - ADR-057, Rust wgpu `dcomp.rs` parity
+
+## [0.30.34] - 2026-08-02
+
+### Changed
+
+- **deps:** naga v0.17.16 → v0.18.0 — unified validator (ADR-002), Rust naga parity
+- **deps:** webgpu v0.5.4 → v0.5.5 — goffi v0.6.3 cascade
+
+## [0.30.33] - 2026-08-01
+
+### Changed
+
+- **deps:** goffi v0.6.2 → v0.6.3 — fixes ARM64 HFA return checkptr crash under
+  `-race` (go-webgpu/goffi#67)
+
+## [0.30.32] - 2026-08-01
+
+### Changed
+
+- **deps:** gpucontext v0.23.0 → v0.24.0 — `ScaleChangedEvent` for runtime DPI change (ADR-059, gogpu#409)
+
+## [0.30.31] - 2026-08-01
+
+### Fixed
+
+- **Metal: block callbacks crash under `-race` (checkptr)** — all 4 ObjC block
+  callback trampolines converted `uintptr blockPtr` to `unsafe.Pointer` to read
+  `blockID` at offset 32. checkptr rejects this because `uintptr` from goffi's
+  reflect callback has no pointer provenance. Replaced with reverse map lookup
+  (`blockPtrToID sync.Map`) — block pointer used as opaque integer key only,
+  no `unsafe.Pointer` conversion. Follows purego (Ebitengine) pattern.
+  wgpu#280 fix was insufficient — fixed arithmetic but not the base conversion.
+  (#293)
+
+## [0.30.30] - 2026-07-31
+
+### Fixed
+
+- **Memory leak: validation maps pinned every resource per frame** —
+  `SetBindGroup` copied every bound buffer and texture into encoder maps per draw
+  call (O(bindings × draws)). Validation maps were never cleared after Submit or
+  Release, pinning BindGroup objects indefinitely. Now tracks bind groups only;
+  `validateCommandBufferForSubmit` walks `boundBuffers`/`boundTextures` transitively.
+  `dropUsedSets()` clears maps in both `postSubmit` and `Release()`.
+  Contributor: @samyfodil (#291)
+
+- **Validation error precedence: buffer/texture errors beat bind group errors** —
+  Two-pass validation: first walks all bound resources from all bind groups, then
+  checks `bg.released`. Deterministic regardless of map iteration order. Matches
+  Rust wgpu ordering (buffers 1780-1808, bind groups 1815-1817). (#291)
+
+## [0.30.29] - 2026-07-30
+
+### Fixed
+
+- **Queue.LastSubmissionIndex deadlock** — `onZero` callbacks from `Triage()`
+  called `lastSubmissionIndex()` which locked `Queue.mu`, already held by
+  `Submit()`. Changed `lastSubmissionIndex` from `mutex`-protected `uint64` to
+  `atomic.Uint64` — single writer (Submit), lock-free readers (onZero callbacks).
+  ADR-056 deadlock chain: Submit→Triage→onZero→lastSubmissionIndex→mu.
+
+## [0.30.28] - 2026-07-30
+
+### Fixed
+
+- **Resource lifecycle: BindGroup/Pipeline Release() bypasses ref-counting** —
+  `Release()` called `dq.Defer(lastSubmissionIndex)` directly, ignoring the
+  `ResourceRef` ref-counting system. On shared encoder path, this caused
+  use-after-free: HAL resource destroyed while GPU still processing commands.
+  Now `Release()` calls `ref.Drop()` — HAL destruction deferred until ALL
+  refs (user + GPU) are dropped. Matches Rust wgpu `Arc<BindGroup>` pattern.
+  Applied to: BindGroup, RenderPipeline, ComputePipeline. (ADR-056, #287)
+
+- **DestroyQueue deadlock: Triage → onZero → Defer re-entry** —
+  `Triage()` held mutex while executing callbacks. When `onZero` fired and
+  called `Defer()`, it tried to acquire the same mutex → deadlock. Now
+  callbacks execute outside the lock. Same fix applied to `FlushAll()`.
+
+## [0.30.27] - 2026-07-30
+
+### Fixed
+
+- **GLES: depth/stencil not attached to swapchain FBO on surface render pass** —
+  `setupSurfaceTarget()` had an early return that skipped depth/stencil attachment,
+  causing `GL_INVALID_FRAMEBUFFER_OPERATION` (0x506) on every draw call.
+  Now attaches depth/stencil to the swapchain FBO via `AttachDepthStencilToFBOCommand`.
+  Attachment point chosen by format: `GL_DEPTH_ATTACHMENT` for depth-only,
+  `GL_DEPTH_STENCIL_ATTACHMENT` for combined formats (Rust wgpu-hal parity,
+  command.rs:577-580). Also fixes the same wrong attachment point in the existing
+  `AttachDepthStencilCommand` for offscreen FBOs. 2D overlay now renders correctly
+  on GLES surface targets. (#284)
+
+- **GLES: MappedAtCreation buffer data silently discarded on Unmap** —
+  `UnmapBuffer` only flushed shadow data to GL when `BufferUsageMapWrite` was set.
+  Per WebGPU spec, `MappedAtCreation` does NOT require `MapWrite` usage. Buffers
+  created with `Uniform|CopyDst` + `MappedAtCreation` (the standard g3d pattern)
+  had their data thrown away, leaving GL buffers zero-filled — zero MVP matrices,
+  zero vertices, zero indices. Root cause of invisible 3D geometry on GLES. (#284)
+
+- **GLES: 3D geometry invisible due to stale depth mask** — `ClearDepthCommand`
+  did not call `glDepthMask(true)` before `glClear(GL_DEPTH_BUFFER_BIT)`. If a
+  prior pipeline set `DepthWriteEnabled=false`, the depth clear was silently
+  masked on subsequent frames, causing all 3D geometry to fail the depth test.
+  Also adds `glClearDepth(value)` before clear (was relying on GL default 1.0).
+  Rust ref: queue.rs:1199-1205. (#284)
+
+- **GLES: viewport depth range ignored** — `SetViewportCommand` called
+  `glViewport` but not `glDepthRange(minDepth, maxDepth)`. Depth range fields
+  were stored but never passed to GL. Rust ref: queue.rs:1295-1296. (#284)
+
+### Added
+
+- `gl.Context.ClearDepth()` and `gl.Context.DepthRange()` — wrapper methods for
+  both Windows (syscall, double) and Linux (goffi, float32 for GLES). Function
+  pointers were loaded via `getProcAddr` but had no callable methods.
+
+### Changed
+
+- **deps:** gpucontext v0.22.0 → v0.23.0
+
+## [0.30.25] - 2026-07-29
+
+### Changed
+
+- **deps:** gpucontext v0.21.1 → v0.22.0 — `FontSmoothing` type + coordinate space docs (gogpu#396, gogpu#398)
+
+## [0.30.24] - 2026-07-28
+
+### Fixed
+
+- **Browser/Rust Surface missing methods** — `PresentPixels`, `WritePixels`,
+  `SetPrepareFrame`, and `SetPresentsWithTransaction` now exist on all backends.
+  Missing methods return clear errors or no-op, matching ADR-047 (unified public
+  API). Fixes WASM build failure introduced by gogpu PR #370. (#281)
+
+- **Metal checkptr abort under `-race`** — ObjC block callback trampolines used
+  `unsafe.Pointer(blockPtr + 32)` which violates Go's pointer provenance rules.
+  Replaced with `unsafe.Add(unsafe.Pointer(blockPtr), 32)` (Go 1.17+) at all 4
+  block callback locations. `go test -race` now works on Metal compute. (#280)
+
+### Added
+
+- **Compile-time Surface API contract** — anonymous interface assertion
+  (`var _ interface{...} = (*Surface)(nil)`) in each backend file enforces that
+  all public methods exist at compile time (ADR-047 enforcement).
+
+- **CI cross-compile job** — `GOOS=js GOARCH=wasm` (browser) and `-tags=rust`
+  (Rust FFI) builds added to CI pipeline. Missing Surface methods now fail the
+  PR, not the downstream consumer.
+
+## [0.30.23] - 2026-07-26
+
+### Fixed
+
+- **Device teardown GPU drain ordering** — `Device.Release()` now drains GPU work
+  via internal `waitIdle()` before destroying staging buffers and encoders.
+  Previously, the public `WaitIdle()` returned `ErrReleased` immediately due to
+  the released flag, leaving in-flight submissions unreferenced. Matches Rust
+  wgpu `Queue::Drop` ordering. Contributor: @besmpl (#264).
+
+- **Vulkan swapchain fail-closed lifecycle** — surface capabilities are fully
+  validated before committing to state changes, semaphore/fence errors propagate
+  instead of being silently ignored, and swapchain reconfiguration is transactional
+  (old swapchain survives until replacement is ready). Adds `broken` flag to prevent
+  reuse after synchronization failures. Contributor: @besmpl (#265).
+
+- **Explicit mock adapter construction** — `core.NewInstance` no longer fabricates
+  a mock adapter when no HAL backend yields adapters. Registration failures are
+  now observable. Tests that need a deterministic adapter opt in via
+  `NewInstanceWithMock`. Matches Rust wgpu behavior. Contributor: @besmpl (#266).
+
+- **Surface lifetime ownership** — centralized acquisition/teardown with opaque
+  lease system that invalidates retained texture wrappers on present/discard/
+  unconfigure/destruction. Instance owns deterministic release ordering (devices
+  before surfaces before native instance). Vulkan HAL gains device-level swapchain
+  tracking with orderly and device-loss abandon paths.
+  Contributor: @besmpl (#269).
+
+### Added
+
+- **Surface-qualified adapter selection** — `RequestAdapterWithSurface` validates
+  adapters against the target surface's presentation queue via
+  `vkGetPhysicalDeviceSurfaceSupportKHR`. Creates request-local adapter wrappers
+  that carry the proven queue family into `Open()`, keeping cached adapters
+  immutable. Iterates all queue families — ahead of Rust wgpu which hardcodes
+  `queue_family_index = 0`. Contributor: @besmpl (#267).
+
+- **Typed surface targets** — add retained-provider
+  `CreateSurfaceFromTarget` and explicit raw-handle `CreateSurfaceUnsafe`
+  paths modeled on Rust `wgpu` v29. The original two-`uintptr` method remains a
+  compatibility adapter across native, Rust, and browser implementations. The
+  native path creates one surface per successful enabled backend and qualifies
+  adapters against their matching backend surface, as Rust `wgpu` does.
+
+- **Android raw surface target** — route `ANativeWindow*` explicitly through
+  public, HAL, Vulkan, and Rust-tag surface creation without cgo or Activity/JNI
+  policy in WGPU.
+
+- **Headless software surface readback (non-standard)** — add the zero-sized
+  `HeadlessSurfaceTarget` and root `Surface.ReadPixels()` lifecycle. The Pure-Go
+  software backend now returns owned, tightly packed RGBA8 snapshots after
+  present/discard for both RGBA8 and BGRA8 configurations. Other backends fail
+  explicitly through the optional `hal.PixelReader` capability rather than
+  widening the mandatory HAL surface interface. (#256)
+
+### Changed
+
+- **Counted indirect draws** — added `RenderPassEncoder.MultiDrawIndirect` and
+  `MultiDrawIndexedIndirect` for consecutive 16-byte and 20-byte argument
+  records. Existing two-argument `DrawIndirect` and `DrawIndexedIndirect`
+  remain single-draw APIs. The Vulkan `FeatureMultiDrawIndirect` capability is
+  used only as a performance hint; Vulkan multi-draw calls fall back to exact
+  loops when unavailable or over the device limit. GLES indirect drawing
+  remains unsupported as before. `FeatureMultiDrawIndirectCount` remains
+  reserved for future GPU-driven count buffers. External HAL adapters must add
+  the `drawCount` parameter to both indirect draw methods.
+
+- **CONTRIBUTING.md** — Smart Coding framework (AI-assisted policy), updated
+  project structure, pre-submit checklist with cross-platform lint.
+
+### Changed
+
+- **Bump naga** v0.17.15 → v0.17.16 — MSL 64-bit atomics rejection (#82, @besmpl)
+- **Bump goffi** v0.6.1 → v0.6.2 — Windows AMD64 float returns fix (#65, @besmpl)
+- **Bump webgpu** v0.5.3 → v0.5.4 — Android surface, Queue.GetTimestampPeriod, callback strings (#23-#25, @besmpl)
+- **DX12 lint cleanup** — `copy` param renamed to `region` (builtin shadow), `placedSlice` struct replaces 6 named returns, dead code removed, redundant `//nolint` directives removed
+
+## [0.30.22] - 2026-07-16
+
+### Fixed
+
+- **Metal MSAA storage mode crash on Intel Mac** — use `MTLGPUFamilyApple1`
+  detection instead of `hasUnifiedMemory` for texture storage mode selection.
+  Non-Apple GPU family devices (Intel/AMD) now always use `MTLStorageModePrivate`
+  for textures. Apple Silicon keeps `MTLStorageModeShared` optimization for
+  single-sample textures. Fixes #271.
+
+## [0.30.21] - 2026-07-15
+
+### Fixed
+
+- **Software `CopyTextureToBuffer` row stride** — row-by-row copy respecting
+  `BytesPerRow` from `BufferLayout`. Was flat `copy(dst, src)` ignoring row
+  alignment, causing progressive row shift (128 bytes/row at 800px width)
+  that produced horizontal dashed-line artifacts in GPU texture readback.
+
+- **Software `configureRasterPipeline` blend state** — extract blend state from
+  `Fragment.Targets[0].Blend` into the raster pipeline. Was always `BlendDisabled`,
+  preventing premultiplied alpha compositing for textured quads. Added
+  `convertBlendState`, `convertBlendFactor`, `convertBlendOp` conversion functions.
+
+- **Software `readTexel` BGRA format** — swap R/B channels when sampling textures
+  with `BGRA8Unorm` or `BGRA8UnormSrgb` format. Was always reading as RGBA,
+  causing red/blue channel swap for offscreen BGRA textures.
+
+## [0.30.20] - 2026-07-14
+
+### Fixed
+
+- **PresentPixels check-before-mutate** — move `hal.PixelPresenter` type assertion
+  before acquired texture discard. Failed `PresentPixels` on GPU backends no longer
+  corrupts surface state. Validate-then-mutate pattern matches Rust wgpu.
+
+### Added
+
+- **DX12 UMA GPU classification** — `CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE)`
+  replaces DedicatedVideoMemory heuristic for integrated/discrete detection.
+  Matches Rust wgpu pattern exactly. Contributor: @Zeroes1 (#254).
+- **DX12 `CacheCoherentUMA`** — stored for future memory pool optimization
+  (`D3D12_MEMORY_POOL_L0` vs `L1`).
+- **DX12 architecture diagnostic logging** — `hal.Logger().Info("dx12: adapter architecture", ...)`
+
 ## [0.30.19] - 2026-07-12
 
 ### Changed
@@ -1268,10 +1835,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Research
 
-- **[Validation Gap Analysis](docs/dev/research/VALIDATION-GAP-ANALYSIS-RUST-WGPU.md)** — 121-check
-  comparison vs Rust wgpu-core. Coverage: 22% → ~37% after Phase A.
-- **[ADR: Validation Phases](docs/dev/research/ADR-VALIDATION-PHASES.md)** — phased implementation
-  plan (A: crash prevention, B: correctness, C: spec compliance)
+- **Validation Gap Analysis** — 121-check comparison vs Rust wgpu-core. Coverage: 22% → ~37% after Phase A.
+- **Validation Phases ADR** — phased implementation plan (A: crash prevention, B: correctness, C: spec compliance)
 
 ## [0.25.4] - 2026-04-23
 

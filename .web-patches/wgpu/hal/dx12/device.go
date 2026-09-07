@@ -23,6 +23,8 @@ import (
 	"github.com/gogpu/wgpu/hal"
 	"github.com/gogpu/wgpu/hal/dx12/d3d12"
 	"github.com/gogpu/wgpu/hal/dx12/d3dcompile"
+	"github.com/gogpu/wgpu/hal/dx12/dxgi"
+	"github.com/gogpu/wgpu/internal/pipelinecache"
 	"golang.org/x/sys/windows"
 )
 
@@ -52,6 +54,7 @@ type Device struct {
 
 	// Command queue for graphics/compute operations.
 	directQueue *d3d12.ID3D12CommandQueue
+	queueState  *queueState // shared noncyclic lifetime/preamble owner
 
 	// Descriptor heaps (shared for all resources).
 	viewHeap    *DescriptorHeap // CBV/SRV/UAV (shader-visible, for bind groups)
@@ -97,6 +100,14 @@ type Device struct {
 	// Caches FXC compilation results keyed by HLSL source hash + entry point + stage + target.
 	// Matches Rust wgpu ShaderCache pattern (wgpu-hal/src/dx12/mod.rs:1136).
 	shaderCache ShaderCache
+
+	// Disk-backed driver PSO blob cache (#331). Complements shaderCache — stores
+	// driver-compiled GPU ISA, not shader bytecode.
+	psoCache *PSOBlobStore
+
+	// SHA-256 of serialized empty root signature blob (pipelines without layout).
+	emptyRootSignatureHash    [32]byte
+	hasEmptyRootSignatureHash bool
 
 	// useDXIL enables direct DXIL compilation via naga dxil backend,
 	// bypassing the HLSL->FXC path. Opt-in via GOGPU_DX12_DXIL=1 env var.
@@ -226,7 +237,7 @@ func (h *DescriptorHeap) HandleToIndex(handle d3d12.D3D12_CPU_DESCRIPTOR_HANDLE)
 
 // newDevice creates a new DX12 device from a DXGI adapter.
 // adapterPtr is the IUnknown pointer to the DXGI adapter.
-func newDevice(instance *Instance, adapterPtr unsafe.Pointer, featureLevel d3d12.D3D_FEATURE_LEVEL) (*Device, error) {
+func newDevice(instance *Instance, adapterPtr unsafe.Pointer, adapterDesc *dxgi.DXGI_ADAPTER_DESC1, featureLevel d3d12.D3D_FEATURE_LEVEL) (*Device, error) {
 	// Create D3D12 device
 	rawDevice, err := instance.d3d12Lib.CreateDevice(adapterPtr, featureLevel)
 	if err != nil {
@@ -279,6 +290,19 @@ func newDevice(instance *Instance, adapterPtr unsafe.Pointer, featureLevel d3d12
 	if err := dev.createCommandSignatures(); err != nil {
 		dev.cleanup()
 		return nil, err
+	}
+
+	adapterKey := pipelinecache.DX12AdapterKey(
+		adapterDesc.AdapterLuid.LowPart,
+		adapterDesc.AdapterLuid.HighPart,
+		adapterDesc.VendorID,
+		adapterDesc.DeviceID,
+		adapterDesc.Revision,
+	)
+	if psoCache, err := NewPSOBlobStore(adapterKey); err != nil {
+		hal.Logger().Warn("dx12: failed to init PSO disk cache", "error", err)
+	} else {
+		dev.psoCache = psoCache
 	}
 
 	// Set a finalizer to ensure cleanup
@@ -502,6 +526,9 @@ func (d *Device) createCommandSignature(argType d3d12.D3D12_INDIRECT_ARGUMENT_TY
 
 // waitForGPU blocks until all GPU work completes.
 func (d *Device) waitForGPU() error {
+	if d == nil || d.directQueue == nil || d.fence == nil || d.fenceEvent == 0 {
+		return nil
+	}
 	d.fenceMu.Lock()
 	defer d.fenceMu.Unlock()
 
@@ -650,12 +677,16 @@ func (d *Device) getOrCreateEmptyRootSignature() (*d3d12.ID3D12RootSignature, er
 	}
 	defer blob.Release()
 
+	rootSigHash := sha256.Sum256(unsafe.Slice((*byte)(blob.GetBufferPointer()), blob.GetBufferSize()))
+
 	rootSig, err := d.raw.CreateRootSignature(0, blob.GetBufferPointer(), blob.GetBufferSize())
 	if err != nil {
 		return nil, fmt.Errorf("dx12: failed to create empty root signature: %w", err)
 	}
 
 	d.emptyRootSignature = rootSig
+	d.emptyRootSignatureHash = rootSigHash
+	d.hasEmptyRootSignatureHash = true
 	return rootSig, nil
 }
 
@@ -1113,6 +1144,10 @@ func (d *Device) CreateBuffer(desc *hal.BufferDescriptor) (hal.Buffer, error) {
 		gpuVA:           resource.GetGPUVirtualAddress(),
 		device:          d,
 		currentState:    initialState,
+		stateOwner: resourceStateOwner{
+			bufferState:    initialState,
+			bufferStateSet: true,
+		},
 	}
 
 	// Map at creation if requested
@@ -1339,6 +1374,11 @@ func (d *Device) CreateTexture(desc *hal.TextureDescriptor) (hal.Texture, error)
 		device:       d,
 		currentState: initialState,
 	}
+	textureStates := make([]d3d12.D3D12_RESOURCE_STATES, tex.subresourceCount())
+	for i := range textureStates {
+		textureStates[i] = initialState
+	}
+	tex.stateOwner.setTextureStates(textureStates)
 
 	// Post-creation health check: detect if CreateCommittedResource silently poisoned the device.
 	if reason := d.raw.GetDeviceRemovedReason(); reason != nil {
@@ -1362,8 +1402,6 @@ func (d *Device) DestroyTexture(texture hal.Texture) {
 }
 
 // CreateTextureView creates a view into a texture.
-//
-//nolint:maintidx // inherent D3D12 complexity: one WebGPU view → RTV + DSV + SRV descriptors
 func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDescriptor) (hal.TextureView, error) {
 	if texture == nil {
 		return nil, fmt.Errorf("dx12: texture is nil")
@@ -1374,17 +1412,28 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 	// hasRTV=true so BeginRenderPass uses this RTV, but isExternal=true tells
 	// Destroy() to skip freeing the RTV heap slot (the Surface owns it).
 	if st, ok := texture.(*SurfaceTexture); ok {
+		owner := st.stateOwner
+		if owner == nil {
+			owner = &Texture{
+				raw:          st.resource,
+				format:       st.format,
+				dimension:    gputypes.TextureDimension2D,
+				size:         hal.Extent3D{Width: st.width, Height: st.height, DepthOrArrayLayers: 1},
+				mipLevels:    1,
+				samples:      1,
+				usage:        gputypes.TextureUsageRenderAttachment,
+				device:       d,
+				isExternal:   true,
+				currentState: d3d12.D3D12_RESOURCE_STATE_PRESENT,
+			}
+			owner.stateOwner.setTextureStates([]d3d12.D3D12_RESOURCE_STATES{d3d12.D3D12_RESOURCE_STATE_PRESENT})
+			st.stateOwner = owner
+		}
 		return &TextureView{
-			texture: &Texture{
-				raw:        st.resource,
-				format:     st.format,
-				dimension:  gputypes.TextureDimension2D,
-				size:       hal.Extent3D{Width: st.width, Height: st.height, DepthOrArrayLayers: 1},
-				mipLevels:  1,
-				isExternal: true,
-			},
+			texture:    owner,
 			format:     st.format,
 			dimension:  gputypes.TextureViewDimension2D,
+			aspect:     gputypes.TextureAspectAll,
 			baseMip:    0,
 			mipCount:   1,
 			baseLayer:  0,
@@ -1450,11 +1499,15 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 		texture:    tex,
 		format:     viewFormat,
 		dimension:  viewDim,
+		aspect:     gputypes.TextureAspectAll,
 		baseMip:    baseMip,
 		mipCount:   mipCount,
 		baseLayer:  baseLayer,
 		layerCount: layerCount,
 		device:     d,
+	}
+	if desc != nil && desc.Aspect != gputypes.TextureAspectUndefined {
+		view.aspect = desc.Aspect
 	}
 
 	dxgiFormat := textureFormatToD3D12(viewFormat)
@@ -1466,7 +1519,7 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 		// Allocate RTV descriptor
 		rtvHandle, rtvIndex, err := d.allocateRTVDescriptor()
 		if err != nil {
-			return nil, fmt.Errorf("dx12: failed to allocate RTV descriptor: %w", err)
+			return failTextureViewCreation(view, fmt.Errorf("dx12: failed to allocate RTV descriptor: %w", err))
 		}
 
 		var rtvDesc d3d12.D3D12_RENDER_TARGET_VIEW_DESC
@@ -1507,7 +1560,7 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 		// Allocate DSV descriptor
 		dsvHandle, dsvIndex, err := d.allocateDSVDescriptor()
 		if err != nil {
-			return nil, fmt.Errorf("dx12: failed to allocate DSV descriptor: %w", err)
+			return failTextureViewCreation(view, fmt.Errorf("dx12: failed to allocate DSV descriptor: %w", err))
 		}
 
 		// For depth views, use the actual depth format, not typeless
@@ -1540,8 +1593,27 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 
 		d.raw.CreateDepthStencilView(tex.raw, &dsvDesc, dsvHandle)
 		view.dsvHandle = dsvHandle
-		view.dsvHeapIndex = dsvIndex
+		view.dsvHandles[0] = dsvHandle
+		view.dsvHeapIndex[0] = dsvIndex
+		view.hasDSVVariants[0] = true
 		view.hasDSV = true
+
+		// D3D12 encodes read-only depth/stencil planes in the DSV itself. A
+		// stencil read-only flag is invalid for single-plane D16/D32 formats,
+		// while WebGPU's Depth24Plus and Stencil8 use packed D24S8 resources and
+		// need both physical-plane flags to protect their hidden companion.
+		for _, mask := range dsvReadOnlyVariantMasks(viewFormat) {
+			variantHandle, variantIndex, variantErr := d.allocateDSVDescriptor()
+			if variantErr != nil {
+				return failTextureViewCreation(view, fmt.Errorf("dx12: failed to allocate read-only DSV descriptor: %w", variantErr))
+			}
+			variantDesc := dsvDesc
+			variantDesc.Flags = d3d12.D3D12_DSV_FLAGS(mask)
+			d.raw.CreateDepthStencilView(tex.raw, &variantDesc, variantHandle)
+			view.dsvHandles[mask] = variantHandle
+			view.dsvHeapIndex[mask] = variantIndex
+			view.hasDSVVariants[mask] = true
+		}
 	}
 
 	// Create SRV if texture supports texture binding
@@ -1549,13 +1621,13 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 		// Allocate SRV descriptor
 		srvHandle, srvIndex, err := d.allocateSRVDescriptor()
 		if err != nil {
-			return nil, fmt.Errorf("dx12: failed to allocate SRV descriptor: %w", err)
+			return failTextureViewCreation(view, fmt.Errorf("dx12: failed to allocate SRV descriptor: %w", err))
 		}
 
-		// For depth textures, use SRV-compatible format
-		srvFormat := dxgiFormat
-		if isDepthFormat(viewFormat) {
-			srvFormat = depthFormatToSRV(viewFormat)
+		srvFormat, srvPlane := textureFormatToSRV(viewFormat, view.aspect)
+		if srvFormat == d3d12.DXGI_FORMAT_UNKNOWN {
+			d.stagingViewHeap.Free(srvIndex, 1)
+			return failTextureViewCreation(view, fmt.Errorf("dx12: texture format %d aspect %d cannot create an SRV", viewFormat, view.aspect))
 		}
 
 		// Create SRV desc
@@ -1570,9 +1642,9 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 		case gputypes.TextureViewDimension1D:
 			srvDesc.SetTexture1D(baseMip, mipCount, 0)
 		case gputypes.TextureViewDimension2D:
-			srvDesc.SetTexture2D(baseMip, mipCount, 0, 0)
+			srvDesc.SetTexture2D(baseMip, mipCount, srvPlane, 0)
 		case gputypes.TextureViewDimension2DArray:
-			srvDesc.SetTexture2DArray(baseMip, mipCount, baseLayer, layerCount, 0, 0)
+			srvDesc.SetTexture2DArray(baseMip, mipCount, baseLayer, layerCount, srvPlane, 0)
 		case gputypes.TextureViewDimensionCube:
 			srvDesc.SetTextureCube(baseMip, mipCount, 0)
 		case gputypes.TextureViewDimensionCubeArray:
@@ -1588,6 +1660,29 @@ func (d *Device) CreateTextureView(texture hal.Texture, desc *hal.TextureViewDes
 	}
 
 	return view, nil
+}
+
+func dsvReadOnlyVariantMasks(format gputypes.TextureFormat) []uint32 {
+	switch format {
+	case gputypes.TextureFormatDepth24Plus,
+		gputypes.TextureFormatDepth24PlusStencil8,
+		gputypes.TextureFormatDepth32FloatStencil8,
+		gputypes.TextureFormatStencil8:
+		return []uint32{
+			uint32(d3d12.D3D12_DSV_FLAG_READ_ONLY_DEPTH),
+			uint32(d3d12.D3D12_DSV_FLAG_READ_ONLY_STENCIL),
+			uint32(d3d12.D3D12_DSV_FLAG_READ_ONLY_DEPTH | d3d12.D3D12_DSV_FLAG_READ_ONLY_STENCIL),
+		}
+	default:
+		return []uint32{uint32(d3d12.D3D12_DSV_FLAG_READ_ONLY_DEPTH)}
+	}
+}
+
+func failTextureViewCreation(view *TextureView, err error) (hal.TextureView, error) {
+	if view != nil {
+		view.Destroy()
+	}
+	return nil, err
 }
 
 // DestroyTextureView destroys a texture view.
@@ -1751,23 +1846,36 @@ func (d *Device) CreateBindGroup(desc *hal.BindGroupDescriptor) (hal.BindGroup, 
 		}
 	}
 
-	// Collect storage buffer references for DX12 resource state tracking.
-	// Match layout entries (which know the binding type) with bind group entries
-	// (which carry the buffer handle) to identify storage buffers.
-	// These references are used by ComputePassEncoder to mark buffers as
-	// UNORDERED_ACCESS after Dispatch(), enabling correct transition barriers
-	// before subsequent copy commands (BUG-DX12-012).
+	// Collect resource references for DX12 command-local state tracking. The
+	// descriptor table itself does not carry enough information to emit state
+	// transitions, so retain the typed resources alongside it.
 	for _, layoutEntry := range layout.entries {
-		if layoutEntry.Type != BindingTypeStorageBuffer {
-			continue
-		}
 		for _, bgEntry := range desc.Entries {
 			if bgEntry.Binding != layoutEntry.Binding {
 				continue
 			}
-			if bufBinding, ok := bgEntry.Resource.(gputypes.BufferBinding); ok && bufBinding.Buffer != 0 {
-				buf := (*Buffer)(unsafe.Pointer(bufBinding.Buffer)) //nolint:govet // intentional: HAL handle -> concrete type
-				bg.storageBuffers = append(bg.storageBuffers, buf)
+			switch layoutEntry.Type {
+			case BindingTypeUniformBuffer, BindingTypeStorageBuffer, BindingTypeReadOnlyStorageBuffer:
+				if bufBinding, ok := bgEntry.Resource.(gputypes.BufferBinding); ok && bufBinding.Buffer != 0 {
+					buf := (*Buffer)(unsafe.Pointer(bufBinding.Buffer)) //nolint:govet // intentional: HAL handle -> concrete type
+					switch layoutEntry.Type {
+					case BindingTypeUniformBuffer:
+						bg.uniformBuffers = append(bg.uniformBuffers, buf)
+					case BindingTypeStorageBuffer:
+						bg.storageBuffers = append(bg.storageBuffers, buf)
+					case BindingTypeReadOnlyStorageBuffer:
+						bg.readOnlyStorageBuffers = append(bg.readOnlyStorageBuffers, buf)
+					}
+				}
+			case BindingTypeSampledTexture, BindingTypeStorageTexture:
+				if textureBinding, ok := bgEntry.Resource.(gputypes.TextureViewBinding); ok && textureBinding.TextureView != 0 {
+					view := (*TextureView)(unsafe.Pointer(textureBinding.TextureView)) //nolint:govet // intentional: HAL handle -> concrete type
+					if layoutEntry.Type == BindingTypeSampledTexture {
+						bg.sampledTextures = append(bg.sampledTextures, view)
+					} else {
+						bg.storageTextures = append(bg.storageTextures, view)
+					}
+				}
 			}
 			break
 		}
@@ -1990,12 +2098,13 @@ func (d *Device) CreatePipelineLayout(desc *hal.PipelineLayoutDescriptor) (hal.P
 	)
 
 	return &PipelineLayout{
-		rootSignature:    result.rootSignature,
-		bindGroupLayouts: bgLayouts,
-		groupMappings:    result.groupMappings,
-		samplerRootIndex: result.samplerRootIndex,
-		nagaOptions:      result.nagaOptions,
-		device:           d,
+		rootSignature:     result.rootSignature,
+		rootSignatureHash: result.rootSignatureHash,
+		bindGroupLayouts:  bgLayouts,
+		groupMappings:     result.groupMappings,
+		samplerRootIndex:  result.samplerRootIndex,
+		nagaOptions:       result.nagaOptions,
+		device:            d,
 	}, nil
 }
 
@@ -2352,8 +2461,18 @@ func (d *Device) CreateRenderPipeline(desc *hal.RenderPipelineDescriptor) (hal.R
 		return nil, err
 	}
 
+	var emptyRootHash *[32]byte
+	if d.hasEmptyRootSignatureHash {
+		emptyRootHash = &d.emptyRootSignatureHash
+	}
+	cacheKey := graphicsPSOCacheKey(desc, psoDesc, rootSignatureHashForLayout(pipelineLayout, emptyRootHash))
+	var cachedBlob []byte
+	if d.psoCache != nil {
+		cachedBlob, _ = d.psoCache.Load(cacheKey)
+	}
+
 	// Create the pipeline state object
-	pso, err := d.raw.CreateGraphicsPipelineState(psoDesc)
+	pso, err := d.createGraphicsPSO(psoDesc, cacheKey, cachedBlob)
 	d.DrainDebugMessages() // Check for validation warnings/errors during PSO creation
 	if err != nil {
 		slog.Error("dx12: CreateGraphicsPipelineState failed",
@@ -2491,8 +2610,18 @@ func (d *Device) CreateComputePipeline(desc *hal.ComputePipelineDescriptor) (hal
 		return nil, fmt.Errorf("dx12: compute shader entry point %q not found in module", desc.Compute.EntryPoint)
 	}
 
+	var emptyRootHash *[32]byte
+	if d.hasEmptyRootSignatureHash {
+		emptyRootHash = &d.emptyRootSignatureHash
+	}
+	cacheKey := computePSOCacheKey(desc, &psoDesc, rootSignatureHashForLayout(pipelineLayout, emptyRootHash))
+	var cachedBlob []byte
+	if d.psoCache != nil {
+		cachedBlob, _ = d.psoCache.Load(cacheKey)
+	}
+
 	// Create the pipeline state object
-	pso, err := d.raw.CreateComputePipelineState(&psoDesc)
+	pso, err := d.createComputePSO(&psoDesc, cacheKey, cachedBlob)
 	d.DrainDebugMessages() // Check for validation warnings/errors during PSO creation
 	if err != nil {
 		slog.Error("dx12: CreateComputePipelineState failed",
@@ -2681,7 +2810,24 @@ func (d *Device) DestroyRenderBundle(bundle hal.RenderBundle) {}
 
 // WaitIdle waits for all GPU work to complete.
 func (d *Device) WaitIdle() error {
-	return d.waitForGPU()
+	if d == nil {
+		return fmt.Errorf("dx12: device is nil")
+	}
+	state := d.queueState
+	if state != nil {
+		state.submitMu.Lock()
+		defer state.submitMu.Unlock()
+		if state.closed {
+			return fmt.Errorf("dx12: device queue is closed")
+		}
+	}
+	if err := d.waitForGPU(); err != nil {
+		return err
+	}
+	if state != nil {
+		state.releaseAllOwnedLocked()
+	}
+	return nil
 }
 
 // Destroy releases the device.
@@ -2689,14 +2835,44 @@ func (d *Device) Destroy() {
 	if d == nil {
 		return
 	}
+	state := d.queueState
+	if state != nil {
+		state.submitMu.Lock()
+		defer state.submitMu.Unlock()
+		if state.closed {
+			return
+		}
+		// Closing while holding submission exclusion prevents new work from
+		// entering after the terminal idle fence has been enqueued.
+		state.closed = true
+	}
+	if d.raw == nil {
+		return
+	}
 
 	// Clear finalizer to prevent double-free
 	runtime.SetFinalizer(d, nil)
 
-	// Wait for GPU to finish before cleanup
-	_ = d.waitForGPU()
+	waitErr := d.waitForGPU()
+	deviceRemoved := false
+	if waitErr != nil {
+		deviceRemoved = d.raw.GetDeviceRemovedReason() != nil
+	}
+	if state != nil {
+		state.releaseTerminalOwnedLocked(waitErr, deviceRemoved)
+		if !shouldReleaseTerminalOwnedObjects(waitErr, deviceRemoved) &&
+			(len(state.preambleInFlight) > 0 || len(state.oneShotsInFlight) > 0) {
+			// A failed event registration/wait does not prove GPU completion.
+			// Device removal is the only safe exception for in-flight work.
+			hal.Logger().Warn("dx12: retaining queue-owned GPU objects after ambiguous idle failure", "err", waitErr)
+		}
+	}
 
 	d.cleanup()
+}
+
+func shouldReleaseTerminalOwnedObjects(waitErr error, deviceRemoved bool) bool {
+	return waitErr == nil || deviceRemoved
 }
 
 // -----------------------------------------------------------------------------

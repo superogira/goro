@@ -6,20 +6,16 @@ import (
 	_ "embed"
 
 	"github.com/gogpu/ui/geometry"
-	"github.com/gogpu/ui/plugin"
 	"github.com/gogpu/ui/theme"
 	"github.com/gogpu/ui/widget"
 )
 
-// Sarabun covers both Latin and Thai, which DejaVu Sans does not; without it
-// every Thai rune renders as tofu (the client is used by Thai players).
+// The vendored ui fork embeds Sarabun (Latin+Thai; DejaVu/Inter have no Thai
+// glyphs) under the default family name, so "Inter" resolves to Sarabun for
+// both regular and bold everywhere, including upstream's bold labels.
 //
-// Sarabun by Cadson Demak, SIL Open Font License 1.1
-// (https://github.com/cadsondemak/Sarabun).
-const (
-	uiFontFamily     = "GoroSarabun"
-	uiBoldFontFamily = "GoroSarabunBold"
-)
+// Sarabun by Cadson Demak, SIL Open Font License 1.1.
+const uiFontFamily = "Inter"
 
 //go:embed fonts/Sarabun-Regular.ttf
 var sarabunRegularTTF []byte
@@ -42,15 +38,15 @@ type Colors struct {
 	Disabled       widget.Color
 	Text           widget.Color
 	TitleText      widget.Color
+	LabelText      widget.Color
 	MutedText      widget.Color
 	InputBorder    widget.Color
 	InputFocus     widget.Color
 }
 
 type Typography struct {
-	FontFamily     string
-	BoldFontFamily string
-	TextSize       float32
+	FontFamily string
+	TextSize   float32
 }
 
 type Theme struct {
@@ -74,27 +70,15 @@ var Default = Theme{
 		Disabled:       fromRGBA(color.RGBA{R: 226, G: 230, B: 235, A: 255}),
 		Text:           fromRGBA(color.RGBA{R: 38, G: 48, B: 58, A: 255}),
 		TitleText:      fromRGBA(color.RGBA{R: 22, G: 54, B: 88, A: 255}),
+		LabelText:      fromRGBA(color.RGBA{R: 58, G: 104, B: 156, A: 255}),
 		MutedText:      fromRGBA(color.RGBA{R: 98, G: 112, B: 126, A: 255}),
 		InputBorder:    fromRGBA(color.RGBA{R: 138, G: 174, B: 214, A: 255}),
 		InputFocus:     fromRGBA(color.RGBA{R: 82, G: 138, B: 200, A: 255}),
 	},
 	Typography: Typography{
-		FontFamily:     uiFontFamily,
-		BoldFontFamily: uiBoldFontFamily,
-		TextSize:       11,
+		FontFamily: uiFontFamily,
+		TextSize:   11,
 	},
-}
-
-func init() {
-	ctx := plugin.NewDefaultPluginContext()
-	_ = ctx.Assets.LoadFont(uiFontFamily, sarabunRegularTTF)
-	_ = ctx.Assets.LoadFont(uiBoldFontFamily, sarabunBoldTTF)
-	// The toolkit's built-in fallback family ("Inter") has no Thai glyphs,
-	// and several text paths resolve to it regardless of the theme family
-	// (e.g. chat console log lines). Registering Sarabun under the fallback
-	// name replaces the Inter regular face (same weight/style), so every
-	// defaulting path renders Thai too.
-	_ = ctx.Assets.LoadFont("Inter", sarabunRegularTTF)
 }
 
 func (t Theme) AsTheme() *theme.Theme {
@@ -130,10 +114,6 @@ func DrawText(canvas widget.Canvas, text string, bounds geometry.Rect, size floa
 		return
 	}
 	family := Default.Typography.FontFamily
-	if bold && Default.Typography.BoldFontFamily != "" {
-		family = Default.Typography.BoldFontFamily
-		bold = false
-	}
 	if styled, ok := canvas.(widget.StyledTextDrawer); ok {
 		styled.DrawStyledText(text, bounds, widget.TextStyle{
 			FontFamily: family,
@@ -152,10 +132,6 @@ func MeasureText(canvas widget.Canvas, text string, size float32, bold bool) flo
 		return 0
 	}
 	family := Default.Typography.FontFamily
-	if bold && Default.Typography.BoldFontFamily != "" {
-		family = Default.Typography.BoldFontFamily
-		bold = false
-	}
 	if styled, ok := canvas.(widget.StyledTextDrawer); ok {
 		return styled.MeasureStyledText(text, widget.TextStyle{
 			FontFamily: family,

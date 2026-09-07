@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogpu/gogpu/gpu/types"
 	"github.com/gogpu/gogpu/input"
 	"github.com/gogpu/gogpu/internal/platform"
 	"github.com/gogpu/gogpu/internal/thread"
@@ -55,15 +56,16 @@ type App struct {
 	onResize           func(int, int)
 	onClose            func() // called before renderer destruction
 	onAnyWindowClosed  func(WindowID)
-	onSurfaceAvailable func() // platform can create GPU surfaces (ADR-026)
-	onSurfaceDestroyed func() // must drop GPU surfaces NOW (ADR-026)
-	onResumed          func() // app visible/active (ADR-026)
-	onSuspended        func() // app backgrounded (ADR-026)
-	onMemoryWarning    func() // free caches or be killed (ADR-026)
+	onSurfaceAvailable func()                             // platform can create GPU surfaces (ADR-026)
+	onSurfaceDestroyed func()                             // must drop GPU surfaces NOW (ADR-026)
+	onResumed          func()                             // app visible/active (ADR-026)
+	onSuspended        func()                             // app backgrounded (ADR-026)
+	onMemoryWarning    func()                             // free caches or be killed (ADR-026)
+	onFileDrop         func(paths []string, x, y float64) // OS file drag-and-drop
 	hitTestCallback    gpucontext.HitTestCallback
 
 	// State
-	running                bool
+	running                atomic.Bool
 	focused                bool         // true when the window has keyboard focus
 	lifecycle              AppLifecycle // ADR-026 universal lifecycle state
 	quitOnLastWindowClosed bool         // default true — exit when last window closes
@@ -73,12 +75,20 @@ type App struct {
 	invalidator   *Invalidator
 	pendingRedraw atomic.Bool
 	animations    *AnimationController
+	// wakeupFn unblocks WaitEvents from any goroutine (Quit, timers).
+	// Stored atomically so Quit never races with manager/invalidator publish.
+	wakeupFn atomic.Value // holds func()
 
 	// Event source for gpucontext integration
 	eventSource *eventSourceAdapter
 
 	// Input state for Ebiten-style polling (KeyJustPressed, etc.)
 	inputState *input.State
+
+	// Input event queue for SDL-style PollInputEvent (ADR-058).
+	// Lazy-initialized on first PollInputEvent call. Events are collected
+	// during classifyEvent dispatch and drained each frame.
+	inputEvents []gpucontext.InputEvent
 
 	// Resource tracker for automatic GPU resource cleanup on shutdown.
 	tracker *resourceTracker
@@ -215,6 +225,16 @@ func (a *App) OnAnyWindowClosed(fn func(WindowID)) *App {
 	return a
 }
 
+// OnDragDrop sets the callback for OS file drag-and-drop events.
+// When files are dragged from the OS file manager and dropped on the window,
+// this callback is invoked with the list of file paths and the drop position
+// in physical pixels. Supported on Windows (WM_DROPFILES), macOS
+// (NSDraggingDestination), X11 (XDND v5), and Wayland (wl_data_device).
+func (a *App) OnDragDrop(fn func(paths []string, x, y float64)) *App {
+	a.onFileDrop = fn
+	return a
+}
+
 // SetTitle changes the window title at runtime.
 func (a *App) SetTitle(title string) {
 	a.config.Title = title
@@ -268,6 +288,36 @@ func (a *App) SetMaxSize(width, height int) {
 	a.config.MaxHeight = height
 	if a.platWindow != nil {
 		a.platWindow.SetMaxSize(width, height)
+	}
+}
+
+// RequestSize requests the primary window to resize its content area to the
+// given logical size in DIP (device-independent pixels). Non-positive dimensions
+// are ignored. The size is clamped to any configured min/max constraints.
+// The request is ignored when the window is in fullscreen mode. On Wayland,
+// this is advisory — the compositor may reject the request for tiled windows.
+func (a *App) RequestSize(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+
+	// Clamp to constraints.
+	if a.config.MinWidth > 0 && width < a.config.MinWidth {
+		width = a.config.MinWidth
+	}
+	if a.config.MinHeight > 0 && height < a.config.MinHeight {
+		height = a.config.MinHeight
+	}
+	if a.config.MaxWidth > 0 && width > a.config.MaxWidth {
+		width = a.config.MaxWidth
+	}
+	if a.config.MaxHeight > 0 && height > a.config.MaxHeight {
+		height = a.config.MaxHeight
+	}
+
+	// Dispatch to primary window.
+	if a.primaryWindow != nil && a.primaryWindow.platWindow != nil {
+		a.primaryWindow.platWindow.RequestSize(width, height)
 	}
 }
 
@@ -347,7 +397,7 @@ func (a *App) Run() error {
 	//   2. ANIMATING: StartAnimation() — loop active, onUpdate every tick,
 	//      OnDraw ONLY when RequestRedraw() called (demand-driven, <1% GPU)
 	//   3. CONTINUOUS: ContinuousRender=true — OnDraw every VSync (game loop)
-	for a.running && (a.platWindow == nil || !a.platWindow.ShouldClose()) {
+	for a.running.Load() && (a.platWindow == nil || !a.platWindow.ShouldClose()) {
 		a.runFrame()
 		paceBrowserFrame()
 	}
@@ -411,7 +461,7 @@ func (a *App) shutdown(platWindow platform.PlatformWindow) {
 // startRunLoop marks the app running and primes state consumed by the
 // first iteration of the main loop in Run().
 func (a *App) startRunLoop() {
-	a.running = true
+	a.running.Store(true)
 	a.lifecycle = AppRunning
 
 	// ADR-026: surface available on desktop = once at init.
@@ -420,6 +470,7 @@ func (a *App) startRunLoop() {
 	}
 	a.lastFrame = time.Now()
 	a.invalidator = newInvalidator(a.manager.WakeUp)
+	a.wakeupFn.Store(a.manager.WakeUp)
 	a.animations = &AnimationController{}
 	if a.pendingRedraw.Swap(false) {
 		a.invalidator.Invalidate()
@@ -462,17 +513,20 @@ func (a *App) runFrame() {
 		deltaTime = 0.066
 	}
 
-	// Update input state for next frame (Ebiten-style polling)
-	// This must be called before onUpdate so JustPressed/JustReleased work correctly
-	if a.inputState != nil {
-		a.inputState.Update()
-	}
-
 	// onUpdate: ALWAYS when loop is active (ANIMATING + CONTINUOUS).
 	// UI frameworks tick animations, process signals, run layout here.
 	// If something changed, they call RequestRedraw() → invalidated = true.
 	if a.onUpdate != nil {
 		a.onUpdate(deltaTime)
+	}
+
+	// Advance input state AFTER onUpdate so edge detectors (JustPressed,
+	// JustReleased, Mouse.Delta) are visible during the callback.
+	// Update() sets previous = current, clearing edges for the next frame.
+	// Order: events → onUpdate (user reads edges) → Update (clear).
+	// Matches Ebiten, Unity, Godot — all clear edges after user callback.
+	if a.inputState != nil {
+		a.inputState.Update()
 	}
 
 	// Check if onUpdate triggered RequestRedraw (UI spinner, animation tick).
@@ -510,17 +564,20 @@ func (a *App) initPlatform() (platform.PlatformWindow, error) {
 
 	// Create primary platform window.
 	platWindow, err := a.manager.CreateWindow(platform.Config{
-		Title:      a.config.Title,
-		Width:      a.config.Width,
-		Height:     a.config.Height,
-		Resizable:  a.config.Resizable,
-		Fullscreen: a.config.Fullscreen,
-		Frameless:  a.config.Frameless,
-		MinWidth:   a.config.MinWidth,
-		MinHeight:  a.config.MinHeight,
-		MaxWidth:   a.config.MaxWidth,
-		MaxHeight:  a.config.MaxHeight,
-		Icon:       a.config.Icon,
+		Title:       a.config.Title,
+		Width:       a.config.Width,
+		Height:      a.config.Height,
+		Resizable:   a.config.Resizable,
+		Fullscreen:  a.config.Fullscreen,
+		Frameless:   a.config.Frameless,
+		Transparent: a.config.Transparent,
+		UseDirectComposition: a.config.Transparent &&
+			a.config.GraphicsAPI == types.GraphicsAPIDX12,
+		MinWidth:  a.config.MinWidth,
+		MinHeight: a.config.MinHeight,
+		MaxWidth:  a.config.MaxWidth,
+		MaxHeight: a.config.MaxHeight,
+		Icon:      a.config.Icon,
 	})
 	if err != nil {
 		return nil, err
@@ -667,6 +724,7 @@ func (a *App) initRenderer(platWindow platform.PlatformWindow) error {
 	a.renderLoop.RunOnRenderThreadVoid(func() {
 		a.renderer, initErr = newRenderer(
 			platWindow, a.config.GraphicsAPI, a.config.VSync, a.config.PowerPreference,
+			a.config.Transparent,
 		)
 	})
 	if initErr != nil {
@@ -683,6 +741,9 @@ func (a *App) initRenderer(platWindow platform.PlatformWindow) error {
 // This matches the winit/Flutter/Qt pattern: platform layer delivers events,
 // handlers decide whether to invalidate, render loop never guesses.
 func (a *App) processEventsMultiThread() {
+	// Reset public input event queue (ADR-058). Reuse backing array.
+	a.inputEvents = a.inputEvents[:0]
+
 	// Collect all events first, then process.
 	// This allows us to coalesce resize events.
 	var lastResize *platform.Event
@@ -761,6 +822,9 @@ func (a *App) classifyEvent(event *platform.Event, lastResize *platform.Event, s
 
 	switch event.Type {
 	case platform.EventResize:
+		a.inputEvents = append(a.inputEvents, gpucontext.ResizeEvent{
+			Width: event.Width, Height: event.Height,
+		})
 		if isPrimary {
 			lastResize = event
 		} else {
@@ -781,19 +845,41 @@ func (a *App) classifyEvent(event *platform.Event, lastResize *platform.Event, s
 		if a.eventSource != nil {
 			a.eventSource.dispatchFocus(event.Focused)
 		}
+		a.inputEvents = append(a.inputEvents, gpucontext.FocusEvent{Focused: event.Focused})
 		a.RequestRedraw()
 
 	case platform.EventKeyDown:
 		a.dispatchKeyEvent(event, true)
+		a.inputEvents = append(a.inputEvents, gpucontext.KeyEvent{
+			Key: event.Key, Mods: event.Mods, Pressed: true,
+		})
 	case platform.EventKeyUp:
 		a.dispatchKeyEvent(event, false)
+		a.inputEvents = append(a.inputEvents, gpucontext.KeyEvent{
+			Key: event.Key, Mods: event.Mods, Pressed: false,
+		})
 	case platform.EventChar:
 		a.dispatchCharEvent(event)
+		a.inputEvents = append(a.inputEvents, gpucontext.CharEvent{Char: event.Char})
 	case platform.EventPointerDown, platform.EventPointerUp, platform.EventPointerMove,
 		platform.EventPointerEnter, platform.EventPointerLeave:
 		a.dispatchPointerEvent(event)
+		a.inputEvents = append(a.inputEvents, event.Pointer)
 	case platform.EventScroll:
 		a.dispatchScrollEvent(event)
+		a.inputEvents = append(a.inputEvents, event.Scroll)
+	case platform.EventScaleChanged:
+		a.inputEvents = append(a.inputEvents, gpucontext.ScaleChangedEvent{
+			ScaleFactor: event.ScaleFactor,
+			Width:       event.Width,
+			Height:      event.Height,
+		})
+		a.RequestRedraw()
+	case platform.EventDragDrop:
+		if a.onFileDrop != nil {
+			a.onFileDrop(event.DragPaths, event.DragX, event.DragY)
+			a.RequestRedraw()
+		}
 	}
 	return lastResize, secondaryResizes
 }
@@ -902,7 +988,7 @@ func (a *App) windowCloseEvent(event *platform.Event) {
 
 	// Check if app should quit (ADR-026: QuitOnLastWindowClosed)
 	if a.quitOnLastWindowClosed && a.windowManager.count() == 0 {
-		a.running = false
+		a.running.Store(false)
 	}
 }
 
@@ -1028,10 +1114,31 @@ func (a *App) renderFrameGPU(frames []windowFrame) {
 		ctx := newContextForSurface(a.renderer, ws, frame.scale)
 		frame.onDraw(ctx)
 
-		// beginFrame can fail (outdated / not yet configured). Demand-driven mode
-		// already consumed the invalidation — schedule another frame.
-		if !ws.frameStarted {
-			a.RequestRedraw()
+		// No frame started. Two very different reasons:
+		//
+		// The callback issued no draw calls, so lazy acquire never acquired
+		// anything. That is what lazy acquire is for, not a failure — there is
+		// nothing to present and nothing to retry. Asking for another frame
+		// here is a loop with no exit: a demand-driven UI draws nothing when
+		// nothing changed, so the next frame draws nothing either, and the app
+		// spins at whatever rate the platform allows, burning CPU on an idle
+		// window (~27% of a core on X11, with no visible frames at all).
+		//
+		// Or a draw call did ask for the swapchain and could not have it
+		// (surface outdated, not yet configured). Demand-driven mode already
+		// consumed the invalidation, so that one does need another frame.
+		//
+		// ADR-067: overlay-only frame. If the composition texture still holds
+		// content from the previous frame (composView != nil) and an overlay
+		// needs another frame (e.g., FPS counter, fade animation), acquire the
+		// swapchain and run endFrame to blit the preserved composition texture
+		// with updated overlays. This enables self-sustaining overlay animation
+		// even when the application's OnDraw callback draws nothing.
+		if !ws.frameStarted && !ws.tryOverlayOnlyFrame() {
+			if ws.acquireFailed {
+				a.RequestRedraw()
+			}
+			a.renderer.endFrameStats(true) // idle: no acquire → present skipped (#484 FrameStats)
 			ws.resetLazyState()
 			a.renderer.currentSurface = nil
 			continue
@@ -1047,6 +1154,14 @@ func (a *App) renderFrameGPU(frames []windowFrame) {
 			if ws.frameStarted && a.renderer.endFrameForSurface(ws) {
 				a.RequestRedraw()
 			}
+		}
+
+		// Self-sustaining debug overlay loop (ADR-066, Chromium pattern):
+		// when any overlay returns true from Draw, request another frame so
+		// it can continue animating (FPS counter, fade effects). The loop
+		// automatically stops when all overlays return false.
+		if ws.overlayNeedsRedraw {
+			a.RequestRedraw()
 		}
 		ws.resetLazyState()
 		a.renderer.currentSurface = nil
@@ -1185,8 +1300,14 @@ func (a *App) SetAppName(name string) {
 
 // Quit requests the application to quit.
 // The main loop will exit after completing the current frame.
+// Safe to call from any goroutine. After startRunLoop, also wakes
+// WaitEvents so the idle (event-driven) loop notices running=false
+// without waiting for a device input event (GLFW/winit/SDL pattern).
 func (a *App) Quit() {
-	a.running = false
+	a.running.Store(false)
+	if v := a.wakeupFn.Load(); v != nil {
+		v.(func())()
+	}
 }
 
 // frameCallbackReady checks if the platform allows rendering this frame.
@@ -1196,8 +1317,33 @@ func (a *App) Quit() {
 // On all other platforms, this always returns true.
 func (a *App) frameCallbackReady() bool {
 	if fg, ok := a.platWindow.(platform.FrameGater); ok {
-		return fg.FrameCallbackReady()
+		if !fg.FrameCallbackReady() {
+			return false
+		}
 	}
+
+	// Preserve the single-window fast path. Secondary windows are scanned only
+	// after one of them has actually prepared compositor frame gating.
+	if a.renderer == nil || !a.renderer.secondaryFrameGatePending.Load() {
+		return true
+	}
+	if a.windowManager == nil {
+		a.renderer.secondaryFrameGatePending.Store(false)
+		return true
+	}
+
+	a.windowManager.mu.RLock()
+	defer a.windowManager.mu.RUnlock()
+	for _, id := range a.windowManager.order {
+		w := a.windowManager.windows[id]
+		if w == nil || !w.visible || w.platWindow == nil {
+			continue
+		}
+		if fg, ok := w.platWindow.(platform.FrameGater); ok && !fg.FrameCallbackReady() {
+			return false
+		}
+	}
+	a.renderer.secondaryFrameGatePending.Store(false)
 	return true
 }
 
@@ -1388,6 +1534,43 @@ func (a *App) SubpixelLayout() gpucontext.SubpixelLayout {
 		return a.manager.SubpixelLayout()
 	}
 	return gpucontext.SubpixelNone
+}
+
+// FontSmoothing returns the OS text anti-aliasing mode.
+// Returns FontSmoothingGrayscale when the manager is not initialized.
+// Implements gpucontext.PlatformProvider.
+func (a *App) FontSmoothing() gpucontext.FontSmoothing {
+	if a.manager != nil {
+		return a.manager.FontSmoothing()
+	}
+	return gpucontext.FontSmoothingGrayscale
+}
+
+// PollInputEvent returns the next pending input event, or (nil, false) if the
+// queue is empty. Call inside OnUpdate for SDL-style event processing:
+//
+//	app.OnUpdate(func(dt float64) {
+//	    for ev, ok := app.PollInputEvent(); ok; ev, ok = app.PollInputEvent() {
+//	        switch e := ev.(type) {
+//	        case gpucontext.KeyEvent:
+//	            handleKey(e)
+//	        case gpucontext.PointerEvent:
+//	            handlePointer(e)
+//	        }
+//	    }
+//	})
+//
+// Events are collected during platform event dispatch and buffered until
+// consumed. Uncollected events are discarded at the start of the next frame.
+// This coexists with callbacks (EventSource) and state polling (Input) —
+// all three models see the same events from the same internal dispatch.
+func (a *App) PollInputEvent() (gpucontext.InputEvent, bool) {
+	if len(a.inputEvents) == 0 {
+		return nil, false
+	}
+	ev := a.inputEvents[0]
+	a.inputEvents = a.inputEvents[1:]
+	return ev, true
 }
 
 // SetFrameless enables or disables frameless window mode.
@@ -1865,6 +2048,8 @@ func gpucontextKeyToInputKey(key gpucontext.Key) input.Key {
 		return input.KeyNumLock
 	case gpucontext.KeyPause:
 		return input.KeyPause
+	case gpucontext.KeyCancel:
+		return input.KeyCancel
 
 	default:
 		return input.KeyUnknown

@@ -23,6 +23,8 @@ type mockWindow struct {
 	maximized       bool
 	minimized       bool
 	closed          bool
+	visible         bool
+	posX, posY      int
 	hitTestCallback func(float64, float64) gpucontext.HitTestResult
 	closeFn         func() bool
 
@@ -48,9 +50,15 @@ func (m *mockWindow) InSizeMove() bool              { return false }
 func (m *mockWindow) SetTitle(_ string)             {}
 func (m *mockWindow) SetMinSize(w, h int)           { m.minWidth = w; m.minHeight = h }
 func (m *mockWindow) SetMaxSize(w, h int)           { m.maxWidth = w; m.maxHeight = h }
+func (m *mockWindow) RequestSize(w, h int)          { m.width = w; m.height = h }
 func (m *mockWindow) SetModalFrameCallback(func())  {}
 func (m *mockWindow) Destroy()                      {}
-func (m *mockWindow) ScaleFactor() float64          { return m.scaleFactor }
+func (m *mockWindow) StartDrag(_ []string, done func(platform.DragResult)) {
+	if done != nil {
+		done(platform.DragCancelled)
+	}
+}
+func (m *mockWindow) ScaleFactor() float64 { return m.scaleFactor }
 func (m *mockWindow) PrepareFrame() platform.PrepareFrameResult {
 	w, h := m.PhysicalSize()
 	return platform.PrepareFrameResult{
@@ -74,7 +82,9 @@ func (m *mockWindow) IsMaximized() bool    { return m.maximized }
 func (m *mockWindow) SetFullscreen(v bool) { m.fullscreen = v }
 func (m *mockWindow) IsFullscreen() bool   { return m.fullscreen }
 func (m *mockWindow) Close()               { m.closed = true }
-func (m *mockWindow) Show()                {}
+func (m *mockWindow) Show()                { m.visible = true }
+func (m *mockWindow) Hide()                { m.visible = false }
+func (m *mockWindow) SetPosition(x, y int) { m.posX = x; m.posY = y }
 
 // mockScaleManager wraps mockManager and implements platform.PlatScaleProvider.
 type mockScaleManager struct {
@@ -92,6 +102,7 @@ type mockManager struct {
 	highContrast   bool
 	fontScale      float32
 	subpixelLayout gpucontext.SubpixelLayout
+	fontSmoothing  gpucontext.FontSmoothing
 
 	// dialog stubs — set these to control what ShowOpen/SaveFileDialog return
 	openDialogPaths []string
@@ -114,6 +125,7 @@ func (m *mockManager) ReduceMotion() bool                        { return m.redu
 func (m *mockManager) HighContrast() bool                        { return m.highContrast }
 func (m *mockManager) FontScale() float32                        { return m.fontScale }
 func (m *mockManager) SubpixelLayout() gpucontext.SubpixelLayout { return m.subpixelLayout }
+func (m *mockManager) FontSmoothing() gpucontext.FontSmoothing   { return m.fontSmoothing }
 func (m *mockManager) SetAppName(name string)                    {}
 func (m *mockManager) ShowOpenFileDialog(opts platform.FileDialogOptions) ([]string, error) {
 	m.lastDialogOpts = opts
@@ -219,6 +231,13 @@ func TestPlatformProviderNilPlatform(t *testing.T) {
 			t.Errorf("SubpixelLayout() = %v, want SubpixelNone", sl)
 		}
 	})
+
+	t.Run("FontSmoothing", func(t *testing.T) {
+		fs := app.FontSmoothing()
+		if fs != gpucontext.FontSmoothingGrayscale {
+			t.Errorf("FontSmoothing() = %v, want FontSmoothingGrayscale", fs)
+		}
+	})
 }
 
 // TestScaleFactorResolution verifies three-tier ScaleFactor resolution:
@@ -273,6 +292,7 @@ func TestPlatformProviderDelegation(t *testing.T) {
 		highContrast:   true,
 		fontScale:      1.5,
 		subpixelLayout: gpucontext.SubpixelBGR,
+		fontSmoothing:  gpucontext.FontSmoothingSubpixel,
 	}
 	mockWin := &mockWindow{
 		width:       800,
@@ -370,6 +390,13 @@ func TestPlatformProviderDelegation(t *testing.T) {
 		sl := app.SubpixelLayout()
 		if sl != gpucontext.SubpixelBGR {
 			t.Errorf("SubpixelLayout() = %v, want SubpixelBGR", sl)
+		}
+	})
+
+	t.Run("FontSmoothing", func(t *testing.T) {
+		fs := app.FontSmoothing()
+		if fs != gpucontext.FontSmoothingSubpixel {
+			t.Errorf("FontSmoothing() = %v, want FontSmoothingSubpixel", fs)
 		}
 	})
 }
@@ -529,5 +556,10 @@ func TestPlatformProviderFalseValues(t *testing.T) {
 	sl := app.SubpixelLayout()
 	if sl != gpucontext.SubpixelNone {
 		t.Errorf("SubpixelLayout() = %v, want SubpixelNone (default)", sl)
+	}
+
+	fs := app.FontSmoothing()
+	if fs != gpucontext.FontSmoothingNone {
+		t.Errorf("FontSmoothing() = %v, want FontSmoothingNone (default)", fs)
 	}
 }

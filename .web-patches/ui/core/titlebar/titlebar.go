@@ -4,6 +4,7 @@ import (
 	"github.com/gogpu/ui/a11y"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/gesture"
 	"github.com/gogpu/ui/widget"
 )
 
@@ -90,6 +91,9 @@ type Widget struct {
 	cfg     config
 	painter Painter
 
+	// Gesture recognizer for control button click handling (ADR-049).
+	clickRec *gesture.ClickRecognizer
+
 	// controlBounds holds the bounds for each control button (min, max, close).
 	controlBounds [controlCount]geometry.Rect
 
@@ -149,6 +153,17 @@ func New(opts ...Option) *Widget {
 			}
 		}
 	}
+
+	// Create ClickRecognizer for control button click handling (ADR-049).
+	w.clickRec = gesture.NewClickRecognizer(gesture.ClickConfig{
+		MaxClickCount: 1,
+		OnClick: func(details gesture.ClickDetails) {
+			if details.Button != event.ButtonLeft {
+				return
+			}
+			// Control button click is handled by handlePress/handleRelease.
+		},
+	})
 
 	return w
 }
@@ -280,7 +295,7 @@ func (w *Widget) layoutChildren(ctx widget.Context, available geometry.Size) {
 			x += childGap
 		}
 		childConstraints := geometry.Loose(geometry.Sz(controlsX-x, available.Height))
-		sz := child.Layout(ctx, childConstraints)
+		sz := widget.LayoutChild(child, ctx, childConstraints)
 		cy := (available.Height - sz.Height) / 2
 		bounds := geometry.NewRect(x, cy, sz.Width, sz.Height)
 		w.leadingBounds[i] = bounds
@@ -303,7 +318,7 @@ func (w *Widget) layoutChildren(ctx widget.Context, available geometry.Size) {
 			centerTotalWidth += childGap
 		}
 		childConstraints := geometry.Loose(geometry.Sz(centerAvailable, available.Height))
-		sz := child.Layout(ctx, childConstraints)
+		sz := widget.LayoutChild(child, ctx, childConstraints)
 		centerSizes[i] = sz
 		centerTotalWidth += sz.Width
 	}
@@ -347,7 +362,7 @@ func (w *Widget) Draw(ctx widget.Context, canvas widget.Canvas) {
 	bounds := w.Bounds()
 
 	// Draw background.
-	w.painter.DrawBackground(canvas, bounds, BackgroundState{
+	w.painter.PaintBackground(canvas, bounds, BackgroundState{
 		Focused: w.cfg.focused,
 	})
 
@@ -383,7 +398,7 @@ func (w *Widget) Draw(ctx widget.Context, canvas widget.Canvas) {
 	if w.cfg.chrome != nil {
 		for i := 0; i < controlCount; i++ {
 			ct := w.controlTypeForIndex(i)
-			w.painter.DrawControlButton(canvas, w.controlBounds[i], ct, ControlState{
+			w.painter.PaintControlButton(canvas, w.controlBounds[i], ct, ControlState{
 				Hovered: w.controlStates[i] == stateHover,
 				Pressed: w.controlStates[i] == statePressed,
 			})
@@ -744,9 +759,21 @@ func setBounds(child widget.Widget, bounds geometry.Rect) {
 	}
 }
 
+// GestureHitTest returns the gesture recognizers for a pointer event at pos.
+// Implements [gesture.GestureAware] for the unified pointer pipeline (ADR-049).
+// TitleBar is a leaf widget — always returns recognizers (hit-test already
+// confirmed bounds containment).
+func (w *Widget) GestureHitTest(_ geometry.Point) []gesture.Recognizer {
+	if w.clickRec == nil {
+		return nil
+	}
+	return []gesture.Recognizer{w.clickRec}
+}
+
 // Compile-time interface checks.
 var (
-	_ widget.Widget    = (*Widget)(nil)
-	_ widget.Focusable = (*Widget)(nil)
-	_ a11y.Accessible  = (*Widget)(nil)
+	_ widget.Widget        = (*Widget)(nil)
+	_ widget.Focusable     = (*Widget)(nil)
+	_ a11y.Accessible      = (*Widget)(nil)
+	_ gesture.GestureAware = (*Widget)(nil)
 )

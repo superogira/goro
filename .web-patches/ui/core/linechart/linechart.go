@@ -197,6 +197,11 @@ type Widget struct {
 	mu     sync.Mutex
 	series []Series
 
+	// scheduler routes invalidation from background goroutines through the
+	// main-thread scheduler instead of calling SetNeedsRedraw directly (#182).
+	// Set during Mount, cleared during Unmount.
+	scheduler widget.SchedulerRef
+
 	// Styling overrides set via fluent methods.
 	padding float32
 }
@@ -257,7 +262,7 @@ func (w *Widget) AddSeries(label string, color widget.Color) {
 		Points: make([]DataPoint, 0, w.cfg.maxPoints),
 	})
 	w.syncToSignal()
-	w.SetNeedsRedraw(true)
+	w.requestRedraw()
 }
 
 // PushValue appends a data point to the named series. If the series has
@@ -282,7 +287,7 @@ func (w *Widget) PushValue(label string, value float64) {
 		}
 		w.series[i].Points = pts
 		w.syncToSignal()
-		w.SetNeedsRedraw(true)
+		w.requestRedraw()
 		return
 	}
 }
@@ -297,7 +302,7 @@ func (w *Widget) ClearSeries(label string) {
 		if w.series[i].Label == label {
 			w.series[i].Points = w.series[i].Points[:0]
 			w.syncToSignal()
-			w.SetNeedsRedraw(true)
+			w.requestRedraw()
 			return
 		}
 	}
@@ -308,6 +313,17 @@ func (w *Widget) SeriesCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return len(w.series)
+}
+
+// requestRedraw routes invalidation through the scheduler when available,
+// falling back to direct SetNeedsRedraw for unmounted usage.
+// Must be called with w.mu held (scheduler field is read-only after Mount).
+func (w *Widget) requestRedraw() {
+	if w.scheduler != nil {
+		w.scheduler.MarkDirty(w)
+	} else {
+		w.SetNeedsRedraw(true)
+	}
 }
 
 // syncToSignal writes the current series data back to the signal if bound.
@@ -346,13 +362,15 @@ func (w *Widget) Draw(_ widget.Context, canvas widget.Canvas) {
 	}
 
 	// Build PaintState from current data.
-	chartState := w.buildPaintState()
-	w.painter.PaintChart(canvas, bounds, chartState)
+	chartState := w.buildPaintState(bounds)
+	w.painter.PaintChart(canvas, chartState)
 }
 
 // buildPaintState creates a read-only snapshot for the painter.
-func (w *Widget) buildPaintState() PaintState {
+// Pre-computes plot geometry so painters only draw (ADR-034 Phase 4).
+func (w *Widget) buildPaintState(bounds geometry.Rect) PaintState {
 	cs := PaintState{
+		Bounds:     bounds,
 		MaxPoints:  w.cfg.maxPoints,
 		YMin:       w.cfg.yMin,
 		YMax:       w.cfg.yMax,
@@ -372,7 +390,67 @@ func (w *Widget) buildPaintState() PaintState {
 		w.mu.Unlock()
 	}
 
+	// Pre-compute plot geometry (ADR-034 Phase 4).
+	cs.PlotArea = computePlotArea(bounds, cs.ShowLabels)
+	cs.GridLines = w.computeGridLines(cs.PlotArea, cs.YMin, cs.YMax)
+	cs.SeriesLines = w.computeSeriesLines(cs.PlotArea, cs.Series, cs.YMin, cs.YMax)
+
 	return cs
+}
+
+// computeGridLines pre-computes Y grid line positions and labels.
+func (w *Widget) computeGridLines(plotArea geometry.Rect, yMin, yMax float64) []GridLine {
+	if plotArea.IsEmpty() {
+		return nil
+	}
+	lines := make([]GridLine, 0, gridDivisions+1)
+	yRange := yMax - yMin
+	for i := 0; i <= gridDivisions; i++ {
+		t := float64(i) / float64(gridDivisions)
+		value := yMin + t*yRange
+		y := plotArea.Max.Y - float32(t)*plotArea.Height()
+		lines = append(lines, GridLine{
+			Y:     y,
+			Label: formatLabel(value, yMin, yMax),
+		})
+	}
+	return lines
+}
+
+// computeSeriesLines pre-computes pixel coordinates for each data series.
+func (w *Widget) computeSeriesLines(plotArea geometry.Rect, series []Series, yMin, yMax float64) [][]geometry.Point {
+	if plotArea.IsEmpty() || len(series) == 0 {
+		return nil
+	}
+
+	yRange := yMax - yMin
+	if yRange <= zeroThreshold && yRange >= -zeroThreshold {
+		return nil
+	}
+
+	slots := w.cfg.maxPoints - 1
+	if slots < 1 {
+		slots = 1
+	}
+	xStep := plotArea.Width() / float32(slots)
+
+	result := make([][]geometry.Point, len(series))
+	for si, s := range series {
+		pointCount := len(s.Points)
+		if pointCount < 2 {
+			result[si] = nil
+			continue
+		}
+		startX := plotArea.Max.X - float32(pointCount-1)*xStep
+		pts := make([]geometry.Point, pointCount)
+		for i := 0; i < pointCount; i++ {
+			x := startX + float32(i)*xStep
+			y := yForValue(s.Points[i].Value, plotArea, yMin, yRange)
+			pts[i] = geometry.Pt(x, y)
+		}
+		result[si] = pts
+	}
+	return result
 }
 
 // Event handles an input event and returns true if consumed.
@@ -390,6 +468,12 @@ func (w *Widget) Children() []widget.Widget {
 // Implements [widget.Lifecycle].
 func (w *Widget) Mount(ctx widget.Context) {
 	sched := ctx.Scheduler()
+
+	// Store scheduler for goroutine-safe invalidation (#182).
+	w.mu.Lock()
+	w.scheduler = sched
+	w.mu.Unlock()
+
 	if sched == nil {
 		return
 	}
@@ -405,6 +489,10 @@ func (w *Widget) Mount(ctx widget.Context) {
 // Unmount is called when the chart is removed from the widget tree.
 // Implements [widget.Lifecycle].
 func (w *Widget) Unmount() {
+	// Clear scheduler reference — after unmount, direct SetNeedsRedraw is used.
+	w.mu.Lock()
+	w.scheduler = nil
+	w.mu.Unlock()
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
 }
 

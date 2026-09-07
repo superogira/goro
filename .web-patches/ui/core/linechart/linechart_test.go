@@ -1,7 +1,6 @@
 package linechart
 
 import (
-	"github.com/gogpu/gg/scene"
 	"image"
 	"testing"
 
@@ -553,7 +552,7 @@ func TestPadding_Chaining(t *testing.T) {
 func TestDefaultPainter_EmptyBounds(t *testing.T) {
 	p := DefaultPainter{}
 	canvas := &recordingCanvas{}
-	p.PaintChart(canvas, geometry.Rect{}, PaintState{})
+	p.PaintChart(canvas, PaintState{})
 
 	if canvas.drawCount > 0 {
 		t.Error("should not draw with empty bounds")
@@ -572,8 +571,8 @@ func TestDefaultPainter_ZeroYRange(t *testing.T) {
 		},
 		Background: defaultBackground,
 	}
-	bounds := geometry.NewRect(0, 0, 400, 200)
-	p.PaintChart(canvas, bounds, cs)
+	cs.Bounds = geometry.NewRect(0, 0, 400, 200)
+	p.PaintChart(canvas, cs)
 
 	// Should draw background but no lines (zero range).
 	if canvas.lineCount > 0 {
@@ -596,8 +595,8 @@ func TestDefaultPainter_ClampValues(t *testing.T) {
 			}},
 		},
 	}
-	bounds := geometry.NewRect(0, 0, 400, 200)
-	p.PaintChart(canvas, bounds, cs)
+	cs.Bounds = geometry.NewRect(0, 0, 400, 200)
+	p.PaintChart(canvas, cs)
 
 	// Should draw 1 line segment, clamped to bounds.
 	if canvas.lineCount != 1 {
@@ -754,13 +753,13 @@ func (c *recordingCanvas) PopTransform()                    {}
 func (c *recordingCanvas) TransformOffset() geometry.Point  { return geometry.Point{} }
 func (c *recordingCanvas) ScreenOriginBase() geometry.Point { return geometry.Point{} }
 func (c *recordingCanvas) ClipBounds() geometry.Rect        { return geometry.NewRect(0, 0, 10000, 10000) }
-func (c *recordingCanvas) ReplayScene(_ *scene.Scene)       {}
+func (c *recordingCanvas) ReplayScene(_ widget.SceneCache)  {}
 
 type mockPainter struct {
 	called bool
 }
 
-func (p *mockPainter) PaintChart(_ widget.Canvas, _ geometry.Rect, _ PaintState) {
+func (p *mockPainter) PaintChart(_ widget.Canvas, _ PaintState) {
 	p.called = true
 }
 

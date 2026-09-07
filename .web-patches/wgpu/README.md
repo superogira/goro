@@ -31,11 +31,12 @@
 | Category | Capabilities |
 |----------|--------------|
 | **Backends** | Vulkan, Metal, DirectX 12, OpenGL ES, Software, **Browser WebGPU**, **Rust FFI** |
-| **Platforms** | Windows, Linux, macOS, iOS, **Browser (WASM)** |
+| **Platforms** | Windows, Linux, macOS, iOS, **Browser (WASM)**, **Android/arm64 (preview)** |
 | **API** | WebGPU-compliant (W3C specification) |
 | **Shaders** | WGSL via gogpu/naga compiler (SPIR-V, HLSL, MSL, GLSL, DXIL) |
 | **Compute** | Full compute shader support, GPU→CPU readback |
 | **Present** | Damage-aware presentation — compositor dirty rects (first WebGPU implementation) |
+| **Ray Tracing** | Inline ray queries (experimental) — Vulkan (VK_KHR), DX12 (DXR), Metal (macOS 15+), Software (CPU BVH). Feature-gated by `FeatureRayQuery` |
 | **Debug** | Leak detection, error scopes, validation layers, DRED diagnostics (DX12), structured logging (`log/slog`) |
 | **Build** | Zero CGO, simple `go build` |
 
@@ -55,6 +56,15 @@ CGO_ENABLED=0 go build
 ```
 
 > **Note:** wgpu uses Pure Go FFI via [goffi](https://github.com/go-webgpu/goffi). Both `CGO_ENABLED=0` (default, zero C compiler dependency) and `CGO_ENABLED=1` (for race detector or coexistence with CGO libraries) are supported.
+
+The unreleased Android/arm64 Vulkan implementation is documented separately in
+[Android Vulkan preview](docs/ANDROID.md). It consumes canonical goffi v0.6.3
+and is not yet a released support claim; the optional Rust path temporarily
+pins the exact merged WebGPU Android source until that dependency is released.
+
+New surface integrations should use the explicit safe or unsafe target API
+described in [Surface targets](docs/SURFACE-TARGETS.md). The original
+two-`uintptr` method remains available as a compatibility adapter.
 
 **Rust FFI backend** (optional, battle-tested wgpu-native drivers):
 ```bash
@@ -197,8 +207,7 @@ Safety guarantees: UAF protection via generation counters on `MappedRange`,
 `ErrMapRangeOverlap` for overlapping `MappedRange` calls, `MAP_ALIGNMENT = 8`
 validation, thread-safe concurrent `Device.Poll`.
 
-See [ADR-BUFFER-MAPPING-API](docs/dev/research/ADR-BUFFER-MAPPING-API.md) for the
-full design rationale and comparison with Rust wgpu.
+Design follows Rust wgpu's buffer mapping model with Go-idiomatic error handling.
 
 **Guides:** [Getting Started](docs/COMPUTE-SHADERS.md) | [Backend Differences](docs/COMPUTE-BACKENDS.md)
 
@@ -217,12 +226,13 @@ wgpu/
 │   ├── noop/           # No-op backend (testing)
 │   ├── software/       # CPU software rasterizer (~14K LOC)
 │   ├── gles/           # OpenGL ES 3.0+ (~12K LOC)
-│   ├── vulkan/         # Vulkan 1.3 (~42K LOC)
+│   ├── vulkan/         # Pure Go Vulkan backend (~42K LOC)
 │   ├── metal/          # Metal (~7K LOC)
 │   └── dx12/           # DirectX 12 (~17K LOC)
 ├── examples/
-│   ├── compute-copy/   # GPU buffer copy with compute shader
-│   └── compute-sum/    # Parallel reduction on GPU
+│   ├── compute-copy/          # GPU buffer copy with compute shader
+│   ├── compute-sum/           # Parallel reduction on GPU
+│   └── raytracing-headless/   # Ray tracing on software backend (no GPU required)
 └── cmd/
     ├── vk-gen/         # Vulkan bindings generator
     └── ...             # Backend integration tests
@@ -252,7 +262,8 @@ import _ "github.com/gogpu/wgpu/hal/allbackends"
 // Platform-specific backends auto-registered:
 // - Windows: Vulkan, DX12, GLES, Software
 // - Linux:   Vulkan, GLES, Software
-// - macOS:   Metal, Software
+// - macOS:   Metal, Vulkan, Software
+// - Android/arm64 preview: Vulkan only
 ```
 
 ---
@@ -261,19 +272,19 @@ import _ "github.com/gogpu/wgpu/hal/allbackends"
 
 ### Platform Support
 
-| Backend | Windows | Linux | macOS | iOS | Notes |
-|---------|:-------:|:-----:|:-----:|:---:|-------|
-| **Vulkan** | Yes | Yes | Yes | - | MoltenVK on macOS |
-| **Metal** | - | - | Yes | Yes | Native Apple GPU |
-| **DX12** | Yes | - | - | - | Windows 10+ |
-| **GLES** | Yes | Yes | - | - | OpenGL ES 3.0+ |
-| **Software** | Yes | Yes | Yes | Yes | CPU fallback |
+| Backend | Windows | Linux | macOS | iOS | Android/arm64 | Notes |
+|---------|:-------:|:-----:|:-----:|:---:|:-------------:|-------|
+| **Vulkan** | Yes | Yes | Yes | - | Preview | MoltenVK on macOS; [Android contract](docs/ANDROID.md) |
+| **Metal** | - | - | Yes | Yes | - | Native Apple GPU |
+| **DX12** | Yes | - | - | - | - | Windows 10+ |
+| **GLES** | Yes | Yes | - | - | - | OpenGL ES 3.0+ |
+| **Software** | Yes | Yes | Yes | Yes | - | CPU fallback |
 
 **Architectures:** amd64, arm64 (including Windows ARM64 / Snapdragon X)
 
 ### Vulkan Backend
 
-Full Vulkan 1.3 implementation with:
+Pure Go Vulkan backend with:
 
 - Auto-generated bindings from official `vk.xml`
 - Buddy allocator for GPU memory (O(log n), minimal fragmentation)
@@ -282,7 +293,7 @@ Full Vulkan 1.3 implementation with:
 - wgpu-style swapchain synchronization
 - MSAA render pass with automatic resolve
 - Complete resource management (Buffer, Texture, Pipeline, BindGroup)
-- Surface creation: Win32, X11, Wayland, Metal (MoltenVK)
+- Surface creation: Win32, X11, Wayland, Metal (MoltenVK), and Android `ANativeWindow` (preview)
 - Debug messenger for validation layer error capture (`VK_EXT_debug_utils`)
 - Structured diagnostic logging via `log/slog`
 
@@ -348,12 +359,17 @@ import _ "github.com/gogpu/wgpu/hal/software"
 - Blending (13 factors, 5 operations)
 - 6-plane frustum clipping (Sutherland-Hodgman)
 - 8x8 tile-based parallel rendering
-- **SPIR-V interpreter** — executes vertex/fragment/compute shaders on CPU. Designed for shader debugging, CI/CD testing, and GPU-less environments — **not for production rendering** (interpreted, ~100× slower than JIT software renderers like SwiftShader). See [ADR](docs/dev/research/ADR-SPIRV-JIT-VS-INTERPRETER.md).
+- **SPIR-V interpreter** — executes vertex/fragment/compute shaders on CPU. Designed for shader debugging, CI/CD testing, and GPU-less environments — **not for production rendering** (interpreted, ~100× slower than JIT software renderers like SwiftShader).
 
 **Debug & Testing:**
 - Render pass instrumentation: `hal.Logger().Debug()` events + `RenderPassStats` for CI e2e assertions
-- `GetFramebuffer()` pixel readback for headless test verification
+- Public `wgpu.HeadlessSurfaceTarget` + `Surface.ReadPixels()` lifecycle for deterministic headless render verification; snapshots are owned, tightly packed RGBA8
+- HAL `GetFramebuffer()` remains as a compatibility alias for existing software-backend callers; new root API code should use `Surface.ReadPixels()`
 - Damage-aware partial blit with pixel-level test coverage
+
+See [Surface targets](docs/SURFACE-TARGETS.md#headless-software-surface-and-readback)
+for the complete configure → acquire → render → submit → present → readback
+recipe and the explicit non-WebGPU support contract.
 
 **Windowed Presentation:**
 - **Windows:** DWM-safe `CreateDIBSection` + `BitBlt` (SDL3/Qt6 pattern), zero-copy into GDI bitmap
@@ -386,6 +402,7 @@ import _ "github.com/gogpu/wgpu/hal/software"
 | [gogpu/naga](https://github.com/gogpu/naga) | Shader compiler (WGSL to SPIR-V, HLSL, MSL, GLSL, DXIL) |
 | [gogpu/gg](https://github.com/gogpu/gg) | 2D graphics library with GPU SDF acceleration |
 | [gogpu/ui](https://github.com/gogpu/ui) | GUI toolkit: 22+ widgets, 4 themes |
+| [gogpu/galloc](https://github.com/gogpu/galloc) | O(1) offset allocator for GPU memory sub-allocation |
 | [gogpu/gputypes](https://github.com/gogpu/gputypes) | Shared WebGPU type definitions |
 | [go-webgpu/goffi](https://github.com/go-webgpu/goffi) | Pure Go FFI library |
 
@@ -395,6 +412,7 @@ import _ "github.com/gogpu/wgpu/hal/software"
 
 - **[Compute Shaders Guide](docs/COMPUTE-SHADERS.md)** — Getting started with compute
 - **[Compute Backend Differences](docs/COMPUTE-BACKENDS.md)** — Per-backend capabilities
+- **[Ray Tracing Extensions](docs/RAY-TRACING.md)** — Experimental inline ray queries (v0.32.0)
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — System architecture
 - **[ROADMAP.md](ROADMAP.md)** — Development milestones
 - **[CHANGELOG.md](CHANGELOG.md)** — Release notes
@@ -423,6 +441,16 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - Bug reports and fixes
 
 ---
+
+## Star History
+
+<a href="https://starhistory.io">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.starhistory.io/png?repos=gogpu/wgpu&style=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.starhistory.io/png?repos=gogpu/wgpu&style=professional" />
+   <img alt="Star History Chart" src="https://api.starhistory.io/png?repos=gogpu/wgpu" width="800" />
+ </picture>
+</a>
 
 ## License
 

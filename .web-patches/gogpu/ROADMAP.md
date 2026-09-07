@@ -25,9 +25,23 @@ Our goal is to become the **reference graphics ecosystem** for Go — comparable
 
 ---
 
-## Current State: v0.44.6
+## Current State: v0.54.0
 
 ✅ **Production-ready** with full feature set:
+- **Strided texture uploads + GPUStats** (#484) — `Texture.UpdateRegion(region, data, layout)` for zero-copy dirty bands; `Renderer.GetCounters()` + `Context.FrameStats()` behind `GOGPU_STATS=1`
+- **Outgoing drag source** (#427, ADR-061) — `Window.StartDrag(DragData, callback)` on all 5 platforms (Windows COM DoDragDrop, macOS NSDraggingSource, X11 XDND v5, Wayland wl_data_source, Browser stub). Enterprise references: Qt6, SDL3, winit
+- **Per-pixel alpha transparency** (#361, @shaolei) — `Config.WithTransparent(bool)` for overlay/tray popup windows. Windows DwmBlurBehind, macOS isOpaque+clearColor, X11 ARGB visual
+- **Window control API** (#361, @shaolei) — `Window.Show()`, `Hide()`, `SetPosition()`, `SetSize()` on all desktop platforms
+- **Input ordering fix** (#425, @FDUTCH) — `JustPressed`/`Delta` now visible in `OnUpdate` (Ebiten/Unity/Godot ordering)
+- **Quit wakes idle loop** (#406, @lkmavi) — `App.Quit()` invokes `WakeUp` so event-driven loop exits without waiting for input (GLFW/winit/SDL pattern)
+- **macOS checkptr safe** (#406, @jbunds) — ObjC associated object replaced with Go-side `sync.Map` (purego pattern)
+- **Demand-driven idle loop fix** (#411, @samyfodil) — 0% CPU on idle windows (was ~27% on X11). `acquireFailed` flag for lazy acquire correctness
+- **Runtime DPI/scale change** (#409, ADR-059) — `ScaleChangedEvent` on all 5 platforms. Multi-display HiDPI: window drag between Retina and FullHD. winit/Qt6/SDL3 patterns
+- **SDL-style event queue** (ADR-058) — `App.PollInputEvent()` with sealed `InputEvent` interface. Three coexisting input models: callbacks, polling, event queue. Research: Qt6, SDL3, winit, Flutter, Bevy, Gio, Ebiten
+- **Font smoothing OS detection** (#396, ADR-057) — `App.FontSmoothing()` returns None/Grayscale/Subpixel on all 5 platforms (Qt6 pattern)
+- **Runtime window resize** (#397) — `App.RequestSize(width, height)` on all 5 platforms (winit/SDL3 patterns, DPI-aware, maximized restore)
+- **Single-encoder compositing** (#393, @besmpl) — frame-owned `CommandEncoder()` for multi-pass rendering (g3d + gg overlay, single queue submit)
+- **OS drag-and-drop** (#387, #427) — incoming: all 4 desktop platforms (Windows WM_DROPFILES, X11 XDND v5, macOS NSDragging, Wayland wl_data_device); outgoing: all 5 platforms via `StartDrag`
 - **CSD maximize/fullscreen geometry** (#300) — 5 bugs fixed (enterprise research: GTK4, winit/SCTK, SDL3/libdecor). Negative offset geometry model, fullscreen state parsing, decoration lifecycle.
 - **Hidden-then-show window creation** — GLFW/Ebiten/SDL3/Flutter pattern: window created hidden, shown after GPU init. Eliminates black flash and WM_SETFOCUS race on all platforms.
 - **Universal App Lifecycle** — RenderTarget, QuitOnLastWindowClosed, AppLifecycle enum (5 states), surface/lifecycle callbacks (ADR-026, Phases 1-3)
@@ -80,6 +94,21 @@ Our goal is to become the **reference graphics ecosystem** for Go — comparable
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
+| **v0.54.0** | 2026-08-31 | **Strided UpdateRegion + GPUStats** (#484). Struct params (ADR-072). deps wgpu v0.34.2, gpucontext v0.31.3, gputypes v0.8.0. |
+| **v0.53.2** | 2026-08-30 | DownlevelCapabilities (ADR-071). deps wgpu v0.33.0, gpucontext v0.30.0. |
+| **v0.50.0** | 2026-08-06 | **Outgoing drag source** (#427, ADR-061) — `StartDrag` all 5 platforms. Per-pixel alpha (#361, @shaolei). Input ordering fix (#425, @FDUTCH). deps wgpu v0.30.36. |
+| **v0.49.2** | 2026-08-05 | Input JustPressed/Delta ordering fix (#425, @FDUTCH). 38 enterprise input tests. |
+| **v0.49.1** | 2026-08-04 | macOS menu Role+Action fix (#423, @jbunds). |
+| **v0.49.0** | 2026-08-04 | Per-pixel alpha transparency (#361, @shaolei). Window Show/Hide/SetPosition/SetSize. |
+| **v0.48.5** | 2026-08-02 | deps wgpu v0.30.35 — DX12 DirectComposition for per-pixel alpha. |
+| **v0.48.4** | 2026-08-02 | Quit wakes idle loop (@jbunds). macOS checkptr fix (@jbunds). |
+| **v0.45.1** | 2026-07-27 | **DnD complete** — macOS NSDragging + Wayland wl_data_device. All 4 platforms. |
+| **v0.45.0** | 2026-07-27 | **OS file drag-and-drop** (#387, Windows+X11). fix: Wayland 60fps (#379), macOS title double-render (#384), macOS tabbing (#383). |
+| **v0.44.11** | 2026-07-26 | **MarkExternalContent** (#341) — multi-pass frame compositing for g3d+ui. deps: wgpu v0.30.23, goffi v0.6.2 (@besmpl). |
+| **v0.44.10** | 2026-07-20 | **Linux WindowID stamping** + X11 multi-window + Wayland secondary Close (@lkmavi, #381). |
+| **v0.44.9** | 2026-07-16 | **deps:** wgpu v0.30.22 — Metal MSAA Intel Mac crash fix (@AnyCPU). |
+| **v0.44.8** | 2026-07-15 | **deps:** wgpu v0.30.21 — software backend row stride, blend state, BGRA readTexel fixes. |
+| **v0.44.7** | 2026-07-14 | **pixelPresented frame lifecycle** (ADR-052) — fixes software backend PRESENT ERROR. deps: wgpu v0.30.20 (DX12 UMA @Zeroes1). |
 | **v0.44.6** | 2026-07-12 | **Wayland flush EAGAIN retry** (#368, ADR-051) — GLFW pattern, unblocks @kivutar. deps: wgpu v0.30.19. |
 | **v0.44.5** | 2026-07-12 | **Wayland fractional scale** (@kivutar #369) + **WriteSurfacePixels** (#370). goffi v0.6.0 errno always-capture. deps: wgpu v0.30.18, goffi v0.6.0, gpucontext v0.21.1. |
 | **v0.44.1** | 2026-07-08 | **macOS live resize fix** (@lkmavi) — IOSurface churn eliminated via NSAutoreleasePool + transaction present. Run() refactor. Enterprise-validated (wgpu-rs, Flutter, Skia). |
@@ -211,7 +240,7 @@ Surface-based lifecycle for desktop + mobile + web + headless. Replaces "primary
 | **Ecosystem Logging** | Unified slog-based logging across all repos | Backlog (TASK-LOG-001) |
 | **System Tray** | OS-level tray icon (Win32/macOS/Linux) | ✅ Shipped — [gogpu/systray](https://github.com/gogpu/systray) v0.1.0 |
 | **Native Dialogs** | File open/save, color picker, message box | Planned |
-| **Drag & Drop** | OS-level and inter-window drag and drop | Planned |
+| **Drag & Drop** | OS-level incoming (all 4 desktop, v0.45.0) + outgoing drag source (`StartDrag`, all 5 platforms, v0.50.0, ADR-061) | ✅ Shipped |
 | **Clipboard** | Text clipboard on all platforms (Win32/macOS/X11/Wayland). Rich clipboard (images, HTML, custom types) planned | ✅ Text shipped (v0.39.3) |
 | **Notifications** | OS-level desktop notifications | Planned |
 | **Independent Render Thread** | Decouple render loop from message pump | [Research](docs/dev/research/INDEPENDENT_RENDER_THREAD.md) |
@@ -252,13 +281,13 @@ Surface-based lifecycle for desktop + mobile + web + headless. Replaces "primary
 
 | Component | Version | Description |
 |-----------|---------|-------------|
-| **gogpu/gogpu** | v0.29.2 | GPU application framework, windowing, multi-window, damage-aware present |
-| **gogpu/wgpu** | v0.26.4 | Pure Go WebGPU (Vulkan, Metal, DX12, GLES, Software) |
+| **gogpu/gogpu** | v0.54.0 | GPU application framework, windowing, multi-window, damage-aware present |
+| **gogpu/wgpu** | v0.33.0 | Pure Go WebGPU (Vulkan, Metal, DX12, GLES, Software) |
 | **gogpu/naga** | v0.17.6 | Shader compiler (WGSL → SPIR-V/MSL/GLSL/HLSL/DXIL) |
 | **gogpu/gg** | v0.41.2 | 2D graphics with GPU acceleration, Vello compute, scene renderer |
 | **gogpu/ui** | v0.1.13 | GUI toolkit: 22+ widgets, 4 themes, offscreen renderer |
-| **gogpu/gpucontext** | v0.14.0 | Shared interfaces (DeviceProvider, TextureView, TextureRegionUpdater) |
-| **gogpu/gputypes** | v0.5.0 | WebGPU type definitions (zero value = spec default) |
+| **gogpu/gpucontext** | v0.31.1 | Shared interfaces (DeviceProvider, TextureView, TextureRegionUpdater) |
+| **gogpu/gputypes** | v0.7.0 | WebGPU type definitions (zero value = spec default) |
 | **gogpu/compose** | design | Multi-process composition library |
 | **gogpu/g3d** | v0.1.0 | 3D rendering (scene graph, PBR Blinn-Phong, forward renderer, 5 backends) |
 | **gogpu/gg-pdf** | v0.1.0 | PDF export |

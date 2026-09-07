@@ -6,6 +6,8 @@ import (
 	"math"
 
 	rwgpu "github.com/go-webgpu/webgpu/wgpu"
+	"github.com/gogpu/gputypes"
+	"github.com/gogpu/wgpu/internal/indirect"
 )
 
 // RenderPassEncoder records draw commands within a render pass.
@@ -42,7 +44,7 @@ func (p *RenderPassEncoder) SetVertexBuffer(slot uint32, buffer *Buffer, offset 
 }
 
 // SetIndexBuffer sets the index buffer.
-func (p *RenderPassEncoder) SetIndexBuffer(buffer *Buffer, format IndexFormat, offset uint64) {
+func (p *RenderPassEncoder) SetIndexBuffer(buffer *Buffer, format gputypes.IndexFormat, offset uint64) {
 	if buffer == nil || buffer.r == nil {
 		return
 	}
@@ -51,17 +53,17 @@ func (p *RenderPassEncoder) SetIndexBuffer(buffer *Buffer, format IndexFormat, o
 }
 
 // SetViewport sets the viewport transformation.
-func (p *RenderPassEncoder) SetViewport(x, y, width, height, minDepth, maxDepth float32) {
-	p.r.SetViewport(x, y, width, height, minDepth, maxDepth)
+func (p *RenderPassEncoder) SetViewport(vp gputypes.Viewport) {
+	p.r.SetViewport(vp.X, vp.Y, vp.Width, vp.Height, vp.MinDepth, vp.MaxDepth)
 }
 
 // SetScissorRect sets the scissor rectangle for clipping.
-func (p *RenderPassEncoder) SetScissorRect(x, y, width, height uint32) {
-	p.r.SetScissorRect(x, y, width, height)
+func (p *RenderPassEncoder) SetScissorRect(rect gputypes.ScissorRect) {
+	p.r.SetScissorRect(rect.X, rect.Y, rect.Width, rect.Height)
 }
 
 // SetBlendConstant sets the blend constant color.
-func (p *RenderPassEncoder) SetBlendConstant(color *Color) {
+func (p *RenderPassEncoder) SetBlendConstant(color *gputypes.Color) {
 	if color == nil {
 		return
 	}
@@ -79,29 +81,72 @@ func (p *RenderPassEncoder) SetStencilReference(reference uint32) {
 }
 
 // Draw draws primitives.
-func (p *RenderPassEncoder) Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32) {
-	p.r.Draw(vertexCount, instanceCount, firstVertex, firstInstance)
+func (p *RenderPassEncoder) Draw(args gputypes.DrawArgs) {
+	p.r.Draw(args.VertexCount, args.InstanceCount, args.FirstVertex, args.FirstInstance)
 }
 
 // DrawIndexed draws indexed primitives.
-func (p *RenderPassEncoder) DrawIndexed(indexCount, instanceCount, firstIndex uint32, baseVertex int32, firstInstance uint32) {
-	p.r.DrawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance)
+func (p *RenderPassEncoder) DrawIndexed(args gputypes.DrawIndexedArgs) {
+	p.r.DrawIndexed(args.IndexCount, args.InstanceCount, args.FirstIndex, args.BaseVertex, args.FirstInstance)
 }
 
 // DrawIndirect draws primitives with GPU-generated parameters.
 func (p *RenderPassEncoder) DrawIndirect(buffer *Buffer, offset uint64) {
+	p.MultiDrawIndirect(buffer, offset, 1)
+}
+
+// MultiDrawIndirect draws consecutive primitives with GPU-generated parameters.
+func (p *RenderPassEncoder) MultiDrawIndirect(buffer *Buffer, offset uint64, drawCount uint32) {
+	if drawCount == 0 {
+		return
+	}
 	if buffer == nil || buffer.r == nil {
 		return
 	}
-	p.r.DrawIndirect(buffer.r, offset)
+	if !drawIndirectRangeFits(buffer.Size(), offset, drawCount) {
+		p.r.DrawIndirect(buffer.r, indirect.DelegatedValidationOffset(buffer.Size(), offset, drawIndirectRecordSize, drawCount))
+		return
+	}
+	for i := uint32(0); i < drawCount; i++ {
+		recordOffset, _ := indirect.RecordOffset(offset, drawIndirectRecordSize, i)
+		p.r.DrawIndirect(buffer.r, recordOffset)
+	}
 }
 
 // DrawIndexedIndirect draws indexed primitives with GPU-generated parameters.
 func (p *RenderPassEncoder) DrawIndexedIndirect(buffer *Buffer, offset uint64) {
+	p.MultiDrawIndexedIndirect(buffer, offset, 1)
+}
+
+// MultiDrawIndexedIndirect draws consecutive indexed primitives with
+// GPU-generated parameters.
+func (p *RenderPassEncoder) MultiDrawIndexedIndirect(buffer *Buffer, offset uint64, drawCount uint32) {
+	if drawCount == 0 {
+		return
+	}
 	if buffer == nil || buffer.r == nil {
 		return
 	}
-	p.r.DrawIndexedIndirect(buffer.r, offset)
+	lowerRustIndexedIndirect(buffer.Size(), offset, drawCount, func(recordOffset uint64) {
+		p.r.DrawIndexedIndirect(buffer.r, recordOffset)
+	})
+}
+
+// lowerRustIndexedIndirect lowers one counted span through the Rust adapter's
+// single-record interface. Invalid positive spans delegate exactly one failing
+// record before any valid record can be emitted.
+func lowerRustIndexedIndirect(bufferSize, offset uint64, drawCount uint32, draw func(uint64)) {
+	if drawCount == 0 {
+		return
+	}
+	if !indexedIndirectRangeFits(bufferSize, offset, drawCount) {
+		draw(indirect.DelegatedValidationOffset(bufferSize, offset, drawIndexedIndirectRecordSize, drawCount))
+		return
+	}
+	for i := uint32(0); i < drawCount; i++ {
+		recordOffset, _ := indirect.RecordOffset(offset, drawIndexedIndirectRecordSize, i)
+		draw(recordOffset)
+	}
 }
 
 // End ends the render pass.

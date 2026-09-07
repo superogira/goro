@@ -37,6 +37,12 @@ type PaintButtonState struct {
 	Focused   bool
 	Disabled  bool
 	Bounds    geometry.Rect
+
+	// Pre-computed icon/label positions (ADR-034 Phase 4).
+	// The widget computes these during its draw loop. Painters should use
+	// these instead of calling iconBoundsForItem/textBoundsForItem.
+	IconBounds geometry.Rect // pre-computed icon position
+	TextBounds geometry.Rect // pre-computed label position (zero if no label)
 }
 
 // DefaultPainter provides a minimal fallback painter with no design system styling.
@@ -76,14 +82,20 @@ func (p DefaultPainter) PaintButtonItem(canvas widget.Canvas, state PaintButtonS
 		fg = defaultDisabledColor
 	}
 
-	// Draw icon centered in the button area.
-	iconBounds := iconBoundsForItem(state.Bounds, state.ShowLabel)
-	icon.Draw(canvas, state.Icon, iconBounds, fg)
+	// Use pre-computed bounds when available (ADR-034 Phase 4).
+	iBounds := state.IconBounds
+	if iBounds.IsEmpty() {
+		iBounds = iconBoundsForItem(state.Bounds, state.ShowLabel)
+	}
+	icon.Draw(canvas, state.Icon, iBounds, fg)
 
 	// Draw label text if ShowLabel is true.
 	if state.ShowLabel && state.Label != "" {
-		textBounds := textBoundsForItem(state.Bounds, iconBounds)
-		canvas.DrawText(state.Label, textBounds, defaultFontSize, fg, false, widget.TextAlignLeft)
+		tBounds := state.TextBounds
+		if tBounds.IsEmpty() {
+			tBounds = textBoundsForItem(state.Bounds, iBounds)
+		}
+		canvas.DrawText(state.Label, tBounds, defaultFontSize, fg, false, widget.TextAlignLeft)
 	}
 
 	// Focus ring.
@@ -149,7 +161,7 @@ func textBoundsForItem(itemBounds geometry.Rect, iconRect geometry.Rect) geometr
 const (
 	defaultItemRadius    float32 = 6
 	iconPadding          float32 = 6
-	maxIconSize          float32 = 20
+	maxIconSize          float32 = 16 // match 16x16 viewBox for 1:1 crisp rendering
 	textIconGap          float32 = 4
 	defaultFontSize      float32 = 12
 	separatorInset       float32 = 6

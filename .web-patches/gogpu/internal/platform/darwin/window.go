@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 )
 
 // Errors returned by Window operations.
@@ -24,6 +23,7 @@ type WindowConfig struct {
 	Resizable         bool
 	Fullscreen        bool
 	Frameless         bool
+	Transparent       bool
 	TabbingMode       int
 	TabbingIdentifier string
 }
@@ -131,6 +131,20 @@ func NewWindow(config WindowConfig) (*Window, error) {
 		}
 	}
 
+	// Per-pixel alpha: the window must not be opaque or AppKit fills the
+	// background black and the compositor ignores the surface alpha.
+	// SDL3 sets all three (opaque=NO, hasShadow=NO, backgroundColor=clearColor):
+	// without clearColor AppKit composites the swapchain alpha over an opaque
+	// background; without hasShadow=NO the system shadow renders incorrectly
+	// for overlay/popup windows.
+	if config.Transparent {
+		nsWindow.SendBool(selectors.setOpaque, false)
+		nsWindow.SendBool(selectors.setHasShadow, false)
+		if color := classes.NSColor.Send(selectors.clearColor); !color.IsNil() {
+			nsWindow.SendPtr(selectors.setBackgroundColor, color.Ptr())
+		}
+	}
+
 	// Create custom GoGPUView (ADR-015: prevents macOS system beep on key press).
 	// Every enterprise framework (Qt6, Chromium, Flutter, GLFW, SDL3) uses a custom
 	// NSView subclass that overrides keyDown:/doCommandBySelector: to prevent NSBeep.
@@ -234,13 +248,25 @@ func (w *Window) SetTitle(title string) {
 	}
 
 	w.cachedTitle = title
+
+	// When we have an injected text field (center/right alignment), update
+	// that field and keep NSWindow.title empty. Setting NSWindow.title while
+	// titleVisibility is Hidden still exposes the string to the macOS Tab
+	// Bar, which draws a tab label from it — producing a doubled/overlapping
+	// title when "Show Tab Bar" is active (issue #384).
+	if !w.titleTextField.IsNil() {
+		nsTitle := NewNSString(title)
+		if nsTitle != nil {
+			w.titleTextField.SendPtr(selectors.setStringValue, nsTitle.ID().Ptr())
+			nsTitle.Release()
+		}
+		return
+	}
+
+	// No injected text field — set the native NSWindow.title directly.
 	nsTitle := NewNSString(title)
 	if nsTitle != nil {
 		w.nsWindow.SendPtr(selectors.setTitle, nsTitle.ID().Ptr())
-		// Keep the injected text field in sync when right-alignment is active.
-		if !w.titleTextField.IsNil() {
-			w.titleTextField.SendPtr(selectors.setStringValue, nsTitle.ID().Ptr())
-		}
 		nsTitle.Release()
 	}
 }
@@ -253,7 +279,9 @@ func (w *Window) Size() (width, height int) {
 	return w.width, w.height
 }
 
-// SetSize sets the window content size.
+// SetSize sets the window content size using setContentSize: (inner size).
+// This correctly handles the title bar height — unlike setFrame: which sets
+// the outer window frame and would shrink the content area by the title bar.
 func (w *Window) SetSize(width, height int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -265,19 +293,43 @@ func (w *Window) SetSize(width, height int) {
 	w.width = width
 	w.height = height
 
-	// Get current frame
-	frame := w.nsWindow.GetRect(selectors.frame)
+	// Use setContentSize: to set the inner content area.
+	// This is the correct API — setFrame: sets the outer frame including
+	// the title bar, which would make the content area smaller than requested.
+	// winit uses setContentSize: for the same reason (window_delegate.rs:1085-1089).
+	w.nsWindow.SendSize(selectors.setContentSize, MakeSize(CGFloat(width), CGFloat(height)))
+}
 
-	// Create new frame with updated size
-	newFrame := MakeRect(
-		frame.Origin.X,
-		frame.Origin.Y,
-		CGFloat(width),
-		CGFloat(height),
-	)
+// SetPosition moves the window origin to the given logical screen position.
+// gogpu uses a top-left origin; AppKit uses bottom-left, so Y is flipped
+// against the main screen height using the window's current outer frame
+// height (winit pattern).
+func (w *Window) SetPosition(x, y int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	// Set frame with display
-	w.nsWindow.SendRect(selectors.setFrame, newFrame)
+	if w.nsWindow.IsNil() {
+		return
+	}
+
+	frameH := w.height
+	if f := w.nsWindow.GetRect(selectors.frame); f.Size.Height > 0 {
+		frameH = int(f.Size.Height)
+	}
+	// Fallback note: if the frame selector fails we fall back to the content
+	// height, which can shift Y by the title bar height (low probability —
+	// NSWindow.frame is always available once the window exists).
+
+	screenH := frameH
+	screen := classes.NSScreen.Send(selectors.mainScreen)
+	if !screen.IsNil() {
+		if f := screen.GetRect(selectors.frame); f.Size.Height > 0 {
+			screenH = int(f.Size.Height)
+		}
+	}
+
+	originY := screenH - y - frameH
+	w.nsWindow.SendPoint(selectors.setFrameOrigin, MakePoint(CGFloat(x), CGFloat(originY)))
 }
 
 // ShouldClose returns true if the window should close.
@@ -348,7 +400,7 @@ func (w *Window) Destroy() {
 	// Remove delegate properly
 	if w.delegate != 0 {
 		w.nsWindow.SendPtr(selectors.setDelegate, 0) // setDelegate:nil
-		SetAssociatedObject(w.delegate, unsafe.Pointer(&delegateAssociatedKey), nil, 0)
+		delegateWindows.Delete(uintptr(w.delegate))
 		w.delegate.Send(selectors.release)
 		w.delegate = 0
 	}
@@ -639,6 +691,8 @@ func (w *Window) SetHeaderAlignment(alignment int) {
 		}
 		w.nsWindow.SendBool(selectors.setTitlebarAppearsTransparent, true)
 		w.nsWindow.SendUint(selectors.setTitleVisibility, uint64(NSWindowTitleVisible))
+		// Left alignment uses the native title — restore it from cache.
+		w.syncNativeTitle()
 	case 2: // HeaderAlignRight
 		if !hasFullSize {
 			w.nsWindow.SendUint(selectors.setStyleMask, uint64(current|NSWindowStyleMaskFullSizeContentView))
@@ -646,6 +700,8 @@ func (w *Window) SetHeaderAlignment(alignment int) {
 		w.nsWindow.SendBool(selectors.setTitlebarAppearsTransparent, true)
 		w.nsWindow.SendUint(selectors.setTitleVisibility, uint64(NSWindowTitleHidden))
 		w.injectTitleTextField(nsTextAlignmentRight)
+		// Clear native title so the Tab Bar does not duplicate it (#384).
+		w.clearNativeTitle()
 	default: // HeaderAlignCenter (0)
 		// Only touch the style mask when FullSizeContentView is actually present;
 		// calling setStyleMask: with an unchanged value triggers a title re-layout
@@ -658,6 +714,8 @@ func (w *Window) SetHeaderAlignment(alignment int) {
 		w.nsWindow.SendBool(selectors.setTitlebarAppearsTransparent, false)
 		w.nsWindow.SendUint(selectors.setTitleVisibility, uint64(NSWindowTitleHidden))
 		w.injectTitleTextField(nsTextAlignmentCenter)
+		// Clear native title so the Tab Bar does not duplicate it (#384).
+		w.clearNativeTitle()
 	}
 	w.alignment = alignment
 }
@@ -748,6 +806,32 @@ func (w *Window) injectTitleTextField(textAlignment uint64) {
 	// label remains visible. NSWindowBelow = -1 as uintptr = ^uintptr(0).
 	tbView.Send5Ptr(selectors.addSubviewPositionedRelativeTo, tf.Ptr(), ^uintptr(0), 0)
 	w.titleTextField = tf
+}
+
+// clearNativeTitle sets NSWindow.title to "" so that macOS Tab Bar (and other
+// AppKit consumers of window.title) do not render a duplicate label while we
+// show our own injected NSTextField. The real title text is preserved in
+// cachedTitle and restored by syncNativeTitle when switching back to left
+// alignment. Called with w.mu held.
+func (w *Window) clearNativeTitle() {
+	empty := NewNSString("")
+	if empty != nil {
+		w.nsWindow.SendPtr(selectors.setTitle, empty.ID().Ptr())
+		empty.Release()
+	}
+}
+
+// syncNativeTitle restores NSWindow.title from cachedTitle. Used when switching
+// to left alignment where the native title is visible. Called with w.mu held.
+func (w *Window) syncNativeTitle() {
+	if w.cachedTitle == "" {
+		return
+	}
+	nsTitle := NewNSString(w.cachedTitle)
+	if nsTitle != nil {
+		w.nsWindow.SendPtr(selectors.setTitle, nsTitle.ID().Ptr())
+		nsTitle.Release()
+	}
 }
 
 // SetStyleMask sets the window's style mask.
@@ -879,6 +963,36 @@ func (w *Window) SetOnClose(fn func() bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.onClose = fn
+}
+
+// RequestSize sets the window content size to the given logical dimensions.
+// Skips if fullscreen or zoomed (maximized). Uses setContentSize: which
+// correctly handles the title bar (inner size, not outer frame).
+func (w *Window) RequestSize(width, height int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.nsWindow.IsNil() {
+		return
+	}
+
+	// Skip if fullscreen — the compositor owns the size.
+	mask := uintptr(w.nsWindow.Send(selectors.styleMask))
+	if mask&uintptr(NSWindowStyleMaskFullScreen) != 0 {
+		return
+	}
+
+	// Restore from zoomed state before resizing (winit pattern).
+	// macOS "zoom" is analogous to Windows maximize — the caller asked for a
+	// specific size, so zoomed state should yield.
+	if w.nsWindow.Send(selectors.isZoomed) != 0 {
+		w.nsWindow.SendPtr(selectors.zoom, 0)
+	}
+
+	w.width = width
+	w.height = height
+
+	w.nsWindow.SendSize(selectors.setContentSize, MakeSize(CGFloat(width), CGFloat(height)))
 }
 
 // ScreenChangedCh returns a receive-only channel that is signaled when the

@@ -44,7 +44,7 @@ func (l ImageDataLayout) toHAL() hal.ImageDataLayout {
 type BufferDescriptor struct {
 	Label            string
 	Size             uint64
-	Usage            BufferUsage
+	Usage            gputypes.BufferUsage
 	MappedAtCreation bool
 }
 
@@ -64,10 +64,10 @@ type TextureDescriptor struct {
 	Size          Extent3D
 	MipLevelCount uint32
 	SampleCount   uint32
-	Dimension     TextureDimension
-	Format        TextureFormat
-	Usage         TextureUsage
-	ViewFormats   []TextureFormat
+	Dimension     gputypes.TextureDimension
+	Format        gputypes.TextureFormat
+	Usage         gputypes.TextureUsage
+	ViewFormats   []gputypes.TextureFormat
 }
 
 // toHAL converts a TextureDescriptor to a hal.TextureDescriptor.
@@ -87,9 +87,9 @@ func (d *TextureDescriptor) toHAL() *hal.TextureDescriptor {
 // TextureViewDescriptor describes texture view creation parameters.
 type TextureViewDescriptor struct {
 	Label           string
-	Format          TextureFormat
-	Dimension       TextureViewDimension
-	Aspect          TextureAspect
+	Format          gputypes.TextureFormat
+	Dimension       gputypes.TextureViewDimension
+	Aspect          gputypes.TextureAspect
 	BaseMipLevel    uint32
 	MipLevelCount   uint32
 	BaseArrayLayer  uint32
@@ -113,15 +113,15 @@ func (d *TextureViewDescriptor) toHAL() *hal.TextureViewDescriptor {
 // SamplerDescriptor describes sampler creation parameters.
 type SamplerDescriptor struct {
 	Label        string
-	AddressModeU AddressMode
-	AddressModeV AddressMode
-	AddressModeW AddressMode
-	MagFilter    FilterMode
-	MinFilter    FilterMode
-	MipmapFilter FilterMode
+	AddressModeU gputypes.AddressMode
+	AddressModeV gputypes.AddressMode
+	AddressModeW gputypes.AddressMode
+	MagFilter    gputypes.FilterMode
+	MinFilter    gputypes.FilterMode
+	MipmapFilter gputypes.FilterMode
 	LodMinClamp  float32
 	LodMaxClamp  float32
-	Compare      CompareFunction
+	Compare      gputypes.CompareFunction
 	Anisotropy   uint16
 }
 
@@ -139,6 +139,31 @@ func (d *SamplerDescriptor) toHAL() *hal.SamplerDescriptor {
 		LodMaxClamp:  d.LodMaxClamp,
 		Compare:      d.Compare,
 		Anisotropy:   d.Anisotropy,
+	}
+}
+
+// QueryType specifies the type of queries in a query set.
+type QueryType = hal.QueryType
+
+// Query type constants.
+const (
+	QueryTypeOcclusion = hal.QueryTypeOcclusion
+	QueryTypeTimestamp = hal.QueryTypeTimestamp
+)
+
+// QuerySetDescriptor describes query set creation parameters.
+type QuerySetDescriptor struct {
+	Label string
+	Type  QueryType
+	Count uint32
+}
+
+// toHAL converts a QuerySetDescriptor to a hal.QuerySetDescriptor.
+func (d *QuerySetDescriptor) toHAL() *hal.QuerySetDescriptor {
+	return &hal.QuerySetDescriptor{
+		Label: d.Label,
+		Type:  d.Type,
+		Count: d.Count,
 	}
 }
 
@@ -175,7 +200,7 @@ func (d *CommandEncoderDescriptor) toHAL() *hal.CommandEncoderDescriptor {
 // BindGroupLayoutDescriptor describes a bind group layout.
 type BindGroupLayoutDescriptor struct {
 	Label   string
-	Entries []BindGroupLayoutEntry
+	Entries []gputypes.BindGroupLayoutEntry
 }
 
 // toHAL converts a BindGroupLayoutDescriptor to a hal.BindGroupLayoutDescriptor.
@@ -209,6 +234,10 @@ func (e *BindGroupEntry) toHAL() gputypes.BindGroupEntry {
 	entry := gputypes.BindGroupEntry{
 		Binding: e.Binding,
 	}
+	var halView hal.TextureView
+	if e.TextureView != nil {
+		halView = e.TextureView.resolveHAL()
+	}
 
 	switch {
 	case e.Buffer != nil:
@@ -224,9 +253,9 @@ func (e *BindGroupEntry) toHAL() gputypes.BindGroupEntry {
 		entry.Resource = gputypes.SamplerBinding{
 			Sampler: e.Sampler.hal.NativeHandle(),
 		}
-	case e.TextureView != nil && e.TextureView.hal != nil:
+	case halView != nil:
 		entry.Resource = gputypes.TextureViewBinding{
-			TextureView: e.TextureView.hal.NativeHandle(),
+			TextureView: halView.NativeHandle(),
 		}
 	}
 
@@ -238,10 +267,6 @@ type PipelineLayoutDescriptor struct {
 	Label            string
 	BindGroupLayouts []*BindGroupLayout
 }
-
-// StencilOperation describes a stencil operation.
-// Canonical definition in gputypes (webgpu.h spec-compliant values).
-type StencilOperation = gputypes.StencilOperation
 
 // Stencil operation constants (webgpu.h spec values).
 const (
@@ -257,10 +282,10 @@ const (
 
 // StencilFaceState describes stencil operations for a face.
 type StencilFaceState struct {
-	Compare     CompareFunction
-	FailOp      StencilOperation
-	DepthFailOp StencilOperation
-	PassOp      StencilOperation
+	Compare     gputypes.CompareFunction
+	FailOp      gputypes.StencilOperation
+	DepthFailOp gputypes.StencilOperation
+	PassOp      gputypes.StencilOperation
 }
 
 func (s StencilFaceState) toHAL() hal.StencilFaceState {
@@ -269,9 +294,9 @@ func (s StencilFaceState) toHAL() hal.StencilFaceState {
 
 // DepthStencilState describes depth and stencil testing configuration.
 type DepthStencilState struct {
-	Format              TextureFormat
+	Format              gputypes.TextureFormat
 	DepthWriteEnabled   bool
-	DepthCompare        CompareFunction
+	DepthCompare        gputypes.CompareFunction
 	StencilFront        StencilFaceState
 	StencilBack         StencilFaceState
 	StencilReadMask     uint32
@@ -304,9 +329,9 @@ type RenderPipelineDescriptor struct {
 	Label        string
 	Layout       *PipelineLayout
 	Vertex       VertexState
-	Primitive    PrimitiveState
+	Primitive    gputypes.PrimitiveState
 	DepthStencil *DepthStencilState
-	Multisample  MultisampleState
+	Multisample  gputypes.MultisampleState
 	Fragment     *FragmentState
 }
 
@@ -314,14 +339,14 @@ type RenderPipelineDescriptor struct {
 type VertexState struct {
 	Module     *ShaderModule
 	EntryPoint string
-	Buffers    []VertexBufferLayout
+	Buffers    []gputypes.VertexBufferLayout
 }
 
 // FragmentState describes the fragment shader stage.
 type FragmentState struct {
 	Module     *ShaderModule
 	EntryPoint string
-	Targets    []ColorTargetState
+	Targets    []gputypes.ColorTargetState
 }
 
 // toHAL converts a RenderPipelineDescriptor to a hal.RenderPipelineDescriptor.
@@ -422,20 +447,20 @@ type RenderPassDescriptor struct {
 type RenderPassColorAttachment struct {
 	View          *TextureView
 	ResolveTarget *TextureView
-	LoadOp        LoadOp
-	StoreOp       StoreOp
-	ClearValue    Color
+	LoadOp        gputypes.LoadOp
+	StoreOp       gputypes.StoreOp
+	ClearValue    gputypes.Color
 }
 
 // RenderPassDepthStencilAttachment describes a depth/stencil attachment.
 type RenderPassDepthStencilAttachment struct {
 	View              *TextureView
-	DepthLoadOp       LoadOp
-	DepthStoreOp      StoreOp
+	DepthLoadOp       gputypes.LoadOp
+	DepthStoreOp      gputypes.StoreOp
 	DepthClearValue   float32
 	DepthReadOnly     bool
-	StencilLoadOp     LoadOp
-	StencilStoreOp    StoreOp
+	StencilLoadOp     gputypes.LoadOp
+	StencilStoreOp    gputypes.StoreOp
 	StencilClearValue uint32
 	StencilReadOnly   bool
 }
@@ -453,10 +478,10 @@ func (d *RenderPassDescriptor) toHAL() *hal.RenderPassDescriptor {
 			ClearValue: ca.ClearValue,
 		}
 		if ca.View != nil {
-			halCA.View = ca.View.hal
+			halCA.View = ca.View.resolveHAL()
 		}
 		if ca.ResolveTarget != nil {
-			halCA.ResolveTarget = ca.ResolveTarget.hal
+			halCA.ResolveTarget = ca.ResolveTarget.resolveHAL()
 		}
 		halDesc.ColorAttachments = append(halDesc.ColorAttachments, halCA)
 	}
@@ -474,7 +499,7 @@ func (d *RenderPassDescriptor) toHAL() *hal.RenderPassDescriptor {
 			StencilReadOnly:   ds.StencilReadOnly,
 		}
 		if ds.View != nil {
-			halDS.View = ds.View.hal
+			halDS.View = ds.View.resolveHAL()
 		}
 		halDesc.DepthStencilAttachment = halDS
 	}
@@ -498,10 +523,10 @@ func (d *ComputePassDescriptor) toHAL() *hal.ComputePassDescriptor {
 type SurfaceConfiguration struct {
 	Width       uint32
 	Height      uint32
-	Format      TextureFormat
-	Usage       TextureUsage
-	PresentMode PresentMode
-	AlphaMode   CompositeAlphaMode
+	Format      gputypes.TextureFormat
+	Usage       gputypes.TextureUsage
+	PresentMode gputypes.PresentMode
+	AlphaMode   gputypes.CompositeAlphaMode
 }
 
 // toHAL converts a SurfaceConfiguration to a hal.SurfaceConfiguration.
@@ -521,7 +546,7 @@ type ImageCopyTexture struct {
 	Texture  *Texture
 	MipLevel uint32
 	Origin   Origin3D
-	Aspect   TextureAspect
+	Aspect   gputypes.TextureAspect
 }
 
 func (i *ImageCopyTexture) toHAL() *hal.ImageCopyTexture {
@@ -530,7 +555,7 @@ func (i *ImageCopyTexture) toHAL() *hal.ImageCopyTexture {
 	}
 
 	return &hal.ImageCopyTexture{
-		Texture:  i.Texture.hal,
+		Texture:  i.Texture.resolveHAL(),
 		MipLevel: i.MipLevel,
 		Origin:   i.Origin.toHAL(),
 		Aspect:   i.Aspect,
@@ -555,13 +580,13 @@ func (t *TextureCopy) toHAL() hal.TextureCopy {
 
 // TextureUsageTransition defines a texture usage state transition.
 type TextureUsageTransition struct {
-	OldUsage TextureUsage
-	NewUsage TextureUsage
+	OldUsage gputypes.TextureUsage
+	NewUsage gputypes.TextureUsage
 }
 
 // TextureRange specifies a range of texture subresources.
 type TextureRange struct {
-	Aspect          TextureAspect
+	Aspect          gputypes.TextureAspect
 	BaseMipLevel    uint32
 	MipLevelCount   uint32
 	BaseArrayLayer  uint32
@@ -580,7 +605,7 @@ type TextureBarrier struct {
 func (b TextureBarrier) toHAL() hal.TextureBarrier {
 	var t hal.Texture
 	if b.Texture != nil {
-		t = b.Texture.hal
+		t = b.Texture.resolveHAL()
 	}
 	return hal.TextureBarrier{
 		Texture: t,

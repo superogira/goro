@@ -148,6 +148,37 @@ func (w *Window) Visible() bool {
 	return w.visible
 }
 
+// Show makes the window visible and gives it input focus.
+func (w *Window) Show() {
+	if w.platWindow != nil {
+		w.platWindow.Show()
+	}
+	w.visible = true
+}
+
+// Hide hides the window.
+func (w *Window) Hide() {
+	if w.platWindow != nil {
+		w.platWindow.Hide()
+	}
+	w.visible = false
+}
+
+// SetPosition moves the window to the given logical screen position
+// (top-left origin, DIP). On Wayland the compositor owns toplevel placement.
+func (w *Window) SetPosition(x, y int) {
+	if w.platWindow != nil {
+		w.platWindow.SetPosition(x, y)
+	}
+}
+
+// SetSize resizes the window content area to the given logical size (DIP).
+func (w *Window) SetSize(width, height int) {
+	if w.platWindow != nil {
+		w.platWindow.RequestSize(width, height)
+	}
+}
+
 // WindowManager tracks all open windows in the application.
 // Thread-safe: all methods are protected by a read-write mutex.
 type WindowManager struct {
@@ -304,12 +335,15 @@ func (a *App) NewWindow(config Config) (*Window, error) {
 
 	// Create platform window via PlatformManager.
 	platWindow, err := a.manager.CreateWindow(platform.Config{
-		Title:             config.Title,
-		Width:             config.Width,
-		Height:            config.Height,
-		Resizable:         config.Resizable,
-		Fullscreen:        config.Fullscreen,
-		Frameless:         config.Frameless,
+		Title:       config.Title,
+		Width:       config.Width,
+		Height:      config.Height,
+		Resizable:   config.Resizable,
+		Fullscreen:  config.Fullscreen,
+		Frameless:   config.Frameless,
+		Transparent: config.Transparent,
+		UseDirectComposition: config.Transparent &&
+			a.config.GraphicsAPI == GraphicsAPIDX12,
 		TabbingMode:       int(config.TabbingMode),
 		TabbingIdentifier: config.TabbingIdentifier,
 	})
@@ -332,12 +366,13 @@ func (a *App) NewWindow(config Config) (*Window, error) {
 
 	// Create RenderTarget for this window.
 	ws := &RenderTarget{
-		renderer:   a.renderer,
-		platWindow: platWindow,
-		surface:    surface,
-		format:     a.renderer.surfaceFormat,
-		vsync:      false, // Secondary windows: Immediate (ADR-010 VSync strategy)
-		state:      SurfaceReady,
+		renderer:    a.renderer,
+		platWindow:  platWindow,
+		surface:     surface,
+		format:      a.renderer.surfaceFormat,
+		vsync:       false, // Secondary windows: Immediate (ADR-010 VSync strategy)
+		transparent: config.Transparent,
+		state:       SurfaceReady,
 	}
 
 	// Configure surface with initial dimensions on the render thread.

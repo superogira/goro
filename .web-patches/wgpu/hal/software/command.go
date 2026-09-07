@@ -4,6 +4,7 @@ package software
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"log/slog"
@@ -123,12 +124,26 @@ func (c *CommandEncoder) CopyTextureToBuffer(src hal.Texture, dst hal.Buffer, re
 		srcTex.mu.RLock()
 		dstBuf.mu.Lock()
 
-		offset := region.BufferLayout.Offset
 		bpp := formatBytesPerPixel(srcTex.format)
-		size := uint64(region.Size.Width) * uint64(region.Size.Height) * uint64(region.Size.DepthOrArrayLayers) * bpp
+		srcBytesPerRow := uint64(region.Size.Width) * bpp
+		dstBytesPerRow := uint64(region.BufferLayout.BytesPerRow)
+		if dstBytesPerRow == 0 {
+			dstBytesPerRow = srcBytesPerRow
+		}
 
-		if size <= uint64(len(srcTex.data)) && offset+size <= uint64(len(dstBuf.data)) {
-			copy(dstBuf.data[offset:offset+size], srcTex.data[:size])
+		dstOffset := region.BufferLayout.Offset
+		srcOffset := (uint64(region.TextureBase.Origin.Y)*uint64(srcTex.width) + uint64(region.TextureBase.Origin.X)) * bpp
+		srcStride := uint64(srcTex.width) * bpp
+
+		for row := uint32(0); row < region.Size.Height; row++ {
+			srcStart := srcOffset + uint64(row)*srcStride
+			srcEnd := srcStart + srcBytesPerRow
+			dstStart := dstOffset + uint64(row)*dstBytesPerRow
+			dstEnd := dstStart + srcBytesPerRow
+
+			if srcEnd <= uint64(len(srcTex.data)) && dstEnd <= uint64(len(dstBuf.data)) {
+				copy(dstBuf.data[dstStart:dstEnd], srcTex.data[srcStart:srcEnd])
+			}
 		}
 
 		dstBuf.mu.Unlock()
@@ -164,6 +179,147 @@ func (c *CommandEncoder) CopyTextureToTexture(src, dst hal.Texture, regions []ha
 // ResolveQuerySet is a no-op (query sets not supported in software backend).
 func (c *CommandEncoder) ResolveQuerySet(_ hal.QuerySet, _, _ uint32, _ hal.Buffer, _ uint64) {}
 
+// BuildAccelerationStructures builds BVH trees for BLAS entries by extracting
+// triangle data from vertex buffers, and stores TLAS instance references.
+// This is the CPU equivalent of vkCmdBuildAccelerationStructuresKHR / DXR
+// BuildRaytracingAccelerationStructure.
+func (c *CommandEncoder) BuildAccelerationStructures(descriptors []hal.BuildAccelerationStructureDescriptor) {
+	for i := range descriptors {
+		desc := &descriptors[i]
+		if desc.Entries == nil || desc.DestinationAccelerationStructure == nil {
+			continue
+		}
+
+		dstAS, ok := desc.DestinationAccelerationStructure.(*AccelerationStructure)
+		if !ok || dstAS == nil {
+			continue
+		}
+
+		entries := desc.Entries
+
+		switch {
+		case len(entries.Triangles) > 0:
+			// BLAS build: extract triangles from vertex buffers and build BVH.
+			var allTris []Triangle
+			for geomIdx, tri := range entries.Triangles {
+				buf, bufOK := tri.VertexBuffer.(*Buffer)
+				if !bufOK || buf == nil {
+					continue
+				}
+				tris := extractTrianglesFromBuffer(buf, tri.FirstVertex, tri.VertexCount, tri.VertexStride, uint32(geomIdx))
+				allTris = append(allTris, tris...)
+			}
+			dstAS.bvh = BuildBVH(allTris)
+			dstAS.format = hal.AccelerationStructureFormatBottomLevel
+
+		case len(entries.AABBs) > 0:
+			// BLAS build from AABB primitives.
+			var allAABBs []AABBPrimitive
+			for geomIdx, aabb := range entries.AABBs {
+				buf, bufOK := aabb.Buffer.(*Buffer)
+				if !bufOK || buf == nil {
+					continue
+				}
+				prims := extractAABBsFromBuffer(buf, aabb.Offset, aabb.Count, aabb.Stride, uint32(geomIdx))
+				allAABBs = append(allAABBs, prims...)
+			}
+			dstAS.bvh = BuildBVHFromAABBs(allAABBs)
+			dstAS.format = hal.AccelerationStructureFormatBottomLevel
+
+		case entries.Instances != nil:
+			// TLAS build: store instance references (resolved at traversal time).
+			dstAS.format = hal.AccelerationStructureFormatTopLevel
+			// Instance data is packed in the buffer — for the software backend,
+			// TLAS traversal would need to decode instances. For now, store the
+			// count so GetAccelerationStructureBuildSizes returns meaningful values.
+			dstAS.instances = nil // Future: decode instance buffer into TLASInstanceData slice.
+		}
+	}
+}
+
+// extractAABBsFromBuffer reads AABB primitives from a buffer.
+// Each AABB is 6 x float32 (min.xyz, max.xyz = 24 bytes).
+func extractAABBsFromBuffer(buf *Buffer, offset, count uint32, stride uint64, geomIndex uint32) []AABBPrimitive {
+	if buf == nil || len(buf.data) == 0 || count == 0 {
+		return nil
+	}
+
+	buf.mu.RLock()
+	defer buf.mu.RUnlock()
+
+	if stride == 0 {
+		stride = 24 // tightly packed: 6 x float32
+	}
+
+	prims := make([]AABBPrimitive, 0, count)
+	for i := uint32(0); i < count; i++ {
+		off := uint64(offset)*stride + uint64(i)*stride
+		if off+24 > uint64(len(buf.data)) {
+			break
+		}
+		minV := readFloat3(buf.data, off)
+		maxV := readFloat3(buf.data, off+12)
+		if minV == nil || maxV == nil {
+			continue
+		}
+		prims = append(prims, AABBPrimitive{
+			Min:            *minV,
+			Max:            *maxV,
+			GeometryIndex:  geomIndex,
+			PrimitiveIndex: i,
+		})
+	}
+	return prims
+}
+
+// PlaceAccelerationStructureBarrier is a no-op on the software backend.
+// CPU execution is inherently ordered; no memory barriers are needed.
+func (c *CommandEncoder) PlaceAccelerationStructureBarrier(_ hal.AccelerationStructureBarrier) {}
+
+// CopyAccelerationStructure performs a deep copy of the source BVH tree
+// into the destination acceleration structure.
+func (c *CommandEncoder) CopyAccelerationStructure(src, dst hal.AccelerationStructure, _ gputypes.AccelerationStructureCopyMode) {
+	srcAS, ok := src.(*AccelerationStructure)
+	if !ok || srcAS == nil {
+		return
+	}
+	dstAS, ok := dst.(*AccelerationStructure)
+	if !ok || dstAS == nil {
+		return
+	}
+
+	dstAS.bvh = deepCopyBVH(srcAS.bvh)
+	dstAS.format = srcAS.format
+	dstAS.size = srcAS.size
+
+	if len(srcAS.instances) > 0 {
+		dstAS.instances = make([]TLASInstanceData, len(srcAS.instances))
+		copy(dstAS.instances, srcAS.instances)
+	}
+}
+
+// ReadAccelerationStructureCompactSize writes the current BVH size estimate
+// into the destination buffer as a uint64. This is the CPU equivalent of
+// vkCmdWriteAccelerationStructuresPropertiesKHR COMPACTED_SIZE.
+func (c *CommandEncoder) ReadAccelerationStructureCompactSize(as hal.AccelerationStructure, buffer hal.Buffer, offset uint64) {
+	swAS, ok := as.(*AccelerationStructure)
+	if !ok || swAS == nil {
+		return
+	}
+	buf, ok := buffer.(*Buffer)
+	if !ok || buf == nil {
+		return
+	}
+
+	buf.mu.Lock()
+	defer buf.mu.Unlock()
+
+	// Write the stored size as uint64 little-endian.
+	if offset+8 <= uint64(len(buf.data)) {
+		binary.LittleEndian.PutUint64(buf.data[offset:], swAS.size)
+	}
+}
+
 // BeginRenderPass begins a render pass and returns an encoder.
 // If a depth/stencil attachment is present, a persistent stencil buffer is
 // created for the entire pass (matching GPU behavior where the stencil buffer
@@ -190,7 +346,7 @@ func (c *CommandEncoder) BeginRenderPass(desc *hal.RenderPassDescriptor) hal.Ren
 	}
 
 	// Create persistent stencil buffer from depth/stencil attachment.
-	if desc.DepthStencilAttachment != nil { //nolint:nestif // sequential attachment init
+	if desc.DepthStencilAttachment != nil {
 		if dsView, ok := desc.DepthStencilAttachment.View.(*TextureView); ok && dsView.texture != nil {
 			w := int(dsView.texture.width)
 			h := int(dsView.texture.height)
@@ -377,16 +533,16 @@ func (r *RenderPassEncoder) SetIndexBuffer(buf hal.Buffer, format gputypes.Index
 }
 
 // SetViewport stores the viewport transformation.
-func (r *RenderPassEncoder) SetViewport(x, y, w, h, minDepth, maxDepth float32) {
-	r.viewport = [6]float32{x, y, w, h, minDepth, maxDepth}
+func (r *RenderPassEncoder) SetViewport(vp gputypes.Viewport) {
+	r.viewport = [6]float32{vp.X, vp.Y, vp.Width, vp.Height, vp.MinDepth, vp.MaxDepth}
 	r.hasViewport = true
 }
 
 // SetScissorRect stores the scissor rectangle.
-func (r *RenderPassEncoder) SetScissorRect(x, y, w, h uint32) {
-	r.scissorRect = [4]uint32{x, y, w, h}
+func (r *RenderPassEncoder) SetScissorRect(rect gputypes.ScissorRect) {
+	r.scissorRect = [4]uint32{rect.X, rect.Y, rect.Width, rect.Height}
 	r.hasScissor = true
-	hal.Logger().Debug("software: SetScissorRect", "x", x, "y", y, "w", w, "h", h)
+	hal.Logger().Debug("software: SetScissorRect", "x", rect.X, "y", rect.Y, "w", rect.Width, "h", rect.Height)
 }
 
 // SetBlendConstant is a no-op (blend constants not yet wired to raster pipeline).
@@ -404,10 +560,10 @@ func (r *RenderPassEncoder) SetStencilReference(ref uint32) {
 // available in a bind group, it performs a fullscreen texture blit.
 // Supports instanced rendering: instanceCount > 1 draws the same vertices
 // multiple times, advancing instance-rate vertex buffers per instance.
-func (r *RenderPassEncoder) Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32) {
+func (r *RenderPassEncoder) Draw(args gputypes.DrawArgs) {
 	r.drawCount++
-	hal.Logger().Debug("software: Draw", "vertices", vertexCount, "instances", instanceCount, "drawIndex", r.drawCount)
-	r.executeDraw(vertexCount, instanceCount, firstVertex, firstInstance)
+	hal.Logger().Debug("software: Draw", "vertices", args.VertexCount, "instances", args.InstanceCount, "drawIndex", r.drawCount)
+	r.executeDraw(args.VertexCount, args.InstanceCount, args.FirstVertex, args.FirstInstance)
 }
 
 // DrawIndexed executes an indexed draw call. It resolves the index buffer into
@@ -415,22 +571,22 @@ func (r *RenderPassEncoder) Draw(vertexCount, instanceCount, firstVertex, firstI
 // and rasterization path as Draw, with vertex positions remapped through the
 // resolved indices. Previously this was a no-op, so every indexed draw (glyph
 // mask text, MSDF text) rendered nothing on the software backend.
-func (r *RenderPassEncoder) DrawIndexed(indexCount, instanceCount, firstIndex uint32, baseVertex int32, firstInstance uint32) {
+func (r *RenderPassEncoder) DrawIndexed(args gputypes.DrawIndexedArgs) {
 	r.drawCount++
-	if indexCount == 0 || r.indexBuffer == nil {
+	if args.IndexCount == 0 || r.indexBuffer == nil {
 		return
 	}
-	indices := r.resolveIndices(indexCount, firstIndex, baseVertex)
+	indices := r.resolveIndices(args.IndexCount, args.FirstIndex, args.BaseVertex)
 	if indices == nil {
 		return
 	}
-	hal.Logger().Debug("software: DrawIndexed", "indices", indexCount, "instances", instanceCount, "drawIndex", r.drawCount)
+	hal.Logger().Debug("software: DrawIndexed", "indices", args.IndexCount, "instances", args.InstanceCount, "drawIndex", r.drawCount)
 
 	r.activeIndices = indices
 	defer func() { r.activeIndices = nil }()
 	// vertexCount == indexCount; firstVertex is unused because activeIndices
 	// supplies the per-position vertex index directly.
-	r.executeDraw(indexCount, instanceCount, 0, firstInstance)
+	r.executeDraw(args.IndexCount, args.InstanceCount, 0, args.FirstInstance)
 }
 
 // resolveIndices reads indexCount entries from the bound index buffer starting
@@ -481,10 +637,18 @@ func (r *RenderPassEncoder) drawVertexIndex(firstVertex, pos uint32) uint32 {
 }
 
 // DrawIndirect is a no-op.
-func (r *RenderPassEncoder) DrawIndirect(_ hal.Buffer, _ uint64) {}
+func (r *RenderPassEncoder) DrawIndirect(_ hal.Buffer, _ uint64, _ uint32) {}
 
 // DrawIndexedIndirect is a no-op.
-func (r *RenderPassEncoder) DrawIndexedIndirect(_ hal.Buffer, _ uint64) {}
+func (r *RenderPassEncoder) DrawIndexedIndirect(_ hal.Buffer, _ uint64, _ uint32) {}
+
+// DrawIndirectCount is a no-op (count-buffer indirect not supported in software backend).
+func (r *RenderPassEncoder) DrawIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
+
+// DrawIndexedIndirectCount is a no-op.
+func (r *RenderPassEncoder) DrawIndexedIndirectCount(_ hal.Buffer, _ uint64, _ hal.Buffer, _ uint64, _ uint32) {
+}
 
 // ExecuteBundle is a no-op.
 func (r *RenderPassEncoder) ExecuteBundle(_ hal.RenderBundle) {}
@@ -577,6 +741,7 @@ func (c *ComputePassEncoder) Dispatch(x, y, z uint32) {
 		if bg == nil {
 			continue
 		}
+		// Dynamic offsets are only consumed for bindings with HasDynamicOffset.
 		dynIdx := 0
 		for bindingIdx, bs := range bg.bufferBindings {
 			if bs.buf == nil {
@@ -585,7 +750,7 @@ func (c *ComputePassEncoder) Dispatch(x, y, z uint32) {
 			bs.buf.mu.Lock()
 			data := bs.buf.data
 			off := bs.offset
-			if dynIdx < len(bg.dynamicOffsets) {
+			if bg.hasDynamicOffset[bindingIdx] && dynIdx < len(bg.dynamicOffsets) {
 				off += uint64(bg.dynamicOffsets[dynIdx])
 				dynIdx++
 			}

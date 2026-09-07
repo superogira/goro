@@ -24,7 +24,7 @@ var benchResult any
 func setupNoopDevice(b *testing.B) (hal.Device, hal.Queue, func()) {
 	b.Helper()
 
-	api := noop.API{}
+	api := noop.NewBackend()
 	instance, err := api.CreateInstance(nil)
 	if err != nil {
 		b.Fatalf("CreateInstance failed: %v", err)
@@ -338,7 +338,7 @@ func BenchmarkNoopFullFrame(b *testing.B) {
 		rp := encoder.BeginRenderPass(rpDesc)
 		rp.SetPipeline(pipeline)
 		rp.SetVertexBuffer(0, buffer, 0)
-		rp.Draw(3, 1, 0, 0)
+		rp.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 		rp.End()
 
 		cmdBuffer, _ := encoder.EndEncoding()
@@ -374,7 +374,7 @@ func BenchmarkNoopCommandRecording(b *testing.B) {
 					ColorAttachments: []hal.RenderPassColorAttachment{{}},
 				})
 				for d := 0; d < dc.draws; d++ {
-					rp.Draw(3, 1, 0, 0)
+					rp.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 				}
 				rp.End()
 				cb, _ := encoder.EndEncoding()

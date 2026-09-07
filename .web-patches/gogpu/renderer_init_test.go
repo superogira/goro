@@ -1,11 +1,15 @@
 package gogpu
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/gogpu/gogpu/gpu/types"
 	"github.com/gogpu/gputypes"
+	"github.com/gogpu/wgpu"
 )
+
+var errTestRenderer = errors.New("renderer test error")
 
 // TestConfigureSurface_ZeroDimensionsSkips verifies that configureSurface
 // returns nil and leaves state at SurfaceReady when the window reports (0,0).
@@ -124,6 +128,67 @@ func TestNewRenderer_GLESAPIIsDistinct(t *testing.T) {
 	}
 }
 
+func TestNewHeadlessRendererValidationAndCleanup(t *testing.T) {
+	if _, err := NewHeadlessRenderer(types.GraphicsAPISoftware, types.GraphicsAPIAuto); err == nil {
+		t.Fatal("NewHeadlessRenderer accepted more than one graphics API")
+	}
+
+	calledAdapter := false
+	runtime := headlessRuntime{
+		initInstance: func(*Renderer, types.GraphicsAPI) error { return errTestRenderer },
+		initAdapterDevice: func(*Renderer) error {
+			calledAdapter = true
+			return nil
+		},
+	}
+	if renderer, err := newHeadlessRendererWithRuntime(nil, runtime); !errors.Is(err, errTestRenderer) || renderer != nil {
+		t.Fatalf("instance failure = renderer %v, error %v", renderer, err)
+	}
+	if calledAdapter {
+		t.Fatal("adapter initialization ran after instance failure")
+	}
+
+	gotAPI := types.GraphicsAPIAuto
+	runtime = headlessRuntime{
+		initInstance: func(_ *Renderer, api types.GraphicsAPI) error {
+			gotAPI = api
+			return nil
+		},
+		initAdapterDevice: func(*Renderer) error { return errTestRenderer },
+	}
+	if renderer, err := newHeadlessRendererWithRuntime([]types.GraphicsAPI{types.GraphicsAPIGLES}, runtime); !errors.Is(err, errTestRenderer) || renderer != nil {
+		t.Fatalf("adapter failure = renderer %v, error %v", renderer, err)
+	}
+	if gotAPI != types.GraphicsAPIGLES {
+		t.Fatalf("explicit graphics API = %v, want GLES", gotAPI)
+	}
+
+	runtime.initAdapterDevice = func(*Renderer) error { return nil }
+	renderer, err := newHeadlessRendererWithRuntime(nil, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAPI != types.GraphicsAPISoftware {
+		t.Fatalf("default graphics API = %v, want software", gotAPI)
+	}
+	renderer.Destroy()
+	renderer.ReleaseInstance()
+}
+
+func TestRenderToImageRejectsNilDraw(t *testing.T) {
+	renderer, err := NewHeadlessRenderer(types.GraphicsAPISoftware)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		renderer.Destroy()
+		renderer.ReleaseInstance()
+	})
+	if _, err := renderer.RenderToImage(1, 1, nil); err == nil {
+		t.Fatal("RenderToImage accepted a nil draw callback")
+	}
+}
+
 // TestPickPresentMode_PreferredFirst verifies that pickPresentMode returns
 // the first matching preferred mode.
 func TestPickPresentMode_PreferredFirst(t *testing.T) {
@@ -154,6 +219,67 @@ func TestPickPresentMode_EmptySupportedReturnsFifo(t *testing.T) {
 	got := pickPresentMode(nil, gputypes.PresentModeImmediate)
 	if got != gputypes.PresentModeFifo {
 		t.Errorf("pickPresentMode(nil) = %v, want Fifo", got)
+	}
+}
+
+// TestResolvePresentMode_NilCapsUsesVsyncDefault verifies the nil-capabilities
+// fallback keeps the previous default-mode behavior after the refactor.
+func TestResolvePresentMode_NilCapsUsesVsyncDefault(t *testing.T) {
+	if got := resolvePresentMode(nil, true); got != gputypes.PresentModeFifo {
+		t.Errorf("resolvePresentMode(nil, vsync=true) = %v, want Fifo", got)
+	}
+	if got := resolvePresentMode(nil, false); got != gputypes.PresentModeImmediate {
+		t.Errorf("resolvePresentMode(nil, vsync=false) = %v, want Immediate", got)
+	}
+}
+
+// TestResolvePresentMode_PicksFromCapabilities verifies present-mode selection
+// honors the supported list from surface capabilities.
+func TestResolvePresentMode_PicksFromCapabilities(t *testing.T) {
+	caps := &wgpu.SurfaceCapabilities{
+		PresentModes: []gputypes.PresentMode{gputypes.PresentModeFifo},
+	}
+	if got := resolvePresentMode(caps, false); got != gputypes.PresentModeFifo {
+		t.Errorf("resolvePresentMode(caps, vsync=false) = %v, want Fifo (only supported)", got)
+	}
+}
+
+// TestResolveAlphaMode_OpaqueWhenNotTransparent verifies the default surface
+// configuration stays CompositeAlphaModeOpaque (backward compatible).
+func TestResolveAlphaMode_OpaqueWhenNotTransparent(t *testing.T) {
+	caps := &wgpu.SurfaceCapabilities{
+		AlphaModes: []gputypes.CompositeAlphaMode{gputypes.CompositeAlphaModePremultiplied},
+	}
+	if got := resolveAlphaMode(caps, false); got != gputypes.CompositeAlphaModeOpaque {
+		t.Errorf("resolveAlphaMode(caps, false) = %v, want Opaque", got)
+	}
+}
+
+// TestResolveAlphaMode_PremultipliedWhenSupported verifies transparent windows
+// select CompositeAlphaModePremultiplied when the adapter advertises it.
+func TestResolveAlphaMode_PremultipliedWhenSupported(t *testing.T) {
+	caps := &wgpu.SurfaceCapabilities{
+		AlphaModes: []gputypes.CompositeAlphaMode{
+			gputypes.CompositeAlphaModeOpaque,
+			gputypes.CompositeAlphaModePremultiplied,
+		},
+	}
+	if got := resolveAlphaMode(caps, true); got != gputypes.CompositeAlphaModePremultiplied {
+		t.Errorf("resolveAlphaMode(caps, true) = %v, want Premultiplied", got)
+	}
+}
+
+// TestResolveAlphaMode_FallsBackToOpaque verifies transparent windows degrade
+// to Opaque when premultiplied alpha is unsupported or capabilities are nil.
+func TestResolveAlphaMode_FallsBackToOpaque(t *testing.T) {
+	opaqueOnly := &wgpu.SurfaceCapabilities{
+		AlphaModes: []gputypes.CompositeAlphaMode{gputypes.CompositeAlphaModeOpaque},
+	}
+	if got := resolveAlphaMode(opaqueOnly, true); got != gputypes.CompositeAlphaModeOpaque {
+		t.Errorf("resolveAlphaMode(opaqueOnly, true) = %v, want Opaque fallback", got)
+	}
+	if got := resolveAlphaMode(nil, true); got != gputypes.CompositeAlphaModeOpaque {
+		t.Errorf("resolveAlphaMode(nil, true) = %v, want Opaque fallback", got)
 	}
 }
 

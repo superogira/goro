@@ -42,13 +42,17 @@ Each frame executes these steps in order:
 ### Step 1: Frame Setup
 
 ```
-Frame()                         // flush signals, layout, animations
+Frame()                         // signals, animation ticks, layout (see below)
 BeginAcceleratorFrame()          // reset GPU frame state
 BeginGPUFrame()                  // prepare gg render context
 ResetFrameDamage()               // clear damage tracking
 ```
 
-`Frame()` runs the signal scheduler (up to 2 re-flushes for cascading changes), layout pass if needed, and animation tick.
+`Frame()` runs in Flutter-correct order (ADR-032 GAP-3):
+1. **BeginFrame** — set DeltaTime
+2. **Signal flush** — process pending signal changes (up to 2 re-flushes)
+3. **Animation tick** — `tickAnimationsInTree()` walks the tree, calls `AnimationTicker.TickAnimation()` on widgets with layout-affecting animations (Collapsible, Transition). All animation values are final BEFORE layout runs.
+4. **Layout** — pure function of (constraints + widget state). No mutation.
 
 ### Step 2: Root Invalidation
 
@@ -74,6 +78,8 @@ PaintBoundaryLayersWithContext(root, nil, ctx)
 Recursively walks the widget tree (`paintBoundaryWithDepth`). Each dirty+visible boundary re-records its `scene.Scene` display list via `SceneCanvas`. Clean boundaries are skipped entirely. The flat dirty set (`HasDirtyBoundaries`) is used for O(1) frame skip only, not for the paint walk.
 
 **DrawChild skip pattern:** During recording, child boundaries are SKIPPED — they have their own GPU textures. The parent scene contains only non-boundary children (text, backgrounds, dividers).
+
+**Draw invariant:** A widget's drawing must be a function of its bounds and widget state. Window size belongs in layout constraints or an explicit signal, not a direct read from `Draw`; resize invalidates only boundaries whose layout or state actually changed.
 
 ### Step 5: Paint Overlay Boundaries
 
@@ -123,7 +129,7 @@ Walks the Layer Tree again. Blits all boundary textures onto the surface via non
 
 ```
 DrawOverlayScrim()               // modal backdrop only (non-modal = no scrim)
-debugOverlay.draw()              // cyan flash on dirty widgets (GOGPU_DEBUG_DIRTY=1)
+debugOverlay.draw()              // cyan flash on dirty widgets (GOGPU_DEBUG_DIRTY=overlay)
 // Both overlays request frames for fade animation via RequestRedraw()
 ```
 
@@ -180,16 +186,16 @@ Widget state change
 
 ```bash
 # Cyan flash on dirty widget regions (ui level)
-GOGPU_DEBUG_DIRTY=1 go run ./examples/gallery/
+GOGPU_DEBUG_DIRTY=overlay go run ./examples/gallery/
 
 # Green flash on damage regions + diagnostic logging (GPU level)
-GOGPU_DEBUG_DAMAGE=1 go run ./examples/gallery/
+GOGPU_DEBUG_DAMAGE=overlay go run ./examples/gallery/
 
 # Disable damage-aware blit (force full render every frame)
 GOGPU_DAMAGE_BLIT=0 go run ./examples/gallery/
 ```
 
-`GOGPU_DEBUG_DAMAGE=1` prints per-frame diagnostic log:
+`GOGPU_DEBUG_DAMAGE=overlay` prints per-frame diagnostic log:
 ```
 [FRAME] #42 needsRedraw=false dirtyBoundaries=1 animFrame=true fullRedraw=false
 [RENDER-CHECK] frame=42 key=5 root=false size=48x48 dirty=true originValid=true
@@ -208,7 +214,7 @@ GOGPU_DAMAGE_BLIT=0 go run ./examples/gallery/
 | Spinner animating | 48×48 scissor blit at 30fps |
 | Spinner scrolled offscreen | 0% — boundary culled |
 | Dropdown open | Overlay boundary + scrim |
-| Window resize | Full redraw (all boundaries) |
+| Window resize | Root plus size-changed/reflowed boundaries; fixed-size boundary textures retained |
 
 ## Enterprise References
 

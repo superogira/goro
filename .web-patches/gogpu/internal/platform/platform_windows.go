@@ -4,6 +4,7 @@ package platform
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"syscall"
 	"time"
@@ -41,6 +42,7 @@ const (
 	swShow             = 5
 	swShowNA           = 8
 	swRestore          = 9
+	swHide             = 0 // SW_HIDE
 	pmRemove           = 0x0001
 	wsOverlappedWindow = 0x00CF0000
 	wsVisible          = 0x10000000
@@ -160,17 +162,22 @@ const (
 	hkeyLocalMachine uintptr = 0x80000002
 
 	// Frameless window constants
-	wsPopup            = 0x80000000 // WS_POPUP
-	wsThickFrame       = 0x00040000 // WS_THICKFRAME (for resize in frameless)
-	wsCaption          = 0x00C00000 // WS_CAPTION (title bar)
-	wmNCHitTest        = 0x0084     // WM_NCHITTEST
-	wmNCCalcSize       = 0x0083     // WM_NCCALCSIZE
-	wmNCPaint          = 0x0085     // WM_NCPAINT
-	wmNCActivate       = 0x0086     // WM_NCACTIVATE
-	wmNCUAHDrawCaption = 0x00AE     // Undocumented: UxTheme caption draw
-	wmNCUAHDrawFrame   = 0x00AF     // Undocumented: UxTheme frame draw
-	swMinimize         = 6          // SW_MINIMIZE
-	swMaximize         = 3          // SW_MAXIMIZE
+	wsPopup      = 0x80000000 // WS_POPUP
+	wsThickFrame = 0x00040000 // WS_THICKFRAME (for resize in frameless)
+	wsCaption    = 0x00C00000 // WS_CAPTION (title bar)
+	// WS_EX_NOREDIRECTIONBITMAP: DComp per-pixel alpha requires disabling the
+	// DWM redirection bitmap; otherwise the swap chain is composed onto an
+	// opaque redirection surface and transparency is not visible
+	// (wgpu v0.30.35 release note; winit/wgpu-rs precedent).
+	wsExNoRedirectionBitmap = 0x00200000
+	wmNCHitTest             = 0x0084 // WM_NCHITTEST
+	wmNCCalcSize            = 0x0083 // WM_NCCALCSIZE
+	wmNCPaint               = 0x0085 // WM_NCPAINT
+	wmNCActivate            = 0x0086 // WM_NCACTIVATE
+	wmNCUAHDrawCaption      = 0x00AE // Undocumented: UxTheme caption draw
+	wmNCUAHDrawFrame        = 0x00AF // Undocumented: UxTheme frame draw
+	swMinimize              = 6      // SW_MINIMIZE
+	swMaximize              = 3      // SW_MAXIMIZE
 
 	// WM_NCHITTEST return values
 	htCaption     = 2
@@ -193,6 +200,10 @@ const (
 	swpNoZOrder     = 0x0004
 	swpFrameChanged = 0x0020
 
+	// DwmEnableBlurBehindWindow flags (DWM_BLURBEHIND)
+	dwmBBEnable     = 0x00000001 // DWM_BB_ENABLE
+	dwmBBBlurRegion = 0x00000002 // DWM_BB_BLURREGION
+
 	// GetWindowLongPtr index
 	gwlStyle = ^uintptr(15) // GWL_STYLE = -16 as unsigned uintptr
 
@@ -203,6 +214,7 @@ const (
 	// GetSystemMetrics / MonitorFromWindow constants
 	smCXSizeFrame           = 32 // SM_CXSIZEFRAME
 	smCYSizeFrame           = 33 // SM_CYSIZEFRAME
+	smCYCaption             = 4  // SM_CYCAPTION
 	smCXPaddedBorder        = 92 // SM_CXPADDEDBORDERWIDTH
 	monitorDefaultToNearest = 2  // MONITOR_DEFAULTTONEAREST
 
@@ -229,6 +241,9 @@ const (
 	qsAllinput     = 0x04FF     // QS_ALLINPUT
 	mwmoInputAvail = 0x0004     // MWMO_INPUTAVAILABLE
 	infinite       = 0xFFFFFFFF // INFINITE
+
+	// File drag-and-drop (WM_DROPFILES from shell32)
+	wmDropFiles = 0x0233
 
 	// Registry constants
 	hkeyCurrentUser uintptr = 0x80000001
@@ -280,9 +295,10 @@ var (
 	procGetMonitorInfoW    = user32.NewProc("GetMonitorInfoW")
 
 	// DWM (Desktop Window Manager) for frameless window shadow
-	dwmapi                       = windows.NewLazyDLL("dwmapi.dll")
-	procDwmExtendFrameIntoClient = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
-	procDwmFlush                 = dwmapi.NewProc("DwmFlush")
+	dwmapi                        = windows.NewLazyDLL("dwmapi.dll")
+	procDwmExtendFrameIntoClient  = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	procDwmEnableBlurBehindWindow = dwmapi.NewProc("DwmEnableBlurBehindWindow")
+	procDwmFlush                  = dwmapi.NewProc("DwmFlush")
 
 	// WaitEvents / WakeUp
 	procMsgWaitForMultipleObjectsEx = user32.NewProc("MsgWaitForMultipleObjectsEx")
@@ -345,6 +361,15 @@ var (
 	procReleaseDC         = user32.NewProc("ReleaseDC")
 	procSetDIBitsToDevice = gdi32.NewProc("SetDIBitsToDevice")
 	procGetStockObject    = gdi32.NewProc("GetStockObject")
+	procCreateRectRgn     = gdi32.NewProc("CreateRectRgn")
+	procDeleteObject      = gdi32.NewProc("DeleteObject")
+
+	// Shell32 (file drag-and-drop)
+	shell32DnD          = windows.NewLazyDLL("shell32.dll")
+	procDragAcceptFiles = shell32DnD.NewProc("DragAcceptFiles")
+	procDragQueryFileW  = shell32DnD.NewProc("DragQueryFileW")
+	procDragQueryPoint  = shell32DnD.NewProc("DragQueryPoint")
+	procDragFinish      = shell32DnD.NewProc("DragFinish")
 )
 
 // trackMouseEventStruct is the TRACKMOUSEEVENT structure.
@@ -568,6 +593,13 @@ func newPlatformManager() PlatformManager {
 // DPI awareness, HINSTANCE, window class registration, default cursor.
 // Called by both the PlatformManager Init() and the legacy Platform Init(config).
 func (p *windowsPlatform) initProcess() error {
+	// OleInitialize MUST be the first COM call on the main thread.
+	// It calls CoInitializeEx(STA) internally AND installs the OLE drag-drop
+	// message filter. If CoInitializeEx is called first (e.g., by file dialogs),
+	// OleInitialize returns S_FALSE without installing the message filter,
+	// causing DoDragDrop to fail with CO_E_NOT_SUPPORTED.
+	procOleInitialize.Call(0)
+
 	// Enable per-monitor DPI awareness programmatically.
 	if err := procSetProcessDpiAwarenessContext.Find(); err == nil {
 		procSetProcessDpiAwarenessContext.Call(^uintptr(3)) // -4 as uintptr
@@ -663,6 +695,43 @@ func adjustWindowRectForDpi(r *rect, style uintptr, dpi uint32) {
 	}
 }
 
+// dwmBlurBehind mirrors the native DWM_BLURBEHIND structure.
+type dwmBlurBehind struct {
+	dwFlags                uint32
+	fEnable                uint32
+	hRgnBlur               uintptr
+	fTransitionOnMaximized uint32
+}
+
+// enableDwmBlurBehind enables per-pixel-alpha compositing for the window
+// using DwmEnableBlurBehindWindow with an empty blur region — the winit/SDL3
+// pattern documented in ADR-060. WS_EX_LAYERED is intentionally NOT used:
+// it is GDI whole-window opacity, not per-pixel alpha with GPU rendering.
+func enableDwmBlurBehind(hwnd windows.HWND) {
+	if hwnd == 0 {
+		return
+	}
+	// CreateRectRgn(0, 0, -1, -1) creates an empty region.
+	rgn, _, _ := procCreateRectRgn.Call(0, 0, ^uintptr(0), ^uintptr(0))
+	if rgn == 0 {
+		return
+	}
+	defer procDeleteObject.Call(rgn)
+
+	bb := dwmBlurBehind{
+		dwFlags:  dwmBBEnable | dwmBBBlurRegion,
+		fEnable:  1, // TRUE
+		hRgnBlur: rgn,
+	}
+	hr, _, _ := procDwmEnableBlurBehindWindow.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&bb)))
+	if hr != 0 {
+		// Non-fatal: DWM can be unavailable (e.g. Server Core, DWM disabled);
+		// the window simply stays opaque.
+		slog.Debug("gogpu: DwmEnableBlurBehindWindow failed, window stays opaque",
+			"hr", hr)
+	}
+}
+
 // createWindowWin32 creates a new Win32 HWND window from the given config.
 // Shared between PlatformManager.CreateWindow and the legacy Init(config).
 func (p *windowsPlatform) createWindowWin32(config Config) (*win32Window, error) {
@@ -677,6 +746,16 @@ func (p *windowsPlatform) createWindowWin32(config Config) (*win32Window, error)
 	}
 
 	style := uintptr(wsOverlappedWindow)
+
+	// WS_EX_NOREDIRECTIONBITMAP is only safe for the DX12 DirectComposition
+	// path. Vulkan/GLES/Software and Auto present through the HWND and need
+	// the DWM redirection surface; for them Transparent uses the legacy
+	// DwmEnableBlurBehindWindow path below.
+	useDComp := config.Transparent && config.UseDirectComposition
+	dwExStyle := uintptr(0)
+	if useDComp {
+		dwExStyle = wsExNoRedirectionBitmap
+	}
 
 	// Best-guess DPI before HWND exists (SDL3 hybrid pattern).
 	// Position is CW_USEDEFAULT → query primary monitor.
@@ -696,7 +775,7 @@ func (p *windowsPlatform) createWindowWin32(config Config) (*win32Window, error)
 
 	// Create window with pre-scaled outer dimensions.
 	hwnd, _, _ := procCreateWindowExW.Call(
-		0,
+		dwExStyle,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(titlePtr)),
 		style,
@@ -744,16 +823,44 @@ func (p *windowsPlatform) createWindowWin32(config Config) (*win32Window, error)
 	p.windows[w.hwnd] = w
 	p.windowMu.Unlock()
 
-	// Enable DWM shadow for frameless windows
+	// Enable file drag-and-drop (WM_DROPFILES from shell32).
+	procDragAcceptFiles.Call(uintptr(w.hwnd), 1) // TRUE
+
+	// Enable DWM shadow for frameless windows. Transparent windows must skip
+	// the DwmExtendFrameIntoClientArea call: it switches the window onto the
+	// DWM glass composition path, which overrides DirectComposition per-pixel
+	// alpha (semi-transparent content renders as an opaque tint — verified on
+	// Windows 11 with gogpu#361). Frameless transparent windows therefore lose
+	// the DWM system shadow; apps should draw their own shadow in-content.
+	// SetWindowPos(swpFrameChanged) + updateSize are still required so the
+	// WM_NCCALCSIZE JBR path removes the title bar.
 	if config.Frameless {
 		type margins struct {
 			cxLeftWidth, cxRightWidth, cyTopHeight, cyBottomHeight int32
 		}
-		m := margins{0, 0, 0, 1}
-		procDwmExtendFrameIntoClient.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&m)))
+		if !config.Transparent {
+			m := margins{0, 0, 0, 1}
+			procDwmExtendFrameIntoClient.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&m)))
+		}
 		procSetWindowPos.Call(uintptr(w.hwnd), 0, 0, 0, 0, 0,
 			swpNoMove|swpNoSize|swpNoZOrder|swpFrameChanged)
 		w.updateSize()
+	}
+
+	// Transparent windows use one of two paths:
+	//   - DirectComposition (explicit DX12): WS_EX_NOREDIRECTIONBITMAP was set
+	//     at creation; blur-behind must NOT be enabled (winit skips it too).
+	//   - Legacy blur-behind: Vulkan/GLES/Software/Auto present through the
+	//     HWND and need the DWM redirection surface to stay visible.
+	if config.Transparent {
+		if useDComp {
+			slog.Debug("gogpu: transparent window created with WS_EX_NOREDIRECTIONBITMAP (DirectComposition)",
+				"hwnd", hwnd)
+		} else {
+			enableDwmBlurBehind(w.hwnd)
+			slog.Debug("gogpu: transparent window created (legacy blur-behind path)",
+				"hwnd", hwnd)
+		}
 	}
 
 	w.updateSize()
@@ -940,6 +1047,71 @@ func (w *win32Window) IsFullscreen() bool {
 	return w.fullscreen
 }
 
+// RequestSize resizes the window's content area to the given logical size in DIP.
+// Ignores the request when fullscreen. If the window is maximized, it is restored
+// first (winit pattern). The window position is preserved (SWP_NOMOVE).
+func (w *win32Window) RequestSize(width, height int) {
+	if w.fullscreen {
+		return
+	}
+
+	// Clamp to constraints.
+	w.sizeMu.RLock()
+	if w.minWidth > 0 && width < w.minWidth {
+		width = w.minWidth
+	}
+	if w.minHeight > 0 && height < w.minHeight {
+		height = w.minHeight
+	}
+	if w.maxWidth > 0 && width > w.maxWidth {
+		width = w.maxWidth
+	}
+	if w.maxHeight > 0 && height > w.maxHeight {
+		height = w.maxHeight
+	}
+	w.sizeMu.RUnlock()
+
+	// Restore from maximized state before resizing (winit pattern).
+	ret, _, _ := procIsZoomed.Call(uintptr(w.hwnd))
+	if ret != 0 {
+		procShowWindow.Call(uintptr(w.hwnd), swRestore)
+	}
+
+	// Scale logical DIP to physical pixels.
+	dpi, _, _ := procGetDpiForWindow.Call(uintptr(w.hwnd))
+	if dpi == 0 {
+		dpi = 96
+	}
+	scale := float64(dpi) / 96.0
+	physW := int32(float64(width) * scale)
+	physH := int32(float64(height) * scale)
+
+	// Add window frame to get outer dimensions.
+	style, _, _ := procGetWindowLongPtrW.Call(uintptr(w.hwnd), gwlStyle)
+	outerRect := rect{left: 0, top: 0, right: physW, bottom: physH}
+	adjustWindowRectForDpi(&outerRect, style, uint32(dpi))
+
+	outerW := uintptr(outerRect.right - outerRect.left)
+	outerH := uintptr(outerRect.bottom - outerRect.top)
+	if w.frameless {
+		// JBR: WM_NCCALCSIZE removes the top NC area (title bar + top frame
+		// + padded border) and folds it into the client area, but
+		// AdjustWindowRect still included it in the outer height. Subtract it
+		// here so the client area matches the requested logical size.
+		cyCaption, _, _ := procGetSystemMetrics.Call(smCYCaption)
+		cyFrame, _, _ := procGetSystemMetrics.Call(smCYSizeFrame)
+		cyPadded, _, _ := procGetSystemMetrics.Call(smCXPaddedBorder)
+		topNC := cyCaption + cyFrame + cyPadded
+		if topNC < outerH {
+			outerH -= topNC
+		}
+	}
+
+	procSetWindowPos.Call(uintptr(w.hwnd), 0, 0, 0,
+		outerW, outerH,
+		swpNoMove|swpNoZOrder|swpNoActivate)
+}
+
 func (w *win32Window) Close() {
 	procPostMessageW.Call(uintptr(w.hwnd), wmClose, 0, 0)
 }
@@ -950,6 +1122,28 @@ func (w *win32Window) Show() {
 	procSetForegroundWindow.Call(uintptr(w.hwnd))
 	procSetFocusW.Call(uintptr(w.hwnd))
 	procUpdateWindow.Call(uintptr(w.hwnd))
+}
+
+// Hide hides the window (ShowWindow with SW_HIDE).
+func (w *win32Window) Hide() {
+	procShowWindow.Call(uintptr(w.hwnd), swHide)
+}
+
+// SetPosition moves the window to the given logical screen position (DIP),
+// scaling to physical pixels with the window's current DPI. Size and
+// Z-order are preserved (winit pattern).
+func (w *win32Window) SetPosition(x, y int) {
+	dpi, _, _ := procGetDpiForWindow.Call(uintptr(w.hwnd))
+	if dpi == 0 {
+		dpi = 96
+	}
+	scale := float64(dpi) / 96.0
+	physX := int32(float64(x) * scale)
+	physY := int32(float64(y) * scale)
+
+	procSetWindowPos.Call(uintptr(w.hwnd), 0,
+		uintptr(physX), uintptr(physY), 0, 0,
+		swpNoSize|swpNoZOrder|swpNoActivate)
 }
 
 func (w *win32Window) SyncFrame() {
@@ -971,6 +1165,12 @@ func (w *win32Window) SetModalFrameCallback(fn func()) {
 }
 
 func (w *win32Window) SetHeaderAlignment(_ int) {} // Win32 title bar is drawn by DWM; alignment is not supported
+
+// StartDrag initiates an outgoing drag-and-drop via COM DoDragDrop.
+// Blocks until the drag completes; done fires before returning.
+func (w *win32Window) StartDrag(paths []string, done func(DragResult)) {
+	startDragWindows(paths, done)
+}
 
 func (w *win32Window) Destroy() {
 	if w.platform != nil {
@@ -1356,6 +1556,35 @@ func (p *windowsPlatform) FontScale() float32 {
 	return float32(p.ScaleFactor())
 }
 
+// FontSmoothing returns the OS text anti-aliasing mode.
+// Detection uses the same Win32 APIs as SubpixelLayout:
+//   - SPI_GETFONTSMOOTHING → BOOL: smoothing on/off
+//   - SPI_GETFONTSMOOTHINGTYPE → FE_FONTSMOOTHINGSTANDARD (1) or FE_FONTSMOOTHINGCLEARTYPE (2)
+//
+// Logic: smoothing=false → None; smoothing=true + standard → Grayscale;
+// smoothing=true + cleartype → Subpixel.
+func (p *windowsPlatform) FontSmoothing() gpucontext.FontSmoothing {
+	var enabled uint32
+	ret, _, _ := procSystemParametersInfoW.Call(
+		spiGetFontSmoothing, 0,
+		uintptr(unsafe.Pointer(&enabled)), 0,
+	)
+	if ret == 0 || enabled == 0 {
+		return gpucontext.FontSmoothingNone
+	}
+
+	var smoothingType uint32
+	ret, _, _ = procSystemParametersInfoW.Call(
+		spiGetFontSmoothingType, 0,
+		uintptr(unsafe.Pointer(&smoothingType)), 0,
+	)
+	if ret == 0 || smoothingType != fontSmoothingTypeClearType {
+		return gpucontext.FontSmoothingGrayscale
+	}
+
+	return gpucontext.FontSmoothingSubpixel
+}
+
 // SubpixelLayout returns the display's subpixel arrangement for LCD text rendering.
 // Detection follows Qt6's pattern (qwindowsscreen.cpp):
 //  1. Check if font smoothing is enabled (SPI_GETFONTSMOOTHING)
@@ -1623,6 +1852,53 @@ func (p *windowsPlatform) dequeueEvent() Event {
 	return Event{Type: EventNone}
 }
 
+// handleDropFiles processes WM_DROPFILES by extracting file paths from the
+// HDROP handle and queuing an EventDragDrop event. Uses shell32 APIs:
+// DragQueryFileW for path extraction, DragQueryPoint for drop position,
+// DragFinish to release the HDROP resource.
+func (p *windowsPlatform) handleDropFiles(w *win32Window, wParam uintptr) {
+	hDrop := wParam
+
+	// Query file count: index 0xFFFFFFFF returns the number of files.
+	count, _, _ := procDragQueryFileW.Call(hDrop, 0xFFFFFFFF, 0, 0)
+	if count == 0 {
+		procDragFinish.Call(hDrop)
+		return
+	}
+
+	paths := make([]string, 0, count)
+	buf := make([]uint16, 260) // MAX_PATH
+
+	for i := uintptr(0); i < count; i++ {
+		// Query required buffer length (returns number of characters, not including null).
+		needed, _, _ := procDragQueryFileW.Call(hDrop, i, 0, 0)
+		if needed == 0 {
+			continue
+		}
+		if needed+1 > uintptr(len(buf)) {
+			buf = make([]uint16, needed+1)
+		}
+		procDragQueryFileW.Call(hDrop, i, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		paths = append(paths, syscall.UTF16ToString(buf[:needed]))
+	}
+
+	// Query the drop point (in client coordinates).
+	var pt point
+	procDragQueryPoint.Call(hDrop, uintptr(unsafe.Pointer(&pt)))
+
+	procDragFinish.Call(hDrop)
+
+	if len(paths) > 0 {
+		p.queueEvent(Event{
+			WindowID:  w.id,
+			Type:      EventDragDrop,
+			DragPaths: paths,
+			DragX:     float64(pt.x),
+			DragY:     float64(pt.y),
+		})
+	}
+}
+
 // extractMousePos extracts mouse position from lParam.
 // Returns signed coordinates (can be negative near screen edges).
 func extractMousePos(lParam uintptr) (x, y float64) {
@@ -1727,6 +2003,7 @@ const (
 	vkControl   = 0x11
 	vkMenu      = 0x12 // Alt
 	vkPause     = 0x13
+	vkCancel    = 0x03 // Ctrl+Break arrives as VK_CANCEL, not VK_PAUSE
 	vkCapital   = 0x14 // Caps Lock
 	vkSpace     = 0x20
 	vkPrior     = 0x21 // Page Up
@@ -1956,6 +2233,11 @@ func vkCodeToKey(vkCode uintptr) gpucontext.Key {
 		return gpucontext.KeyNumLock
 	case vkPause:
 		return gpucontext.KeyPause
+	case vkCancel:
+		// Ctrl+Break is delivered as VK_CANCEL (0x03), distinct from the
+		// plain Pause key (VK_PAUSE). Report it as KeyCancel so hosts can
+		// bind Ctrl+Break to an interrupt without losing the distinction.
+		return gpucontext.KeyCancel
 	}
 
 	return gpucontext.KeyUnknown
@@ -2447,6 +2729,10 @@ func wndProc(hwnd windows.HWND, message uint32, wParam, lParam uintptr) uintptr 
 			w.setCursorMode(w.cursorMode)
 		}
 
+	case wmDropFiles:
+		p.handleDropFiles(w, wParam)
+		return 0
+
 	case wmWakeUp:
 		// No-op: sole purpose is to unblock MsgWaitForMultipleObjectsEx in WaitEvents.
 		return 0
@@ -2505,9 +2791,18 @@ func wndProc(hwnd windows.HWND, message uint32, wParam, lParam uintptr) uintptr 
 		// Update cached client size after DPI-driven resize.
 		w.updateSize()
 
+		// Emit ScaleChanged BEFORE Resize (cause before effect, ADR-059).
+		logW, logH := w.LogicalSize()
+		p.queueEvent(Event{
+			Type:        EventScaleChanged,
+			WindowID:    w.id,
+			ScaleFactor: w.scaleFactor(),
+			Width:       logW,
+			Height:      logH,
+		})
+
 		// Queue resize event with new DPI-adjusted dimensions.
 		physW, physH := w.PhysicalSize()
-		logW, logH := w.LogicalSize()
 		p.queueEvent(Event{
 			Type:           EventResize,
 			WindowID:       w.id,

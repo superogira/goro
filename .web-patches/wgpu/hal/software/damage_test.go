@@ -35,14 +35,14 @@ func createDamageTestSurface(t *testing.T, width, height uint32) (*Surface, *Dev
 	dev, q, cleanup := createSoftwareDevice(t)
 	t.Cleanup(cleanup)
 
-	backend := API{}
+	backend := NewBackend()
 	instance, err := backend.CreateInstance(&hal.InstanceDescriptor{})
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
 	t.Cleanup(instance.Destroy)
 
-	surface, err := instance.CreateSurface(0, 0) // headless: hwnd=0
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("CreateSurface: %v", err)
 	}
@@ -70,14 +70,14 @@ func createDamageTestSurfaceBGRA(t *testing.T, width, height uint32) (*Surface, 
 	dev, q, cleanup := createSoftwareDevice(t)
 	t.Cleanup(cleanup)
 
-	backend := API{}
+	backend := NewBackend()
 	instance, err := backend.CreateInstance(&hal.InstanceDescriptor{})
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
 	t.Cleanup(instance.Destroy)
 
-	surface, err := instance.CreateSurface(0, 0)
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("CreateSurface: %v", err)
 	}
@@ -860,7 +860,7 @@ func TestDamage_IsBGRA(t *testing.T) {
 // =============================================================================
 
 func BenchmarkPresent_FullSurface(b *testing.B) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -868,7 +868,7 @@ func BenchmarkPresent_FullSurface(b *testing.B) {
 	openDev, _ := adapters[0].Adapter.Open(0, gputypes.DefaultLimits())
 	defer openDev.Device.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0) // headless
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	_ = surface.Configure(openDev.Device, &hal.SurfaceConfiguration{
@@ -888,7 +888,7 @@ func BenchmarkPresent_FullSurface(b *testing.B) {
 }
 
 func BenchmarkPresent_SmallDamageRect(b *testing.B) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -896,7 +896,7 @@ func BenchmarkPresent_SmallDamageRect(b *testing.B) {
 	openDev, _ := adapters[0].Adapter.Open(0, gputypes.DefaultLimits())
 	defer openDev.Device.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0) // headless
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	_ = surface.Configure(openDev.Device, &hal.SurfaceConfiguration{
@@ -917,7 +917,7 @@ func BenchmarkPresent_SmallDamageRect(b *testing.B) {
 }
 
 func BenchmarkPresent_MultipleSmallRects(b *testing.B) {
-	backend := API{}
+	backend := NewBackend()
 	instance, _ := backend.CreateInstance(&hal.InstanceDescriptor{})
 	defer instance.Destroy()
 
@@ -925,7 +925,7 @@ func BenchmarkPresent_MultipleSmallRects(b *testing.B) {
 	openDev, _ := adapters[0].Adapter.Open(0, gputypes.DefaultLimits())
 	defer openDev.Device.Destroy()
 
-	surface, _ := instance.CreateSurface(0, 0)
+	surface, _ := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	defer surface.Destroy()
 
 	_ = surface.Configure(openDev.Device, &hal.SurfaceConfiguration{
@@ -1000,14 +1000,14 @@ func TestDamage_ReconfigureThenPresent(t *testing.T) {
 	dev, q, cleanup := createSoftwareDevice(t)
 	defer cleanup()
 
-	backend := API{}
+	backend := NewBackend()
 	instance, err := backend.CreateInstance(&hal.InstanceDescriptor{})
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
 	defer instance.Destroy()
 
-	surface, err := instance.CreateSurface(0, 0)
+	surface, err := instance.CreateSurface(hal.SurfaceTarget{Kind: hal.SurfaceTargetHeadless})
 	if err != nil {
 		t.Fatalf("CreateSurface: %v", err)
 	}
@@ -1153,7 +1153,7 @@ func renderSolidColor(t *testing.T, dev *Device, surf *Surface, cr, cg, cb, ca f
 	})
 	pass.SetPipeline(pipeline)
 	pass.SetBindGroup(0, bg, nil)
-	pass.Draw(6, 1, 0, 0)
+	pass.Draw(gputypes.DrawArgs{VertexCount: 6, InstanceCount: 1})
 	pass.End()
 }
 

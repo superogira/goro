@@ -284,13 +284,20 @@ func shaderStagesToVk(stages gputypes.ShaderStages) vk.ShaderStageFlags {
 }
 
 // bufferBindingTypeToVk converts WebGPU buffer binding type to Vulkan descriptor type.
-func bufferBindingTypeToVk(bindingType gputypes.BufferBindingType) vk.DescriptorType {
+// When hasDynamicOffset is true, returns the corresponding dynamic descriptor type
+// (VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC or VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
+// which tells Vulkan to apply dynamic offsets at vkCmdBindDescriptorSets time.
+func bufferBindingTypeToVk(bindingType gputypes.BufferBindingType, hasDynamicOffset bool) vk.DescriptorType {
 	switch bindingType {
 	case gputypes.BufferBindingTypeUniform:
+		if hasDynamicOffset {
+			return vk.DescriptorTypeUniformBufferDynamic
+		}
 		return vk.DescriptorTypeUniformBuffer
-	case gputypes.BufferBindingTypeStorage:
-		return vk.DescriptorTypeStorageBuffer
-	case gputypes.BufferBindingTypeReadOnlyStorage:
+	case gputypes.BufferBindingTypeStorage, gputypes.BufferBindingTypeReadOnlyStorage:
+		if hasDynamicOffset {
+			return vk.DescriptorTypeStorageBufferDynamic
+		}
 		return vk.DescriptorTypeStorageBuffer
 	default:
 		return vk.DescriptorTypeUniformBuffer
@@ -502,7 +509,7 @@ func blendOperationToVk(op gputypes.BlendOperation) vk.BlendOp {
 }
 
 // stencilOperationToVk converts HAL stencil operation to Vulkan stencil op.
-func stencilOperationToVk(op hal.StencilOperation) vk.StencilOp {
+func stencilOperationToVk(op gputypes.StencilOperation) vk.StencilOp {
 	switch op {
 	case hal.StencilOperationKeep:
 		return vk.StencilOpKeep
@@ -684,45 +691,4 @@ var vkFormatToTextureMap = map[vk.Format]gputypes.TextureFormat{
 	// Single channel formats
 	vk.FormatR8Unorm:   gputypes.TextureFormatR8Unorm,
 	vk.FormatR16Sfloat: gputypes.TextureFormatR16Float,
-}
-
-// vkPresentModeToHAL converts Vulkan present mode to HAL present mode.
-func vkPresentModeToHAL(mode vk.PresentModeKHR) hal.PresentMode {
-	switch mode {
-	case vk.PresentModeImmediateKhr:
-		return hal.PresentModeImmediate
-	case vk.PresentModeMailboxKhr:
-		return hal.PresentModeMailbox
-	case vk.PresentModeFifoKhr:
-		return hal.PresentModeFifo
-	case vk.PresentModeFifoRelaxedKhr:
-		return hal.PresentModeFifoRelaxed
-	default:
-		return hal.PresentModeFifo
-	}
-}
-
-// vkCompositeAlphaToHAL converts Vulkan composite alpha flags to HAL composite alpha modes.
-func vkCompositeAlphaToHAL(flags vk.CompositeAlphaFlagsKHR) []hal.CompositeAlphaMode {
-	var modes []hal.CompositeAlphaMode
-
-	if vk.Flags(flags)&vk.Flags(vk.CompositeAlphaOpaqueBitKhr) != 0 {
-		modes = append(modes, hal.CompositeAlphaModeOpaque)
-	}
-	if vk.Flags(flags)&vk.Flags(vk.CompositeAlphaPreMultipliedBitKhr) != 0 {
-		modes = append(modes, hal.CompositeAlphaModePremultiplied)
-	}
-	if vk.Flags(flags)&vk.Flags(vk.CompositeAlphaPostMultipliedBitKhr) != 0 {
-		modes = append(modes, hal.CompositeAlphaModeUnpremultiplied)
-	}
-	if vk.Flags(flags)&vk.Flags(vk.CompositeAlphaInheritBitKhr) != 0 {
-		modes = append(modes, hal.CompositeAlphaModeInherit)
-	}
-
-	// Always provide at least opaque mode
-	if len(modes) == 0 {
-		modes = append(modes, hal.CompositeAlphaModeOpaque)
-	}
-
-	return modes
 }

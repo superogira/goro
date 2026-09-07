@@ -5,6 +5,378 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.0] - 2026-08-31
+
+### Added
+
+- **Strided `Texture.UpdateRegion`** (#484) — `image.Rectangle` + `gpucontext.ImageDataLayout` (WebGPU / Go stdlib idiom). Zero-value layout = offset 0, tightly packed rows, region height. Enables zero-copy dirty-band uploads from a full-frame RGBA buffer without `extractRegion` memcpy. wgpu handles 256-byte row-pitch alignment via `alignTextureDataInto`.
+- **GPUStats — two-level observability** (#484) — Rust wgpu + Flutter pattern:
+  - `Renderer.GetCounters()` — cumulative texture count, allocated bytes, upload totals (device owner)
+  - `Context.FrameStats()` — per-frame `UploadBytes`, `UploadRegions`, `PresentSkipped`, `FrameDuration` (frame owner)
+  - Feature-gated: `GOGPU_STATS=1` or `EnableStats()` / `DisableStats()`. Zero-cost when off (single atomic load).
+
+### Changed
+
+- **Struct params migration** (ADR-072) — `SetViewport`, `SetScissorRect`, `Draw` use `gputypes.Viewport`, `gputypes.ScissorRect`, `gputypes.DrawArgs` structs instead of positional parameters
+- **deps:** wgpu v0.33.0 → v0.34.2 (struct params, type alias removal, pipeline disk cache), gpucontext v0.30.0 → v0.31.3, gputypes v0.7.0 → v0.8.0
+
+### Fixed
+
+- **lint:** darwin goconst (`services` string, `Tink` sound name) and gocognit (print dialog)
+
+## [0.53.2] - 2026-08-30
+
+### Added
+
+- **`DownlevelCapabilities()` on `GPUContextProvider`** (ADR-071) — exposes 27 backend capability flags for graceful degradation. Consumers check `DownlevelFlagsComputeShaders` without importing wgpu. Skia Graphite pattern: one check, one gate, one fallback.
+
+### Fixed
+
+- **lint:** errorlint + nilnil in `print_windows.go`
+
+### Changed
+
+- **deps:** wgpu v0.32.1 → v0.33.0 (DownlevelCapabilities across all 7 backends, RequireDownlevelFlags validation)
+- **deps:** gpucontext v0.29.0 → v0.30.0 (DownlevelCapabilities interface method)
+- **deps:** gputypes v0.6.0 → v0.7.0 (DownlevelFlags 27 constants, DownlevelCapabilities struct, ShaderModel)
+
+## [0.53.1] - 2026-08-28
+
+### Fixed
+
+- **macOS: Window menu lost after `SetMenu`** (#463, #464) — `applyMenu` preserved only the App Menu item, so Minimize/Zoom/Close (Cmd+W)/Full Screen disappeared from the menu bar. The system Window menu is now detached, retained, and re-inserted after user items (GLFW/Qt6/Electron pattern).
+- **macOS: `SetMenu` separators lost between Role items** (#456) — top-level separators were routed to the menu bar (invisible). They now go to the App Menu submenu, matching GLFW `cocoa_init.m`.
+- **macOS: About ⓘ icon missing on Role+Action** (#456) — custom `Action` no longer swaps the item to `handleMenuItem:`. Role+Action keeps the system selector (`orderFrontStandardAboutPanel:` etc.) and overrides via `setTarget:` on the app delegate (Electron/Qt pattern), so AppKit still draws role chrome.
+- **macOS: `SetMenu` appended to App Menu instead of replacing** (#456) — `applyMenu` now clears the App Menu submenu before applying caller items (`Menu.setApplicationMenu()` replace semantics).
+- **macOS: only one separator visible in App Menu** (#456) — `+[NSMenuItem separatorItem]` is a shared singleton; adding it repeatedly moved the same instance. Each separator is now `copy`'d before insert (AppKit requirement).
+- **macOS: `RoleServices` was a no-op** (#456) — now creates the Services submenu and registers it with `setServicesMenu:` (GLFW pattern). Default `createAppMenu` also attaches the Services item that was previously missing.
+- **macOS: stale `SetMenu` callbacks after replace** (#457) — `menuActionMap` entries are cleared (including nested submenus) before `removeAllItems`, so reused NSMenuItem pointers cannot fire old Go callbacks.
+
+### Added
+
+- **`Features()` on `GPUContextProvider`** — exposes device feature flags (e.g. `FeatureRayQuery`) for RT capability discovery
+
+### Changed
+
+- **deps:** wgpu v0.31.6 → v0.32.1, gpucontext v0.28.0 → v0.29.0, gputypes v0.5.2 → v0.6.0
+  - wgpu: Software backend RT features, inline ray queries (experimental), ray tracing docs
+  - gpucontext: `Features()` added to `DeviceProvider` interface
+  - gputypes: `Features` type + RT feature flags
+- **deps:** wgpu v0.31.4 → v0.31.6 (earlier in cycle)
+  - Atomic copy usage tracking for all 4 copy commands (#312, @besmpl)
+  - `MappedRange.BytesMut()` and `MappedRange.Flush()` cross-backend API parity (#318, @tarmo888)
+  - Cross-platform lint exclusions fix (golangci-lint#3833)
+
+## [0.53.0] - 2026-08-13
+
+### Added
+
+- **One-shot presentation synchronization** (#452, @kivutar) — `Context.RequestPresentationSync()` gates rendering after the next successfully presented frame without enabling continuous compositor pacing. Wayland supports forced `wl_surface.frame` callbacks for GPU and software presentation, including secondary windows; failed presentations cancel and retain the request for retry.
+
+### Fixed
+
+- **macOS: outgoing drag crashes with `NSRangeException`** (#429, #453, @lkmavi) — `NSDraggingItem` was created without `setDraggingFrame:contents:`, leaving `draggingFrame` at `{{0,0},{0,0}}`. AppKit aborts the process on zero-size frames (`beginDraggingSessionWithItems:`). Fixed by centering a 32pt frame on the pointer (view coords via `convertPoint:fromView:`) and attaching `NSWorkspace.iconForFile:` preview. Hardening (Qt/JUCE/Flax): local `NSAutoreleasePool`, skip relative paths (`NSPasteboardWriting` rejects them), re-entrancy guard (one active drag per view), HFA return buffer `[4]float64` for `ConvertPointFromView`, defensive `[icon copy]` before `setSize:`. `examples/drag_source` shows OUT/IN panes with HiDPI-correct hit testing.
+- **macOS: `SetMenu` leaf items invisible on menu bar** (#449) — `applyMenu` added bare `NSMenuItems` to the main menu bar; macOS only renders items with submenus. Role-based leaf items (About, Quit, Preferences) are now routed to the App Menu submenu automatically. Non-role leaf items log a warning.
+- **macOS: `Role + Action` items dropped** (#449) — `addPlatformItem` required `item.Action == nil` for role dispatch. Custom `Action` now takes precedence over the system selector while preserving the role's key equivalent (Cmd+Q, Cmd+W, etc.).
+- **macOS: `AddToSystemMenu` inconsistency** (#449) — unified with `addPlatformItem` for a single code path. Role+Action items now work consistently in both `SetMenu` and `GetSystemMenu().AddItem()`.
+
+### Changed
+
+- **deps:** gpucontext v0.27.0 → v0.28.0, wgpu v0.31.2 → v0.31.4
+- **ci:** exclude SA5011 false positives in test files (staticcheck limitation with `t.Fatal` + `return`)
+
+## [0.52.1] - 2026-08-11
+
+### Changed
+
+- **refactor: extract `internal/compositor/` package** (ADR-069, #446) — compositor code extracted from root package using Struct Ownership + Callback Interface pattern (Flutter `flow/` + Go stdlib `ssa.Func`). Root package retains public API + thin wiring; compositor owns all implementation.
+  - `DamageSource`, `ComputeDamageScissor`, `UnionAllSources` → `internal/compositor/`
+  - `OverlayPipeline`, damage/FPS debug overlays → `internal/compositor/`
+  - `BlitPipeline` struct (14 fields from Renderer), `BlitResources`, `CompositeState` → `internal/compositor/`
+  - `Context.RegisterDamageSource()` return type: `*DamageSource` → `gpucontext.DamageReporter` (interface)
+  - Zero type aliases, zero wrapper functions, direct `compositor.*` calls
+  - Unidirectional deps: root → compositor (compositor never imports root)
+  - `renderer.go` reduced by ~320 LOC
+- **deps:** wgpu v0.31.0 → v0.31.2
+- **ci:** `go mod tidy` drift check + compositor unidirectional deps guard
+
+## [0.52.0] - 2026-08-10
+
+### Added
+
+- **Compositor-owned render target** (ADR-067, #443) — fundamental architecture redesign. Compositor (gogpu) owns composition texture; drawing library (gg) renders into provided view. Enterprise pattern validated by Chromium cc/, GTK4 GSK, Flutter flow/ source code.
+  - `composView`: content cache texture — gg/g3d draw here, persists between frames
+  - Overlay draws on swapchain after blit — never accumulates, fade works on idle content
+  - `blitPipeline`: passthrough copy (composition → swapchain, no blend)
+  - `compositePipeline`: premultiplied alpha blend (MSAA overlay compositing)
+  - `tryOverlayOnlyFrame()`: overlay-only frames when content idle
+  - `externalContent` flag: separate from `frameCleared` (g3d → gg coordination)
+  - Persistent MSAA composite bind group on RenderTarget (not per-frame)
+  - `damage_scissor.go`: canonical damage scissor computation (moved from gg)
+  - `compositor_blit.go`: `SurfaceCompositor` implementation, `BlitDrawRecorder`, `CompositorBlitResources`
+  - 20+ tests for overlay lifecycle, damage scissor, compositor resources
+
+### Changed
+
+- **deps:** gpucontext v0.26.0 → v0.27.0 (SurfaceCompositor interface)
+
+## [0.51.0] - 2026-08-10
+
+### Added
+
+- **Damage source registration** (#437, ADR-065) — multi-renderer damage aggregation. Each renderer registers as a named damage source via `Context.RegisterDamageSource()` and reports per-frame damage rectangles. The compositor unions all sources at present time for `VkPresentRegionsKHR`. Replaces `SetDamageRects` + `MarkExternalContent`. Chromium `cc/DamageTracker` pattern.
+- **Pluggable debug overlay system** (ADR-066) — GTK4 Inspector-inspired overlay architecture. `Context.RegisterDebugOverlay()` for N overlays drawn in registration order after content, before present. Self-sustaining render loop via `Draw()` return value + `RequestRedraw()`.
+- **Damage debug overlay** — instanced flat-color quad pipeline (~500 LOC). Per-source palette colors, 400ms fade, fill + border in one `Draw(6,N)` call. Activated via `GOGPU_DEBUG_DAMAGE=overlay`.
+- **FPS debug overlay** — colored bar (green >55fps, yellow 30-55, red <30). 120-sample ring buffer. `GOGPU_DEBUG_FPS=overlay`.
+- **Shared overlay pipeline** — `overlayPipeline` with grow-on-demand instance buffer (gg SDF pattern). Reused by damage and FPS overlays.
+- **`Context.MarkPreserveContent()`** — signals that external content (g3d, video) is present and full-surface present is needed even without registered damage sources.
+
+### Fixed
+
+- **Windows: DComp per-pixel alpha for DX12** (#430, @shaolei) — two-tier transparency architecture. Explicit DX12: `WS_EX_NOREDIRECTIONBITMAP` + DirectComposition. Vulkan/GLES/Auto: `DwmEnableBlurBehindWindow` legacy path. A/B tested on Windows 11 + RTX 4060. Enterprise research: winit, wgpu-rs, Ebitengine, Godot, Qt, SDL3, Firefox, VLC.
+- **FPS overlay infinite redraw** — `Draw()` returned `true` unconditionally, causing `RequestRedraw()` every frame even when overlay not visible. Now returns `true` only when overlay bar is displayed.
+
+### Changed
+
+- **deps:** gpucontext v0.24.0 → v0.26.0 (damage tracking interfaces ADR-065/066, Key enum redesign)
+- **deps:** wgpu v0.30.36 → v0.31.0 (core resource tracker ADR-060, inline present barrier, memory leak fix)
+
+## [0.50.2] - 2026-08-07
+
+### Added
+
+- **12 SystemSound types** (#433, ADR-063) — expanded from 5 to 12: Click, Invoke, Focus, MoveNext, MovePrev, GoBack, Show, Hide, Alert, Error, Warning, Success. UWP ElementSoundPlayer parity.
+- **`Config.WithSoundFeedback(true)`** — one-line sound enable in app config, no separate `sound` import needed.
+
+### Fixed
+
+- **X11: connection dual-reader event/reply loss** (#431, #435, @unxed, ADR-062) — single reader goroutine (xgb pattern) replaces two competing socket readers. Events arriving during sync roundtrips were silently discarded; now demuxed to unbounded queue. Fixes: drop position always 0,0, ~60% of incoming drops lost, XDND drag source reliability. `bufio.Reader` eliminates partial-read stream desync.
+- **X11: drag source UngrabPointer on release** (#435, @unxed) — pointer ungrabbed immediately on button release, preventing deadlock when target shows modal dialog. Synthetic PointerUp event queued to fix input state after drag.
+- **Windows: Click mapped to notification beep** (#433) — `sound.Click` now plays `Windows Navigation Start.wav` (subtle UI click) with fallback to `.Default` registry alias.
+
+## [0.50.1] - 2026-08-06
+
+### Fixed
+
+- **X11: drag source targets never accept drop** (#431, @unxed) — `SendClientMessage` used `SubstructureNotify|SubstructureRedirect` event mask for XDND messages. Target windows don't select `SubstructureRedirect`, so the X server silently dropped XdndEnter/Position/Drop events. Changed to `event_mask=0` per all enterprise references (Qt6 `qxcbdrag.cpp:421`, GTK4 `gdkdrag-x11.c:1005`, SDL3 `SDL_x11events.c:1759`, winit `dnd.rs:93`).
+- **X11: drop position always reported as 0,0** (#431, @unxed) — `waitForXdndSelectionNotify` discarded all non-SelectionNotify events, including late `XdndPosition` arriving between `XdndDrop` and `SelectionNotify` due to TCP batching. Position was never written. Additionally, coordinate conversion corrected from `GetGeometry` (parent-relative) to `TranslateCoordinates` (Qt6 pattern).
+- **X11: drag source reported DragMoved on failed drops** (#431, @unxed) — `waitForXdndFinished` discarded `SelectionRequest` events, so target got no data and reported "invalid drag type". Session filtering added to prevent stale `XdndFinished` from previous drag from ending the current session.
+- **X11: sign extension in XdndPosition for negative multi-monitor coords** (#431, @unxed) — `uint32(rootX)<<16` sign-extends negative `int16`; fixed to `uint32(uint16(rootX))<<16`.
+- **X11: `isXDNDAware` called `InternAtom` per motion event** (#431, @unxed) — sync roundtrip on every pointer move during drag. Cached `XdndAware` atom passed as parameter.
+
+## [0.50.0] - 2026-08-06
+
+### Added
+
+- **Outgoing drag-and-drop (drag source)** (#427, ADR-061) — `Window.StartDrag(DragData, callback)` initiates file drag from gogpu window to external apps (desktop, file manager, other windows). All 5 platforms: Windows (COM OLE2 DoDragDrop + IDataObject/IDropSource/IEnumFORMATETC), macOS (NSDraggingSource + beginDraggingSessionWithItems), X11 (XDND v5 protocol), Wayland (wl_data_source + wl_data_device.start_drag), Browser (stub — no drag source API in browsers). Async on macOS, modal on Windows/X11. Enterprise references: Qt6 qwindowsdrag.cpp, SDL3, winit.
+- **Drag source example** — `examples/drag_source/` demonstrates click-hold-drag to desktop with file copy result.
+
+### Fixed
+
+- **Windows DoDragDrop returned 0x80004021 (CO_E_NOT_SUPPORTED)** — `OleInitialize` must be the first COM call on the main thread, before `CoInitializeEx`. Moved to platform `initProcess()`.
+- **Windows DoDragDrop exited modal loop immediately** — `DRAGDROP_S_USEDEFAULTCURSORS` constant was `0x00040002` (wrong), correct value is `0x00040102`.
+- **Windows drag drop target rejected files** — `IDataObject::EnumFormatEtc` returned `E_NOTIMPL`. Explorer requires format enumeration during drag-over. Implemented `IEnumFORMATETC` with CF_HDROP.
+- **Windows COM QueryInterface accepted all IIDs** — DoDragDrop queries for optional interfaces (IAsyncOperation); accepting them caused calls to unpopulated vtable offsets. Now returns `E_NOINTERFACE` for unknown IIDs.
+- **macOS drag result callback** — added `draggingSession:endedAtPoint:operation:` to GoGPUView for async drag completion.
+
+### Changed
+
+- **deps:** wgpu v0.30.35 → v0.30.36 (Vulkan present semaphore fix)
+- Removed `scripts/` directory (CI-only checks now handled by `/release-go` skill)
+
+## [0.49.2] - 2026-08-05
+
+### Fixed
+
+- **Input: JustPressed/JustReleased/Mouse.Delta always false/zero in OnUpdate** (#425) — `inputState.Update()` was called before `onUpdate`, setting `previous = current` before user code could read edge state. Moved `Update()` after `onUpdate` callback, matching Ebiten/Unity/Godot ordering: events → user reads edges → clear for next frame. Reported by @FDUTCH ([#385](https://github.com/gogpu/gogpu/discussions/385)).
+
+### Added
+
+- **38 enterprise-level input tests** — keyboard edge detection (JustPressed, JustReleased, multi-frame lifecycle, same-frame press+release, rapid toggle), mouse (buttons, delta, scroll accumulation, position), app loop ordering regression tests, thread safety (concurrent access), table-driven multi-frame scenarios.
+
+## [0.49.1] - 2026-08-04
+
+### Fixed
+
+- **macOS: menu Role + Action ignored** — when a `MenuItem` had both `Role` (e.g., `RoleAbout`) and a custom `Action` callback, the `Action` was silently ignored because the role handler returned early before reaching the callback path. Now: if `Action` is set, it takes precedence over the system selector. Reported by @jbunds (#423).
+
+## [0.49.0] - 2026-08-04
+
+### Added
+
+- **Per-pixel alpha transparency** (#361, @shaolei) — `Config.WithTransparent(bool)` enables transparent windows for tray popups, overlays, HUDs. Swapchain selects `CompositeAlphaModePremultiplied` with fallback to Opaque. Platform support: Windows (DwmBlurBehind), macOS (NSWindow.isOpaque + clearColor + hasShadow), X11 (32-bit ARGB visual + CWBorderPixel). Wayland/Browser: documented as follow-up.
+- **Window control API** (#361, @shaolei) — `Window.Show()`, `Window.Hide()`, `Window.SetPosition(x, y int)`, `Window.SetSize(w, h int)`. Logical DIP coordinates on all platforms. Windows (ShowWindow + SetWindowPos with DPI scaling), macOS (makeKeyAndOrderFront + setFrameOrigin with Y-flip), X11 (MapWindow + MoveWindow). Wayland/Browser: documented no-ops (compositor/page controls placement).
+
+### Fixed
+
+- **X11 ConfigureWindow length** — header + values = 7 words, was incorrectly 8 (@shaolei)
+- **macOS lint** — removed unused `//nolint:govet` directive on SendPoint
+
+## [0.48.5] - 2026-08-02
+
+### Changed
+
+- **deps:** wgpu v0.30.34 → v0.30.35 — DX12 DirectComposition path for per-pixel alpha transparency ([wgpu#298](https://github.com/gogpu/wgpu/issues/298)). `CreateSwapChainForComposition` via DirectComposition visual tree when `AlphaMode == Premultiplied`. `GOGPU_DX12_FORCE_HWND=1` env var for RenderDoc compatibility. Unblocks #361 (@shaolei).
+
+## [0.48.4] - 2026-08-02
+
+### Fixed
+
+- **`App.Quit()` does not unblock idle WaitEvents** (reported by @jbunds on [wgpu#294](https://github.com/gogpu/wgpu/pull/294)) — `Quit()` set `running=false` but never woke the event loop. In event-driven mode the main loop stayed blocked in `WaitEvents` until mouse/keyboard input. Fixed: `Quit()` invokes an atomically published `WakeUp` (macOS `PostEmptyEvent` / GLFW-winit pattern). Darwin smoke tests use `WithContinuousRender(true)`.
+
+## [0.48.3] - 2026-08-02
+
+### Fixed
+
+- **macOS `GetAssociatedObject` checkptr crash under `-race`** (#406) — replaced ObjC associated object round-trip with Go-side `sync.Map` lookup for delegate → `*Window` mapping. Eliminates `uintptr → unsafe.Pointer` conversion that checkptr rejects. Same purego pattern as wgpu block callbacks fix ([wgpu#293](https://github.com/gogpu/wgpu/issues/293)). Third and final checkptr source discovered by @jbunds.
+
+## [0.48.2] - 2026-08-02
+
+### Changed
+
+- **deps:** wgpu v0.30.32 → v0.30.34, naga v0.17.16 → v0.18.0, goffi v0.6.2 → v0.6.3, webgpu v0.5.4 → v0.5.5
+
+## [0.48.1] - 2026-08-02
+
+### Fixed
+
+- **Demand-driven idle loop** (#411, @samyfodil) — `renderFrameGPU` unconditionally called `RequestRedraw` when `!frameStarted`, causing infinite render loop (~27% CPU on idle X11) for demand-driven UIs that correctly draw nothing when nothing changed. New `acquireFailed` flag distinguishes "callback drew nothing" (lazy acquire working as designed) from "callback drew but swapchain unavailable" (genuine failure, retry warranted).
+
+## [0.48.0] - 2026-08-01
+
+### Added
+
+- **Runtime DPI/Scale Factor Change** (#409, ADR-059) — `EventScaleChanged` emitted on all 5 platforms when window moves between monitors with different DPI. Windows: `WM_DPICHANGED`. macOS: `lastScale` comparison in PollEvents. Wayland: `lastScale` tracking in PrepareFrame. X11/Browser: `lastScale` tracking. Event ordering: `ScaleChangedEvent` before `ResizeEvent` (winit pattern). Enterprise research: winit, Qt6, SDL3, Flutter.
+
+### Fixed
+
+- **`App.Quit()` thread safety** (#406, @jbunds) — `running` field changed from `bool` to `atomic.Bool` for safe cross-goroutine shutdown.
+
+### Changed
+
+- **deps:** gpucontext v0.23.0 → v0.24.0 (ScaleChangedEvent), wgpu v0.30.31 → v0.30.32
+
+## [0.48.0] - 2026-08-01
+
+### Added
+
+- **Runtime DPI/scale factor change** (#409, ADR-059) — `ScaleChangedEvent` emitted on all 5 platforms when window moves between monitors with different DPI or OS DPI settings change. Windows: `WM_DPICHANGED` → `EventScaleChanged` before `EventResize`. macOS: `lastScale` tracking in PollEvents. Wayland: `lastScale` in PrepareFrame with event queue emission. X11: `lastScale` tracking in PrepareFrame. Browser: `lastScale` for DPR-only changes (zoom). Enterprise research: winit, Qt6, SDL3, Flutter.
+
+### Fixed
+
+- **`App.Quit()` thread safety** (#406, @jbunds) — `running` field changed from `bool` to `atomic.Bool`. Safe to call `Quit()` from any goroutine (timer, signal handler, network callback).
+
+### Changed
+
+- **deps:** gpucontext v0.23.0 → v0.24.0 (ScaleChangedEvent), wgpu v0.30.31 → v0.30.32 (deps)
+
+## [0.47.3] - 2026-08-01
+
+### Changed
+
+- **deps:** wgpu v0.30.30 → v0.30.31 — Metal checkptr fix for `go test -race`: block callbacks use map lookup instead of `unsafe.Pointer` dereference (purego pattern, wgpu#293). Fixes crash on macOS ARM64 with `-race` flag.
+
+## [0.47.2] - 2026-07-31
+
+### Changed
+
+- **deps:** wgpu v0.30.29 → v0.30.30 — memory leak fix: validation maps pinned resources beyond their lifetime (@samyfodil, wgpu#291). Deterministic validation error precedence.
+
+## [0.47.1] - 2026-07-30
+
+### Changed
+
+- **deps:** wgpu v0.30.27 → v0.30.29 — unified resource lifecycle (ADR-056, wgpu#287). BindGroup/Pipeline Release() via ResourceRef.Drop() — use-after-free on shared encoder path eliminated. DestroyQueue deadlock fix (v0.30.29). 6 lifecycle regression tests.
+
+## [0.47.0] - 2026-07-30
+
+### Added
+
+- **`App.PollInputEvent()`** (ADR-058) — SDL-style event queue for game developers. Returns discrete `gpucontext.InputEvent` values via type switch: `KeyEvent`, `PointerEvent`, `ScrollEvent`, `CharEvent`, `FocusEvent`, `ResizeEvent`. Three input models now coexist from the same internal dispatch: callbacks (EventSource), state polling (Input), and event queue (PollInputEvent). Zero overhead when unused. Sealed `InputEvent` interface — exhaustive handling via linters. Research: 7 enterprise frameworks (Qt6, SDL3, winit, Flutter, Bevy, Gio, Ebiten).
+
+### Changed
+
+- **deps:** gpucontext v0.22.0 → v0.23.0 (InputEvent sealed interface), wgpu v0.30.25 → v0.30.27 (GLES depth/stencil fix #284)
+
+## [0.46.0] - 2026-07-29
+
+### Added
+
+- **`App.RequestSize(width, height)`** (#397) — programmatic window resize at runtime. All 5 platforms: Windows (DPI-aware `SetWindowPos`), macOS (`setContentSize:` + unzoom), X11 (`_NET_WM_STATE` remove-maximize + `ConfigureWindow`), Wayland (advisory min=max trick, SDL3 pattern), Browser (CSS + drawingBuffer). Min/max constraint clamping, fullscreen guard, maximized restore (winit pattern). Requested by @unxed for f4 file manager.
+- **`Context.CommandEncoder()`** (#393, #394, @besmpl) — frame-owned lazy command encoder. External renderers (g3d) record passes into a borrowed encoder; gogpu remains sole owner of finish/submit/present. Single `queue.Submit()` per frame eliminates Intel Vulkan VK_ERROR_DEVICE_LOST on multi-pass compositing.
+- **`ContextRenderTarget.PreserveContent()`** (#390, #391) — exposes `MarkExternalContent` state through the render-target adapter so ggcanvas preserves earlier renderer's surface content.
+- **`App.FontSmoothing()`** (#396, ADR-057) — OS text anti-aliasing detection on all 5 platforms. Windows: `SPI_GETFONTSMOOTHING` + `SPI_GETFONTSMOOTHINGTYPE`. macOS: always Grayscale (post-Mojave). X11: `Xft.antialias` + `Xft.rgba` from RESOURCE_MANAGER. Wayland: inferred from SubpixelLayout. Browser: Grayscale. Returns `gpucontext.FontSmoothing{None,Grayscale,Subpixel}`.
+
+### Fixed
+
+- **X11 HiDPI mouse coordinates** (#398) — X11 pointer events delivered physical pixels instead of logical DIP, causing offset clicks on HiDPI displays. Added `physicalToLogical` conversion in all 5 pointer handlers (MotionNotify, ButtonPress, ButtonRelease, EnterNotify, LeaveNotify). All platforms now consistently deliver logical DIP matching `App.Size()`.
+- **X11 remote keyboard mapping** (#279, #395, @unxed) — X forwarding, XQuartz, XWayland now prefer server-side XKB keymap over client host config. `serverHasXkb()` probe, fallback to `xcb_key_symbols` when XKB unavailable.
+- **macOS `SetSize` content area** — changed from `setFrame:` (outer frame including title bar) to `setContentSize:` (inner content area). Previously, requested size was reduced by the title bar height. winit pattern (window_delegate.rs:1085).
+
+### Changed
+
+- **deps:** gpucontext v0.21.1 → v0.22.0, wgpu v0.30.23 → v0.30.25
+
+## [0.45.1] - 2026-07-27
+
+### Added
+
+- **OS drag-and-drop: macOS + Wayland** (#387) — completes DnD on all 4 platforms. macOS: 5 NSDraggingDestination methods, registerForDraggedTypes (NSFilenamesPboardType + public.file-url), Y-coordinate flip. Wayland: wl_data_offer v3, DnD callbacks on existing wl_data_device, pipe-based data reading, ParseURIList, multi-window surface routing. Combined with v0.45.0 (Windows + X11), DnD now works on Windows, macOS, X11, and Wayland.
+
+## [0.45.0] - 2026-07-27
+
+### Added
+
+- **OS file drag-and-drop** (#387) — Windows `WM_DROPFILES` + X11 XDND v5 protocol. 4 event types (`EventDragEnter`, `EventDragMove`, `EventDragDrop`, `EventDragLeave`) with file paths and physical pixel position. `App.OnDragDrop` callback. Foundation for ui/dnd package. macOS NSDragging + Wayland `wl_data_device` planned as follow-up.
+
+### Fixed
+
+- **Wayland event-driven rendering regression** (#379) — frame callback done handler unconditionally queued synthetic `EventExpose`, creating perpetual 60 FPS render loop even with `ContinuousRender: false`. Frame callback is now a GATE (via `frameCallbackReady()`), not a TRIGGER. Introduced in v0.42.9. winit gate-not-trigger pattern. Two regression tests.
+- **macOS window title double render** (#384) — when "Show Tab Bar" is enabled, `NSWindow.title` is now cleared while custom title text field is active. `clearNativeTitle()`/`syncNativeTitle()` coordinate native vs injected title rendering.
+- **macOS TabbingMode selectors** (#383) — `setTabbingMode:` and `setTabbingIdentifier:` ObjC selectors registered in `initSelectors()`. Previously declared but never registered, silently no-op.
+
+## [0.44.11] - 2026-07-26
+
+### Added
+
+- **`Context.MarkExternalContent()`** (#341) — signals that an external renderer (e.g., g3d) has submitted GPU commands to the active surface. Subsequent render passes use `LoadOp::Load` instead of `LoadOp::Clear`, preserving the 3D content for UI overlay compositing. Enterprise pattern: Flutter `InlinePassContext` pass counter, Qt6 QRhi `beginExternal/endExternal`.
+
+### Changed
+
+- **deps:** wgpu v0.30.22 → v0.30.23 — 10+ fixes by @besmpl: device teardown GPU drain (#264), Vulkan fail-closed lifecycle (#265), explicit mock construction (#266), surface lifetime ownership (#269), Vulkan nil pipeline layout (#257), Metal autorelease thread pinning (#260), Metal texture array copy (#261), DX12 state reconciliation (#262), nil WritePixels guard (#277)
+- **deps:** goffi v0.6.0 → v0.6.2 — Android ARM64 Bionic support (@besmpl, goffi#62), Windows AMD64 scalar float return fix (@besmpl, goffi#65)
+- **deps:** naga v0.17.15 → v0.17.16 (transitive via wgpu) — MSL 64-bit atomic validation (@besmpl, naga#82)
+
+## [0.44.10] - 2026-07-20
+
+### Fixed
+
+- **Linux WindowID stamping** (@lkmavi, #381) — all X11/Wayland event types (keyboard, pointer, scroll, char, focus) now carry correct `WindowID`. Previously only Close/Expose were stamped — `getByPlatformID` returned nil for all other events, silently dropping per-window callbacks on Linux.
+- **X11 multi-window** (@lkmavi, #381) — secondary windows use independent X11 connections (mirrors Wayland pattern). Each window gets its own atoms, XKB state, cursor cache, event queue. `WaitEvents` budget-split polling: `100ms / (N+1)` keeps latency constant as window count grows.
+- **Wayland secondary window Close** (@lkmavi, #381) — `Close()` on secondary window now correctly targets its own connection instead of silently closing the primary.
+
+## [0.44.9] - 2026-07-16
+
+### Changed
+
+- **deps:** wgpu v0.30.21 → v0.30.22 — Metal MSAA texture storage mode crash fix on Intel Mac (@AnyCPU, wgpu#271). `MTLGPUFamilyApple1` detection for correct storage mode selection.
+
+## [0.44.8] - 2026-07-15
+
+### Changed
+
+- **deps:** wgpu v0.30.20 → v0.30.21 — software backend fixes: `CopyTextureToBuffer` row stride alignment, `configureRasterPipeline` blend state extraction (premultiplied alpha compositing), `readTexel` BGRA R/B channel swap
+
+## [0.44.7] - 2026-07-14
+
+### Fixed
+
+- **pixelPresented frame lifecycle** (ADR-052) — `WriteSurfacePixels` via `PresentPixels` bypasses the Acquire→Present cycle, but `endFrameForSurface` had no knowledge of this. Software backend produced PRESENT ERROR every frame and `flushClear` rendered into stale (discarded) textures. New `pixelPresented` flag on `RenderTarget` signals that present already happened — `endFrameForSurface` skips present, resets `hasPendingClear`, and cleans up stale view/texture refs. Event-based (not type-based) — GPU backends unaffected. Enterprise-validated: SDL3 `UpdateWindowSurface` vs `RenderPresent` pattern.
+
+### Changed
+
+- **deps:** wgpu v0.30.19 → v0.30.20 — `PresentPixels` check-before-mutate (preserves acquired texture on GPU backends), DX12 UMA GPU classification fix (@Zeroes1), `CacheCoherentUMA` diagnostic logging
+
 ## [0.44.6] - 2026-07-12
 
 ### Fixed

@@ -1034,12 +1034,12 @@ func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPa
 					continue
 				}
 				if count > 0 {
-					pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: count, FirstIndex: first})
+					pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: count, InstanceCount: 1, FirstIndex: first})
 				}
 				first, count = rg.firstIndex, rg.indexCount
 			}
 			if count > 0 {
-				pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: count, FirstIndex: first})
+				pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: count, InstanceCount: 1, FirstIndex: first})
 			}
 		}
 		for _, mesh := range animating {
@@ -1049,7 +1049,7 @@ func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPa
 			}
 			state.setVertexBuffer(pass, gpuMesh.vertexBuf)
 			state.setIndexBuffer(pass, gpuMesh.indexBuf)
-			pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: gpuMesh.indexCount})
+			pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: gpuMesh.indexCount, InstanceCount: 1})
 		}
 	}
 	return nil

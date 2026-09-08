@@ -403,6 +403,10 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	// screen already prefetched the files.
 	if ctx.Resources != nil {
 		ctx.Resources.WarmItemMetadata()
+		// The wav web pack only matters in-world; start it streaming now
+		// so audio switches to pack lookups as soon as it lands. Sound
+		// lookups fall back to loose files until then.
+		ctx.Resources.StartDeferredWebPack()
 	}
 	m.camera.ResetTracking()
 	ctx.World.GAT = nil
@@ -626,6 +630,11 @@ func (m *WorldMode) playMapBGM(ctx client.Context, rswName string) {
 
 func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	now := time.Now()
+	// Fold a finished wav-pack download into the archive list on this
+	// goroutine; no-op until StartDeferredWebPack's fetch lands.
+	if ctx.Resources != nil {
+		ctx.Resources.PollDeferredWebPack()
+	}
 	if m.mapFade.phase == mapFadeOut {
 		if !m.mapFadeElapsed(now) {
 			return nil, nil

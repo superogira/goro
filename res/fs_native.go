@@ -41,6 +41,14 @@ func (m *Manager) readCandidate(candidate string) ([]byte, error) {
 	return os.ReadFile(candidate)
 }
 
+// StartDeferredWebPack has nothing to do on native: the boot scanArchives
+// already loaded every GRF next to the executable, wav packs included.
+func (m *Manager) StartDeferredWebPack() {}
+
+// PollDeferredWebPack is the native no-op twin of the web build's
+// frame-loop poll; there is no deferred download to fold in.
+func (m *Manager) PollDeferredWebPack() {}
+
 // scanArchives loads GRF archives found under Root. The web build serves the
 // extracted data directory over HTTP and has no archive support.
 func (m *Manager) scanArchives() {

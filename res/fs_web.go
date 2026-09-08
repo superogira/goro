@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall/js"
@@ -500,21 +501,113 @@ func (m *Manager) readCandidate(candidate string) ([]byte, error) {
 	return data, nil
 }
 
-// scanArchives downloads the curated web pack (data_web.grf) served next
-// to the page and keeps it in memory as a GRF archive. Packing the
-// gameplay-time resources turns their per-file HTTP round trips into map
-// lookups; loose files under data/ still work as overrides because
-// archiveCandidate only answers paths the pack actually contains.
+// scanArchives downloads the curated web packs served next to the page and
+// keeps them in memory as GRF archives. Packing the gameplay-time resources
+// turns their per-file HTTP round trips into map lookups; loose files under
+// data/ still work as overrides because archiveCandidate only answers paths
+// the pack actually contains.
+//
+// The boot pack (data_web1.grf, sprites and textures) is required from the
+// first frame, so it downloads before the game starts. The split keeps the
+// first-load payload small; the wav pack streams in later via
+// StartDeferredWebPack. The unsplit data_web.grf remains supported as a
+// fallback for deployments that have not split it yet.
 func (m *Manager) scanArchives() {
-	data, err := webFetchTimeout("data_web.grf", 10*time.Minute)
-	if err != nil {
-		return // optional pack; plain loose-file serving keeps working
+	for _, name := range []string{"data_web1.grf", "data_web.grf"} {
+		data, err := webFetchProgress(name, 10*time.Minute, func(loaded, total int64) {
+			reportPackProgress(name, loaded, total)
+		})
+		if err != nil {
+			reportPackDone(name, false)
+			continue // optional pack; try the next spelling or loose files
+		}
+		archive, err := OpenGRFReader(name, bytes.NewReader(data))
+		if err != nil {
+			reportPackDone(name, false)
+			return
+		}
+		m.Archives = append(m.Archives, archive)
+		reportPackDone(name, true)
+		return
 	}
-	archive, err := OpenGRFReader("data_web.grf", bytes.NewReader(data))
+}
+
+// StartDeferredWebPack begins downloading the wav web pack
+// (data_web2.grf) in the background. Call it when the player enters the
+// world: the wav corpus only matters for in-world audio, and keeping it out
+// of the boot download shrinks the first load. Repeated calls are no-ops;
+// while the download runs, sound lookups fall back to loose files.
+func (m *Manager) StartDeferredWebPack() {
+	if m.deferredWebPack == nil {
+		m.deferredWebPack = &deferredWebPackState{}
+	}
+	p := m.deferredWebPack
+	p.mu.Lock()
+	if p.state != deferredWebPackIdle {
+		p.mu.Unlock()
+		return
+	}
+	p.state = deferredWebPackDownloading
+	p.mu.Unlock()
+	const name = "data_web2.grf"
+	go func() {
+		data, err := webFetchProgress(name, 15*time.Minute, func(loaded, total int64) {
+			reportPackProgress(name, loaded, total)
+		})
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if err != nil {
+			p.state = deferredWebPackFailed
+		} else {
+			p.data = data
+			p.state = deferredWebPackReady
+		}
+		reportPackDone(name, err == nil)
+	}()
+}
+
+// PollDeferredWebPack parses a finished deferred download. The frame loop
+// polls this on the game goroutine: Archives is read there every frame, so
+// appending from the fetch callback would race.
+func (m *Manager) PollDeferredWebPack() {
+	p := m.deferredWebPack
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.state != deferredWebPackReady {
+		p.mu.Unlock()
+		return
+	}
+	data := p.data
+	p.data = nil
+	p.state = deferredWebPackParsed
+	p.mu.Unlock()
+	archive, err := OpenGRFReader("data_web2.grf", bytes.NewReader(data))
 	if err != nil {
+		// Loose wav files keep audio working; the pack is an optimization.
 		return
 	}
 	m.Archives = append(m.Archives, archive)
+}
+
+// reportPackProgress forwards pack download progress to the page hook
+// (window.goroPackProgress) so index.html can render a progress bar.
+func reportPackProgress(file string, loaded, total int64) {
+	fn := js.Global().Get("goroPackProgress")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	fn.Invoke(file, float64(loaded), float64(total))
+}
+
+// reportPackDone tells the page a pack download finished (or failed).
+func reportPackDone(file string, ok bool) {
+	fn := js.Global().Get("goroPackDone")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	fn.Invoke(file, ok)
 }
 
 // webFetch downloads a same-origin URL with the Fetch API. The promise is
@@ -528,6 +621,14 @@ func webFetch(path string) ([]byte, error) {
 // webFetchTimeout is webFetch with an explicit deadline — the boot-time
 // web pack download is far larger than a single resource.
 func webFetchTimeout(path string, timeout time.Duration) ([]byte, error) {
+	return webFetchProgress(path, timeout, nil)
+}
+
+// webFetchProgress is webFetchTimeout with byte-accurate progress: it
+// streams the response body chunk by chunk instead of waiting for one
+// arrayBuffer, reporting (loaded, total) through onProgress as bytes land.
+// A nil onProgress behaves exactly like webFetchTimeout.
+func webFetchProgress(path string, timeout time.Duration, onProgress func(loaded, total int64)) ([]byte, error) {
 	type result struct {
 		data []byte
 		err  error
@@ -551,15 +652,64 @@ func webFetchTimeout(path string, timeout time.Duration) ([]byte, error) {
 			done <- result{err: fmt.Errorf("fetch %s: HTTP %s", path, response.Get("status").String())}
 			return nil
 		}
-		bufferPromise := response.Call("arrayBuffer")
-		bufferPromise.Call("then", js.FuncOf(func(this js.Value, args []js.Value) any {
-			buffer := args[0]
-			size := buffer.Get("byteLength").Int()
-			data := make([]byte, size)
-			js.CopyBytesToGo(data, js.Global().Get("Uint8Array").New(buffer))
-			done <- result{data: data}
+		total := int64(-1)
+		if cl := response.Get("headers").Call("get", "Content-Length"); cl.Type() == js.TypeString {
+			if v, err := strconv.ParseInt(cl.String(), 10, 64); err == nil {
+				total = v
+			}
+		}
+		if !response.Get("body").Truthy() {
+			// No streaming body (should not happen in modern browsers):
+			// fall back to the single arrayBuffer read without progress.
+			bufferPromise := response.Call("arrayBuffer")
+			bufferPromise.Call("then", js.FuncOf(func(this js.Value, args []js.Value) any {
+				buffer := args[0]
+				size := buffer.Get("byteLength").Int()
+				data := make([]byte, size)
+				js.CopyBytesToGo(data, js.Global().Get("Uint8Array").New(buffer))
+				if onProgress != nil {
+					onProgress(int64(size), int64(size))
+				}
+				done <- result{data: data}
+				return nil
+			}), onRejected)
 			return nil
-		}), onRejected)
+		}
+		reader := response.Get("body").Call("getReader")
+		var chunks [][]byte
+		loaded := int64(0)
+		var readNext js.Func
+		readNext = js.FuncOf(func(this js.Value, args []js.Value) any {
+			step := args[0]
+			if step.Get("done").Bool() {
+				size := 0
+				for _, chunk := range chunks {
+					size += len(chunk)
+				}
+				data := make([]byte, size)
+				offset := 0
+				for _, chunk := range chunks {
+					offset += copy(data[offset:], chunk)
+				}
+				readNext.Release()
+				if onProgress != nil {
+					onProgress(int64(size), int64(size))
+				}
+				done <- result{data: data}
+				return nil
+			}
+			value := step.Get("value")
+			buf := make([]byte, value.Get("byteLength").Int())
+			js.CopyBytesToGo(buf, value)
+			chunks = append(chunks, buf)
+			loaded += int64(len(buf))
+			if onProgress != nil {
+				onProgress(loaded, total)
+			}
+			reader.Call("read").Call("then", readNext, onRejected)
+			return nil
+		})
+		reader.Call("read").Call("then", readNext, onRejected)
 		return nil
 	})
 

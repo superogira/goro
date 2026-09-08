@@ -7,6 +7,25 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+)
+
+// deferredWebPackState tracks the background download of the wav web pack
+// (data_web2.grf). The state machine is mutex-guarded because the fetch
+// callbacks run off the game goroutine, while the parse-and-attach step is
+// polled on the game goroutine where Archives is read.
+type deferredWebPackState struct {
+	mu    sync.Mutex
+	state int // deferredWebPackIdle, Downloading, Ready, Parsed, or Failed
+	data  []byte
+}
+
+const (
+	deferredWebPackIdle = iota
+	deferredWebPackDownloading
+	deferredWebPackReady
+	deferredWebPackParsed
+	deferredWebPackFailed
 )
 
 type Manager struct {
@@ -14,6 +33,8 @@ type Manager struct {
 	ClientInfo ClientInfo
 	FoundFiles []string
 	Archives   []*GRF
+
+	deferredWebPack *deferredWebPackState
 
 	accessoryNames           map[int]string
 	accessoryNamesLoaded     bool

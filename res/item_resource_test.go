@@ -159,6 +159,17 @@ func TestCardIllustrationTextureCandidates(t *testing.T) {
 	}
 }
 
+func TestInterfaceTextureCandidatesLeadLowercase(t *testing.T) {
+	got := InterfaceTextureCandidates(`basic_interface\LV_UP_ON`)
+	if len(got) == 0 || got[0] != `data\texture\유저인터페이스\basic_interface\lv_up_on.bmp` {
+		t.Fatalf("leading candidate = %#v, want the lowercase Korean-root spelling", got[:minIntForTest(len(got), 2)])
+	}
+	got = ItemCollectionTextureCandidates("Apple")
+	if len(got) == 0 || got[0] != `data\texture\유저인터페이스\collection\apple` {
+		t.Fatalf("leading collection candidate = %#v, want the lowercase spelling", got[:minIntForTest(len(got), 2)])
+	}
+}
+
 func TestItemMetadataLookupFallbacks(t *testing.T) {
 	manager := &Manager{
 		itemMetadataLoaded: true,

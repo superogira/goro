@@ -168,11 +168,14 @@ func levelUpNotificationImageCandidates(name string) []string {
 	if len(name) >= 4 && strings.EqualFold(name[len(name)-4:], ".bmp") {
 		stem = name[:len(name)-4]
 	}
-	candidates := []string{
-		"skin\\default\\basic_interface\\" + name,
-		"skin/default/basic_interface/" + name,
-	}
-	return append(candidates, res.InterfaceTextureCandidates("basic_interface\\"+stem)...)
+	// The interface texture roots (data\texture\유저인터페이스\...) lead: they
+	// are the spellings the web pack and loose-file servers actually carry,
+	// so the legacy skin\default roots only probe when those miss.
+	candidates := res.InterfaceTextureCandidates("basic_interface\\" + stem)
+	return append(candidates,
+		"skin\\default\\basic_interface\\"+stem+".bmp",
+		"skin/default/basic_interface/"+stem+".bmp",
+	)
 }
 
 func (n *LevelUpNotifications) imageSize() (int, int) {

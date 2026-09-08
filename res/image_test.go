@@ -20,8 +20,8 @@ func TestNPCCutinTextureCandidatesUseROIllustrationPath(t *testing.T) {
 	}
 
 	withExtension := NPCCutinTextureCandidates("guide.BMP")
-	if len(withExtension) == 0 || withExtension[0] != "data\\texture\\유저인터페이스\\illust\\guide.BMP" {
-		t.Fatalf("extended candidates = %q", withExtension)
+	if len(withExtension) == 0 || withExtension[0] != "data\\texture\\유저인터페이스\\illust\\guide.bmp" {
+		t.Fatalf("extended candidates = %q, want the lowercase spelling to lead", withExtension)
 	}
 
 	untrusted := NPCCutinTextureCandidates("../../guide")

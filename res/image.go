@@ -202,14 +202,29 @@ func ItemIconTextureCandidates(resource string) []string {
 		seen[candidate] = struct{}{}
 		out = append(out, candidate)
 	}
+	// Lowercase spellings lead: unpacked web deployments serve kRO data with
+	// lowercase filenames on case-sensitive hosts, so the exact-case resource
+	// name pays a 404 first when ordered before it. Pack users resolve via
+	// the archive pre-scan before any HTTP, so the order only matters for
+	// loose-file hosts.
+	lowerStem := strings.ToLower(stem)
+	lowerFilenameOnly := strings.ToLower(filenameOnly)
 	for _, prefix := range prefixes {
-		add(prefix + stem + ".bmp")
-		if filenameOnly != stem {
+		add(prefix + lowerStem + ".bmp")
+		if stem != lowerStem {
+			add(prefix + stem + ".bmp")
+		}
+		if filenameOnly != lowerFilenameOnly {
+			add(prefix + lowerFilenameOnly + ".bmp")
 			add(prefix + filenameOnly + ".bmp")
 		}
 	}
-	add(stem + ".bmp")
-	if filenameOnly != stem {
+	add(lowerStem + ".bmp")
+	if stem != lowerStem {
+		add(stem + ".bmp")
+	}
+	if filenameOnly != lowerFilenameOnly {
+		add(lowerFilenameOnly + ".bmp")
 		add(filenameOnly + ".bmp")
 	}
 	return out
@@ -248,14 +263,29 @@ func InterfaceTextureCandidates(resource string) []string {
 		seen[candidate] = struct{}{}
 		out = append(out, candidate)
 	}
+	// Lowercase spellings lead: unpacked web deployments serve kRO data with
+	// lowercase filenames on case-sensitive hosts, so the exact-case resource
+	// name pays a 404 first when ordered before it. Pack users resolve via
+	// the archive pre-scan before any HTTP, so the order only matters for
+	// loose-file hosts.
+	lowerStem := strings.ToLower(stem)
+	lowerFilenameOnly := strings.ToLower(filenameOnly)
 	for _, prefix := range prefixes {
-		add(prefix + stem + ".bmp")
-		if filenameOnly != stem {
+		add(prefix + lowerStem + ".bmp")
+		if stem != lowerStem {
+			add(prefix + stem + ".bmp")
+		}
+		if filenameOnly != lowerFilenameOnly {
+			add(prefix + lowerFilenameOnly + ".bmp")
 			add(prefix + filenameOnly + ".bmp")
 		}
 	}
-	add(stem + ".bmp")
-	if filenameOnly != stem {
+	add(lowerStem + ".bmp")
+	if stem != lowerStem {
+		add(stem + ".bmp")
+	}
+	if filenameOnly != lowerFilenameOnly {
+		add(lowerFilenameOnly + ".bmp")
 		add(filenameOnly + ".bmp")
 	}
 	return out
@@ -301,10 +331,22 @@ func NPCCutinTextureCandidates(resource string) []string {
 		seen[candidate] = struct{}{}
 		out = append(out, candidate)
 	}
+	// Lowercase spellings lead: unpacked web deployments serve kRO data with
+	// lowercase filenames on case-sensitive hosts, so the exact-case resource
+	// name pays a 404 first when ordered before it. Pack users resolve via
+	// the archive pre-scan before any HTTP, so the order only matters for
+	// loose-file hosts.
+	lowerFilenameOnly := strings.ToLower(filenameOnly)
 	for _, prefix := range prefixes {
-		add(prefix + filenameOnly)
+		add(prefix + lowerFilenameOnly)
+		if filenameOnly != lowerFilenameOnly {
+			add(prefix + filenameOnly)
+		}
 	}
-	add(filenameOnly)
+	add(lowerFilenameOnly)
+	if filenameOnly != lowerFilenameOnly {
+		add(filenameOnly)
+	}
 	return out
 }
 
@@ -343,10 +385,23 @@ func ItemCollectionTextureCandidates(resource string) []string {
 		seen[candidate] = struct{}{}
 		out = append(out, candidate)
 	}
+	// Lowercase spellings lead: unpacked web deployments serve kRO data with
+	// lowercase filenames on case-sensitive hosts, so the exact-case resource
+	// name pays a 404 first when ordered before it. Pack users resolve via
+	// the archive pre-scan before any HTTP, so the order only matters for
+	// loose-file hosts.
+	lowerStem := strings.ToLower(stem)
+	lowerFilenameOnly := strings.ToLower(filenameOnly)
 	for _, prefix := range prefixes {
-		add(prefix + stem)
-		add(prefix + stem + ".bmp")
-		if filenameOnly != stem {
+		add(prefix + lowerStem)
+		add(prefix + lowerStem + ".bmp")
+		if stem != lowerStem {
+			add(prefix + stem)
+			add(prefix + stem + ".bmp")
+		}
+		if filenameOnly != lowerFilenameOnly {
+			add(prefix + lowerFilenameOnly)
+			add(prefix + lowerFilenameOnly + ".bmp")
 			add(prefix + filenameOnly)
 			add(prefix + filenameOnly + ".bmp")
 		}
@@ -389,14 +444,29 @@ func CardIllustrationTextureCandidates(resource string) []string {
 		seen[candidate] = struct{}{}
 		out = append(out, candidate)
 	}
+	// Lowercase spellings lead: unpacked web deployments serve kRO data with
+	// lowercase filenames on case-sensitive hosts, so the exact-case resource
+	// name pays a 404 first when ordered before it. Pack users resolve via
+	// the archive pre-scan before any HTTP, so the order only matters for
+	// loose-file hosts.
+	lowerStem := strings.ToLower(stem)
+	lowerFilenameOnly := strings.ToLower(filenameOnly)
 	for _, prefix := range prefixes {
-		add(prefix + stem + ".bmp")
-		if filenameOnly != stem {
+		add(prefix + lowerStem + ".bmp")
+		if stem != lowerStem {
+			add(prefix + stem + ".bmp")
+		}
+		if filenameOnly != lowerFilenameOnly {
+			add(prefix + lowerFilenameOnly + ".bmp")
 			add(prefix + filenameOnly + ".bmp")
 		}
 	}
-	add(stem + ".bmp")
-	if filenameOnly != stem {
+	add(lowerStem + ".bmp")
+	if stem != lowerStem {
+		add(stem + ".bmp")
+	}
+	if filenameOnly != lowerFilenameOnly {
+		add(lowerFilenameOnly + ".bmp")
 		add(filenameOnly + ".bmp")
 	}
 	return out

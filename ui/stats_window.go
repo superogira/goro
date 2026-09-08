@@ -35,6 +35,9 @@ const (
 type StatsWindow struct {
 	Window
 	snapshot string
+
+	webOpen      bool
+	webSyncedKey string
 }
 
 type statRow struct {
@@ -46,6 +49,11 @@ type statRow struct {
 }
 
 func (w *StatsWindow) Toggle(ctx Context) {
+	if statsWebEnabled() {
+		w.webOpen = !w.webOpen
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(statsWindowWidth, statsWindowHeight)
 	if w.IsOpen() {
 		w.Close()
@@ -53,6 +61,38 @@ func (w *StatsWindow) Toggle(ctx Context) {
 		return
 	}
 	w.OpenWindow(ctx)
+}
+
+// webSync pushes the DOM status window state when its snapshot changes.
+func (w *StatsWindow) webSync(ctx Context) {
+	snapshot := statsWindowSnapshot(ctx.Session)
+	key := fmt.Sprintf("%t|%s", w.webOpen, snapshot)
+	if key == w.webSyncedKey {
+		return
+	}
+	w.webSyncedKey = key
+	rows := statsRows(ctx.Session)
+	if len(rows) > 6 {
+		rows = rows[:6]
+	}
+	var rowArr [6]statRow
+	var canInc [6]bool
+	for i, row := range rows {
+		rowArr[i] = row
+		canInc[i] = canIncreaseStat(ctx.Session, row)
+	}
+	stats := sessionStats(ctx.Session)
+	derived := [][2]string{
+		{"ATK", fmt.Sprintf("%d + %d", stats.Attack, stats.AttackBonus)},
+		{"MATK", fmt.Sprintf("%d - %d", stats.MatkMin, stats.MatkMax)},
+		{"HIT", fmt.Sprintf("%d", stats.Hit)},
+		{"CRIT", fmt.Sprintf("%.1f", float64(stats.Critical)/10)},
+		{"DEF", fmt.Sprintf("%d + %d", stats.Defense, stats.DefenseBonus)},
+		{"MDEF", fmt.Sprintf("%d + %d", stats.MDefense, stats.MDefenseBonus)},
+		{"FLEE", fmt.Sprintf("%d + %d", stats.Flee, stats.FleeBonus)},
+		{"ASPD", fmt.Sprintf("%d", stats.ASPD)},
+	}
+	statsWebSync(w.webOpen, rowArr, derived, stats.Points, canInc)
 }
 
 func (w *StatsWindow) OpenWindow(ctx Context) {
@@ -69,6 +109,25 @@ func (w *StatsWindow) OpenWindow(ctx Context) {
 }
 
 func (w *StatsWindow) Update(ctx Context) bool {
+	if statsWebEnabled() {
+		for _, action := range hudWebDrainActions("stats:") {
+			switch {
+			case action == "stats:close":
+				w.webOpen = false
+			case strings.HasPrefix(action, "stats:inc:"):
+				label := strings.TrimPrefix(action, "stats:inc:")
+				for _, row := range statsRows(ctx.Session) {
+					if !strings.EqualFold(row.label, label) {
+						continue
+					}
+					w.requestStatIncrease(ctx, row)
+					break
+				}
+			}
+		}
+		w.webSync(ctx)
+		return false
+	}
 	w.EnsureWindow(statsWindowWidth, statsWindowHeight)
 	if !w.IsOpen() {
 		return false

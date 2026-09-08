@@ -15,4 +15,8 @@ func menuWebSync(open bool) {}
 
 func hudWebEnabled() bool { return false }
 
+func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, canIncrease [6]bool) {}
+
+func statsWebEnabled() bool { return false }
+
 func hudFormatNumber(value int64) string { return formatHUDNumber(value) }

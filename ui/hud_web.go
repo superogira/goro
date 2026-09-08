@@ -48,6 +48,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroStatsAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "stats:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 }
 
 // hudWebDrainActions takes queued DOM interactions whose action starts
@@ -96,6 +104,41 @@ func hudWebSync(fields [15]string) {
 		obj.Set(name, fields[i])
 	}
 	sync.Invoke(obj)
+}
+
+// statsWebSync pushes the status window state to the page.
+func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, canIncrease [6]bool) {
+	fn := js.Global().Get("goroStatsSync")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	obj := js.Global().Get("Object").New()
+	obj.Set("open", open)
+	rowArr := js.Global().Get("Array").New(len(rows))
+	for i, row := range rows {
+		entry := js.Global().Get("Object").New()
+		entry.Set("label", row.label)
+		entry.Set("value", formatStatValue(row.value, row.bonus))
+		entry.Set("cost", row.cost)
+		entry.Set("canInc", canIncrease[i])
+		rowArr.SetIndex(i, entry)
+	}
+	obj.Set("rows", rowArr)
+	derArr := js.Global().Get("Array").New(len(derived))
+	for i, pair := range derived {
+		entry := js.Global().Get("Object").New()
+		entry.Set("label", pair[0])
+		entry.Set("value", pair[1])
+		derArr.SetIndex(i, entry)
+	}
+	obj.Set("derived", derArr)
+	obj.Set("points", points)
+	fn.Invoke(obj)
+}
+
+// statsWebEnabled reports whether the page provides the DOM status window.
+func statsWebEnabled() bool {
+	return js.Global().Get("goroStatsSync").Type() == js.TypeFunction
 }
 
 // menuWebSync reports the menu window's visibility.

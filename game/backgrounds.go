@@ -68,9 +68,7 @@ func drawLoadingScreen(screen *render.Frame, img *render.Image) {
 		render.DrawRect(screen, 0, 0, width, height, color.RGBA{A: 255})
 	}
 	render.DrawRect(screen, 0, 0, width, height, color.RGBA{A: 110})
-	if text := render.OutlinedTextImage("Now Loading...", color.RGBA{R: 255, G: 255, B: 255, A: 255}, color.RGBA{A: 190}); text != nil {
-		var opts render.DrawImageOptions
-		opts.GeoM.Translate((width-float64(text.Bounds().Dx()))/2, (height-float64(text.Bounds().Dy()))/2)
-		screen.DrawImage(text, &opts)
-	}
+	// The label renders as page DOM (crisp, zero canvas cost); the cover
+	// keeps only the background image and dim here.
+	render.SetWebLoading(true)
 }

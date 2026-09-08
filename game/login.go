@@ -582,6 +582,9 @@ func (m *LoginMode) applyLoginMapChange(ctx client.Context, change network.MapCh
 }
 
 func (m *LoginMode) Draw(ctx client.Context, screen *render.Frame) {
+	// Cleared every frame and re-raised by drawLoadingScreen when a load
+	// cover is actually drawn; memoized on the page side.
+	render.SetWebLoading(false)
 	m.drawBackground(ctx, screen)
 }
 

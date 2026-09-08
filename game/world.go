@@ -1537,6 +1537,7 @@ func (m *WorldMode) requestNPCTalk(ctx client.Context, actor worldstate.Actor, s
 }
 
 func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
+	render.SetWebLoading(false)
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)

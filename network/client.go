@@ -40,9 +40,14 @@ type Client struct {
 	packets []Packet
 	status  string
 	errs    []error
+
+	mapKeepaliveInterval time.Duration
+	mapKeepaliveStop     chan struct{}
 }
 
 const sendQueueSize = 256
+
+const defaultMapKeepaliveInterval = 5 * time.Second
 
 type outboundPacket struct {
 	data     []byte
@@ -51,10 +56,11 @@ type outboundPacket struct {
 
 func NewClient(clientDate int, trace bool) *Client {
 	return &Client{
-		clientDate: clientDate,
-		trace:      trace,
-		framer:     NewFramer(PacketLengths2008()),
-		status:     "offline",
+		clientDate:           clientDate,
+		trace:                trace,
+		framer:               NewFramer(PacketLengths2008()),
+		status:               "offline",
+		mapKeepaliveInterval: defaultMapKeepaliveInterval,
 	}
 }
 
@@ -84,6 +90,7 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	conn := c.conn
 	sendCh := c.sendCh
+	c.stopMapKeepaliveLocked()
 	c.conn = nil
 	c.sendCh = nil
 	c.status = "offline"
@@ -98,19 +105,35 @@ func (c *Client) Close() {
 }
 
 func (c *Client) Send(data []byte) error {
+	_, err := c.enqueue(data, nil)
+	return err
+}
+
+// enqueue adds a packet to the current connection's writer. When expected is
+// non-nil, it also prevents work owned by an old connection from crossing a
+// reconnect boundary.
+func (c *Client) enqueue(data []byte, expected net.Conn) (net.Conn, error) {
 	packet := append([]byte(nil), data...)
 	start := time.Now()
 	c.mu.Lock()
 	sendCh := c.sendCh
-	if c.conn == nil || sendCh == nil {
+	conn := c.conn
+	if conn == nil || sendCh == nil {
 		c.mu.Unlock()
-		return fmt.Errorf("not connected")
+		if expected == nil {
+			return nil, fmt.Errorf("not connected")
+		}
+		return nil, ErrDisconnected
+	}
+	if expected != nil && conn != expected {
+		c.mu.Unlock()
+		return nil, ErrDisconnected
 	}
 	select {
 	case sendCh <- outboundPacket{data: packet, enqueued: start}:
 	default:
 		c.mu.Unlock()
-		return fmt.Errorf("send queue full")
+		return nil, fmt.Errorf("send queue full")
 	}
 	c.mu.Unlock()
 	elapsed := time.Since(start)
@@ -119,7 +142,7 @@ func (c *Client) Send(data []byte) error {
 		headLen := min(len(packet), 32)
 		glog.Debugf("network enqueue opcode=0x%04X n=%d elapsed=%s head=%s", ID(packet), len(packet), elapsed, hex.EncodeToString(packet[:headLen]))
 	}
-	return nil
+	return conn, nil
 }
 
 func (c *Client) SendAccountLogin(username, password string, version uint32, clientType uint8) error {
@@ -212,17 +235,6 @@ func (c *Client) SendPing(accountID uint32) error {
 	return err
 }
 
-func (c *Client) SendTick(clientTick uint32) error {
-	packet := BuildTickSendPacketForClientDate(clientTick, c.clientDate)
-	err := c.Send(packet)
-	if err == nil && c.trace {
-		glog.Debugf("sent CZ_REQUEST_TIME opcode=0x%04X tick=%d client_date=%d", ID(packet), clientTick, c.clientDate)
-	} else if err != nil {
-		glog.Warnf("send CZ_REQUEST_TIME failed opcode=0x%04X len=%d client_date=%d: %v", ID(packet), len(packet), c.clientDate, err)
-	}
-	return err
-}
-
 func (c *Client) SendNameRequest(gid uint32) error {
 	packet, ok := BuildNameRequestPacketForClientDate(gid, c.clientDate)
 	if !ok {
@@ -246,10 +258,15 @@ func (c *Client) SendMapServerEnter(accountID, charID, authCode, clientTick uint
 		ClientTick: clientTick,
 		Sex:        sex,
 	}, c.clientDate)
+	conn, err := c.enqueue(packet, nil)
+	if err != nil {
+		return err
+	}
 	if c.trace {
 		glog.Debugf("sent CZ_ENTER2 opcode=0x%04X len=%d client_date=%d sex_offset=%d", ID(packet), len(packet), c.clientDate, len(packet)-1)
 	}
-	return c.Send(packet)
+	c.startMapKeepalive(conn)
+	return nil
 }
 
 func (c *Client) SendWalkToXY(x, y int) error {
@@ -633,6 +650,7 @@ func (c *Client) clearConn(conn net.Conn) {
 	c.mu.Lock()
 	if c.conn == conn {
 		sendCh := c.sendCh
+		c.stopMapKeepaliveLocked()
 		c.conn = nil
 		c.sendCh = nil
 		c.status = "offline"

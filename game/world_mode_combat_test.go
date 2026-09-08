@@ -1572,7 +1572,6 @@ func TestPendingSkillTargetClickIgnoresWalkCooldown(t *testing.T) {
 			maxLevel: 10,
 		},
 		walkCooldownUntil: time.Now().Add(time.Hour),
-		tickCooldown:      2,
 	}
 	ctx := client.Context{
 		Input:   inputState,

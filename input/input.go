@@ -166,6 +166,20 @@ func (s *State) EndFrame() {
 	s.updateTouches()
 }
 
+// ResetKeyboard forgets held keys and pending keyboard input after focus loss.
+// Releases may happen in another window and never reach us. Clear the edge
+// history too, so cancellation does not trigger actions bound to key releases.
+func (s *State) ResetKeyboard() {
+	clear(s.keys)
+	clear(s.prev)
+	clear(s.justKeys)
+	clear(s.keyCodes)
+	clear(s.prevKeyCodes)
+	clear(s.justKeyCodes)
+	clear(s.justKeyCodeUps)
+	s.textInput = s.textInput[:0]
+}
+
 func (s *State) SetKey(key Key, pressed bool) {
 	if pressed && !s.keys[key] {
 		s.justKeys[key] = true

@@ -55,7 +55,7 @@ func TestWarpClickWalksTowardWarpActor(t *testing.T) {
 	world.UpsertActor(warp)
 
 	inputState := input.NewState()
-	mode := &WorldMode{tickCooldown: 2}
+	mode := &WorldMode{}
 	ctx := client.Context{
 		Input:   inputState,
 		Network: netClient,

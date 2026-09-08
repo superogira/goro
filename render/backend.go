@@ -578,6 +578,11 @@ func wireInput(events gpucontext.EventSource, state *input.State) {
 	events.OnKeyRelease(func(key gpucontext.Key, _ gpucontext.Modifiers) {
 		state.SetKeyCode(key, false)
 	})
+	events.OnFocus(func(focused bool) {
+		if !focused {
+			state.ResetKeyboard()
+		}
+	})
 	events.OnMouseMove(func(x, y float64) {
 		state.SetMousePosition(int(x+0.5), int(y+0.5))
 	})

@@ -25,7 +25,6 @@ import (
 type WorldMode struct {
 	walkCooldownUntil time.Time
 	nextHeldWalkAt    time.Time
-	tickCooldown      int
 	camera            followCamera
 	cameraShakeStart  time.Time
 	cameraShakeEnd    time.Time
@@ -558,9 +557,7 @@ func (m *WorldMode) Enter(ctx client.Context) {
 	// Server-driven digit displays load their sprite on first use; warm it
 	// with the rest of the map.
 	ctx.Resources.Prefetch(serverDigitSpritePrefetchGroups()...)
-	if err := ctx.Network.SendLoadEndAck(); err == nil {
-		m.tickCooldown = 1
-	}
+	_ = ctx.Network.SendLoadEndAck()
 }
 
 func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
@@ -702,17 +699,6 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	m.processActorMotionSounds(ctx, now)
 	m.processMapSounds(ctx, now)
 	m.playDueScheduledSounds(ctx, now)
-
-	if m.tickCooldown > 0 {
-		m.tickCooldown--
-	}
-	if m.tickCooldown == 0 {
-		if err := ctx.Network.SendTick(uint32(time.Now().UnixMilli())); err == nil {
-			m.tickCooldown = 300
-		} else {
-			m.tickCooldown = 60
-		}
-	}
 
 	m.camera.Update(ctx, now)
 	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
@@ -1414,8 +1400,6 @@ func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange
 		if ctx.Network != nil {
 			if err := ctx.Network.SendLoadEndAck(); err != nil {
 				glog.Warnf("same-map warp load ack failed map=%s x=%d y=%d: %v", change.MapName, change.X, change.Y, err)
-			} else {
-				m.tickCooldown = 1
 			}
 		}
 		return nil

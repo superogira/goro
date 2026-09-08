@@ -447,7 +447,6 @@ func TestGroundClickCancelsPendingAttackChase(t *testing.T) {
 	defer netClient.Close()
 	now := time.Now()
 	mode := &WorldMode{
-		tickCooldown: 2,
 		pendingAttack: attackIntent{
 			targetID:    300,
 			expires:     now.Add(time.Second),
@@ -504,7 +503,6 @@ func TestNPCClickIgnoresWalkCooldown(t *testing.T) {
 	inputState := input.NewState()
 	mode := &WorldMode{
 		walkCooldownUntil: time.Now().Add(time.Hour),
-		tickCooldown:      2,
 	}
 	ctx := client.Context{
 		Input:   inputState,
@@ -525,6 +523,48 @@ func TestNPCClickIgnoresWalkCooldown(t *testing.T) {
 	readBotTestPackets(t, serverConn, network.BuildNPCContactPacket(npc.ID, 0))
 }
 
+func TestNPCClickAfterKeyboardFocusLoss(t *testing.T) {
+	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	world := worldstate.New()
+	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
+	world.GAT = flatWalkableGAT(64, 64)
+	npc := worldstate.Actor{
+		ID: 300, X: 11, Y: 20,
+		ObjectType: actorObjectTypeNPC, HasObjectType: true,
+	}
+	world.UpsertActor(npc)
+	ctx := client.Context{
+		Input: input.NewState(), Network: networkClient,
+		Session: &session.Session{AccountID: 2000000, CharID: 150000},
+		World:   world, ScreenW: 800, ScreenH: 600,
+	}
+	mode := NewWorldMode()
+	projection := mode.sceneProjection(ctx, ctx.ScreenW, ctx.ScreenH, time.Now())
+	point := projection.Project(cellCenter(float64(npc.X)), cellCenter(float64(npc.Y)), 0)
+	ctx.Input.SetMousePosition(int(point.x), int(point.y))
+	ctx.Input.SetKey(input.KeyAlt, true)
+	ctx.Input.EndFrame()
+	ctx.Input.SetMouseButton(input.MouseButtonLeft, true)
+
+	// A stuck Alt used to route this city NPC click to companion commands,
+	// even when the player had no companion. The cursor still said "talk".
+	if got := mode.cursorDesiredAction(ctx, projection, time.Now()); got != cursorActionTalk {
+		t.Fatalf("cursor = %d, want talk", got)
+	}
+	if !mode.handleCompanionAICommandClick(ctx, time.Now()) {
+		t.Fatal("test did not reproduce the Alt-click interception")
+	}
+	ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
+	ctx.Input.EndFrame()
+	ctx.Input.ResetKeyboard() // The render backend does this on focus loss.
+	ctx.Input.SetMouseButton(input.MouseButtonLeft, true)
+
+	if _, err := mode.Update(ctx); err != nil {
+		t.Fatal(err)
+	}
+	readBotTestPackets(t, serverConn, network.BuildNPCContactPacket(npc.ID, 0))
+}
+
 func TestGroundClickRespectsWalkCooldown(t *testing.T) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
@@ -534,7 +574,7 @@ func TestGroundClickRespectsWalkCooldown(t *testing.T) {
 	networkClient := network.NewClient(20080910, false)
 	defer networkClient.Close()
 	blockedUntil := time.Now().Add(time.Hour)
-	mode := &WorldMode{walkCooldownUntil: blockedUntil, tickCooldown: 2}
+	mode := &WorldMode{walkCooldownUntil: blockedUntil}
 	ctx := client.Context{
 		Input:   inputState,
 		Network: networkClient,

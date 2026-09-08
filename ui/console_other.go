@@ -18,3 +18,10 @@ func consoleWebInstallTapHook() {}
 
 // consoleWebConsumeTap always reports no pending tap on native.
 func consoleWebConsumeTap() bool { return false }
+
+// consoleWebInstallMessageHook is the native no-op twin of the page message
+// injection hook.
+func consoleWebInstallMessageHook() {}
+
+// consoleWebDrainMessages always reports nothing on native.
+func consoleWebDrainMessages() []ConsoleMessage { return nil }

@@ -117,6 +117,10 @@ func (c *ChatConsole) UpdatePresentation(ctx client.Context) {
 	c.ctx = ctx
 	c.updatePlayerMarkerStability(ctx)
 	c.syncWebConsole()
+	consoleWebInstallMessageHook()
+	for _, msg := range consoleWebDrainMessages() {
+		c.addMessageColor(msg.Color, "%s", msg.Text)
+	}
 	if consoleWebLogEnabled() && !c.active {
 		// Dormant web console: the page DOM shows the log, so the canvas
 		// window (and its per-message raster) stays closed. Tapping the
@@ -247,6 +251,17 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 		return
 	}
 	if c.cacheKey != key {
+		if c.active {
+			// A tree swap while the player is typing unmounts the shared
+			// input field, and TextField.Unmount clears the focus of any
+			// focused field leaving the tree — closing the console and
+			// collapsing the soft keyboard on every incoming message.
+			// Defer message-driven rebuilds until the console goes dormant;
+			// the pending lines are already in c.messages and render (or
+			// sync to the page log) as soon as typing ends.
+			c.cacheKey = key
+			return
+		}
 		content := c.widgetTree(width, height)
 		c.cacheKey = key
 		c.window.SetContent(content)
@@ -1092,6 +1107,11 @@ func (c *ChatConsole) armPendingMessageRedraw() {
 
 func (c *ChatConsole) flushPendingMessageRedraw(ctx client.Context) {
 	if !c.pendingMessageRedraw || !c.pendingMessageRedrawReady {
+		return
+	}
+	// Typing sessions must not pay a tree swap (see ensureWindow): the
+	// unmount of the shared input field would drop focus mid-typing.
+	if c.active {
 		return
 	}
 	// Minimap marker redraws are queued after player cell changes. Wait for that

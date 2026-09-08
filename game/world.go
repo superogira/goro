@@ -1108,6 +1108,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.statsWindow.Update(ctx) {
 		return nil, nil
 	}
+	m.ui.basicMenu.DrainWebActions(ctx, m.basicMenuCallbacks(ctx))
 	if !m.ui.keyboardInputBlocked(ctx) {
 		if m.ui.basicMenu.Update(ctx, m.basicMenuCallbacks(ctx)) {
 			return nil, nil

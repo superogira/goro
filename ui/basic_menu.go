@@ -90,6 +90,33 @@ func (m *BasicMenu) Close() {
 	m.dismissed = true
 }
 
+// DrainWebActions services DOM menu taps unconditionally: the canvas menu
+// is gated on keyboardInputBlocked (modal safety), but a tap on a real DOM
+// button is always an intentional act and must not be swallowed because a
+// modal happened to be open.
+func (m *BasicMenu) DrainWebActions(ctx client.Context, callbacks BasicMenuCallbacks) {
+	if m == nil || !hudWebEnabled() {
+		return
+	}
+	m.callbacks = callbacks
+	for _, action := range hudWebDrainActions() {
+		if !strings.HasPrefix(action, "menu:") {
+			continue
+		}
+		switch key := strings.TrimPrefix(action, "menu:"); key {
+		case "tab":
+			m.open = true
+			m.dismissed = false
+			menuWebSync(true)
+		case "close":
+			m.Close()
+			menuWebSync(false)
+		default:
+			m.invoke(key)
+		}
+	}
+}
+
 func (m *BasicMenu) Rebind(_ client.Context, callbacks BasicMenuCallbacks) {
 	m.callbacks = callbacks
 }
@@ -141,22 +168,6 @@ func (m *BasicMenu) Update(ctx client.Context, callbacks BasicMenuCallbacks) boo
 		if m.open != m.webSyncedOpen {
 			m.webSyncedOpen = m.open
 			menuWebSync(m.open)
-		}
-		for _, action := range hudWebDrainActions() {
-			if !strings.HasPrefix(action, "menu:") {
-				continue
-			}
-			switch key := strings.TrimPrefix(action, "menu:"); key {
-			case "tab":
-				m.open = true
-				m.dismissed = false
-				menuWebSync(true)
-			case "close":
-				m.Close()
-				menuWebSync(false)
-			default:
-				m.invoke(key)
-			}
 		}
 		return false
 	}

@@ -84,18 +84,24 @@ func (m *Minimap) minimapWebSync(ctx Context, now time.Time) {
 	obj.Set("name", ctx.World.MapName)
 	obj.Set("mapData", m.minimapWebMapData(size))
 
+	// Cell Y grows southward while the minimap image is drawn north-up
+	// (the canvas path maps y from the bottom: projected.y + h - y*frac).
+	flipY := func(cellY int) float64 {
+		return 1 - float64(cellY)/float64(mapH)
+	}
 	playerObj := js.Global().Get("Object").New()
 	playerObj.Set("fx", float64(player.X)/float64(mapW))
-	playerObj.Set("fy", float64(player.Y)/float64(mapH))
+	playerObj.Set("fy", flipY(player.Y))
 	playerObj.Set("dir", player.Dir)
 	obj.Set("player", playerObj)
+	obj.Set("coords", fmt.Sprintf("X:%d Y:%d", player.X, player.Y))
 
 	compass := js.Global().Get("Array").New(len(m.compass))
 	i := 0
 	for _, marker := range m.compass {
 		entry := js.Global().Get("Object").New()
 		entry.Set("fx", float64(marker.x)/float64(mapW))
-		entry.Set("fy", float64(marker.y)/float64(mapH))
+		entry.Set("fy", flipY(marker.y))
 		entry.Set("css", fmt.Sprintf("#%02x%02x%02x", marker.color.R, marker.color.G, marker.color.B))
 		compass.SetIndex(i, entry)
 		i++
@@ -107,7 +113,7 @@ func (m *Minimap) minimapWebSync(ctx Context, now time.Time) {
 	for _, marker := range m.guild {
 		entry := js.Global().Get("Object").New()
 		entry.Set("fx", float64(marker.x)/float64(mapW))
-		entry.Set("fy", float64(marker.y)/float64(mapH))
+		entry.Set("fy", flipY(marker.y))
 		guild.SetIndex(i, entry)
 		i++
 	}
@@ -117,7 +123,7 @@ func (m *Minimap) minimapWebSync(ctx Context, now time.Time) {
 	if m.boss != nil {
 		bossObj := js.Global().Get("Object").New()
 		bossObj.Set("fx", float64(m.boss.x)/float64(mapW))
-		bossObj.Set("fy", float64(m.boss.y)/float64(mapH))
+		bossObj.Set("fy", flipY(m.boss.y))
 		boss = bossObj
 	}
 	obj.Set("boss", boss)

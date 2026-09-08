@@ -581,6 +581,10 @@ func wireInput(events gpucontext.EventSource, state *input.State) {
 	events.OnFocus(func(focused bool) {
 		if !focused {
 			state.ResetKeyboard()
+			// A press whose release lands in another window leaves the button
+			// stuck down; no later press can report JustPressed until it is
+			// cleared, killing every clickable UI after alt+tab.
+			state.ResetPointer()
 		}
 	})
 	events.OnMouseMove(func(x, y float64) {

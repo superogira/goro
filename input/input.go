@@ -166,6 +166,17 @@ func (s *State) EndFrame() {
 	s.updateTouches()
 }
 
+// ResetPointer forgets held mouse buttons after focus loss: a press whose
+// release landed in another window (alt+tab, OS dialogs) leaves the button
+// stuck down, and without a false→true edge no later press reports
+// JustPressed — every clickable UI dies until the next stuck-release.
+// Clearing the button also arms the next press as a fresh edge.
+func (s *State) ResetPointer() {
+	clear(s.buttons)
+	clear(s.justMouse)
+	clear(s.justMouseReleased)
+}
+
 // ResetKeyboard forgets held keys and pending keyboard input after focus loss.
 // Releases may happen in another window and never reach us. Clear the edge
 // history too, so cancellation does not trigger actions bound to key releases.

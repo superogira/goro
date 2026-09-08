@@ -30,20 +30,20 @@ const (
 
 	characterHUDWidth      = 324
 	characterHUDTitleH     = 18
-	characterHUDHeight     = 134
+	characterHUDHeight     = 148
 	characterHUDPadX       = 10
 	characterHUDPadY       = 8
 	characterHUDRowGap     = 6
 	characterHUDBarH       = 7
-	characterHUDBarGap     = 3
-	characterHUDTextH      = 13
+	characterHUDBarGap     = 4
+	characterHUDTextH      = 16
 	characterHUDExpBarH    = 6
 	characterHUDCloseSize  = 17
 	characterHUDStatColumn = 146
-	characterHUDTextSize  = 11
+	characterHUDTextSize  = 13
 
-	hudEdgeTabW = 22
-	hudEdgeTabH = 36
+	hudEdgeTabW = 26
+	hudEdgeTabH = 44
 	characterHUDExpLabelW  = 64
 )
 
@@ -282,10 +282,10 @@ func characterEdgeTabRect() (int, int, int, int) {
 func (w *CharacterWindow) drawEdgeTab(screen *render.Frame) {
 	tx, ty, tw, th := characterEdgeTabRect()
 	DrawRoundedSurface(screen, tx, ty, tw, th, characterHUDBackground, characterHUDBorder, characterHUDRadius)
-	glyphX := tx + tw/2 - 5
-	render.DrawRect(screen, float64(glyphX), float64(ty+9), 10, 4, characterHUDHPColor)
-	render.DrawRect(screen, float64(glyphX), float64(ty+16), 7, 4, characterHUDSPColor)
-	render.DrawRect(screen, float64(glyphX), float64(ty+23), 9, 3, characterHUDEXPColor)
+	glyphX := tx + tw/2 - 6
+	render.DrawRect(screen, float64(glyphX), float64(ty+10), 12, 5, characterHUDHPColor)
+	render.DrawRect(screen, float64(glyphX), float64(ty+19), 9, 5, characterHUDSPColor)
+	render.DrawRect(screen, float64(glyphX), float64(ty+28), 11, 4, characterHUDEXPColor)
 }
 
 func characterEdgeTabHit(mouseX, mouseY int) bool {

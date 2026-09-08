@@ -4,6 +4,7 @@ import (
 	"image/color"
 
 
+
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/render"
@@ -26,7 +27,7 @@ const (
 	basicMenuGapY      = 5
 	basicMenuPad       = 8
 
-	basicMenuCloseSize = 14
+	basicMenuCloseSize = 17
 )
 
 var (
@@ -195,7 +196,7 @@ func (m *BasicMenu) Draw(screen *render.Frame) {
 		DrawRoundedSurface(screen, tx, ty, tw, th, basicMenuBackground, basicMenuBorder, characterHUDRadius)
 		// Hamburger glyph: three stacked lines.
 		for i := 0; i < 3; i++ {
-			render.DrawRect(screen, float64(tx+5), float64(ty+11+i*6), 12, 3, basicMenuText)
+			render.DrawRect(screen, float64(tx+6), float64(ty+14+i*8), 14, 3, basicMenuText)
 		}
 		return
 	}
@@ -204,22 +205,11 @@ func (m *BasicMenu) Draw(screen *render.Frame) {
 		bx, by, bw, bh := m.buttonRect(i)
 		DrawRoundedSurface(screen, bx, by, bw, bh, basicMenuButtonBack, basicMenuBorder, 6)
 		if labelW := render.MeasureUIText(button.label, characterHUDTextSize); labelW > 0 {
-			render.DrawUITextAtSize(screen, button.label, float64(bx+(bw-int(labelW))/2), float64(by+(bh-13)/2), basicMenuText, characterHUDTextSize)
+			render.DrawUITextAtSize(screen, button.label, float64(bx+(bw-int(labelW))/2), float64(by+(bh-16)/2), basicMenuText, characterHUDTextSize)
 		}
 	}
 	cx, cy, cw, ch := m.closeRect()
-	DrawRoundedSurface(screen, cx, cy, cw, ch, basicMenuButtonBack, basicMenuBorder, 4)
-	drawMenuCloseGlyph(screen, cx, cy, cw, ch)
-}
-
-func drawMenuCloseGlyph(screen *render.Frame, x, y, w, h int) {
-	pad := 4
-	len := w - pad*2
-	for i := 0; i < len; i++ {
-		px := x + pad + i
-		render.DrawRect(screen, float64(px), float64(y+pad+i*h/len), 1, 1, basicMenuText)
-		render.DrawRect(screen, float64(px), float64(y+h-pad-1-i*h/len), 1, 1, basicMenuText)
-	}
+	DrawCloseButton(screen, cx, cy, cw, ch, basicMenuButtonBack, basicMenuText)
 }
 
 func (m *BasicMenu) invoke(key string) {

@@ -77,9 +77,14 @@ func NonPCSpriteResourceCandidates(job int, resourceName string, extension strin
 		out = append(out, path)
 	}
 	addStem := func(root string) {
-		add(fmt.Sprintf("%s%s.%s", root, name, extension))
+		// Lowercase leads: web deployments serve unpacked kRO data with
+		// lowercase filenames on case-sensitive hosts, so the exact-case
+		// spelling from the server's mob/NPC tables pays a 404 first when
+		// ordered before it. Stock archives resolve via the pack pre-scan
+		// before any HTTP, so the order only matters for loose-file hosts.
+		add(fmt.Sprintf("%s%s.%s", root, lowerName, extension))
 		if lowerName != name {
-			add(fmt.Sprintf("%s%s.%s", root, lowerName, extension))
+			add(fmt.Sprintf("%s%s.%s", root, name, extension))
 		}
 	}
 
@@ -102,8 +107,8 @@ func NonPCSpriteResourceCandidates(job int, resourceName string, extension strin
 		addStem("data\\sprite\\")
 		return out
 	}
-	addStem("data\\sprite\\NPC\\")
 	addStem("data\\sprite\\npc\\")
+	addStem("data\\sprite\\NPC\\")
 	return out
 }
 

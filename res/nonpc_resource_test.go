@@ -8,10 +8,10 @@ import (
 func TestNonPCSpriteResourceCandidatesNPC(t *testing.T) {
 	got := NonPCSpriteResourceCandidates(47, "1_M_01", "act")
 	want := []string{
-		"data\\sprite\\NPC\\1_M_01.act",
-		"data\\sprite\\NPC\\1_m_01.act",
-		"data\\sprite\\npc\\1_M_01.act",
 		"data\\sprite\\npc\\1_m_01.act",
+		"data\\sprite\\npc\\1_M_01.act",
+		"data\\sprite\\NPC\\1_m_01.act",
+		"data\\sprite\\NPC\\1_M_01.act",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("candidate count = %d, want %d: %#v", len(got), len(want), got)
@@ -28,12 +28,12 @@ func TestNonPCSpriteResourceCandidatesMonster(t *testing.T) {
 	// The kRO-canonical Korean folder leads so stock archives (and the web
 	// resource pack) resolve without the English-root probe misses.
 	want := []string{
-		legacyMonsterSpriteRoot + "PORING.spr",
 		legacyMonsterSpriteRoot + "poring.spr",
-		"data\\sprite\\monster\\PORING.spr",
+		legacyMonsterSpriteRoot + "PORING.spr",
 		"data\\sprite\\monster\\poring.spr",
-		"data\\sprite\\PORING.spr",
+		"data\\sprite\\monster\\PORING.spr",
 		"data\\sprite\\poring.spr",
+		"data\\sprite\\PORING.spr",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("candidate count = %d, want %d: %#v", len(got), len(want), got)

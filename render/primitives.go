@@ -1,6 +1,10 @@
 package render
 
 import (
+	gg "github.com/gogpu/gg"
+	uirender "github.com/gogpu/ui/render"
+	"github.com/kivutar/goro/ui/rotheme"
+	"github.com/gogpu/ui/widget"
 	"fmt"
 	"image"
 	"image/color"
@@ -406,6 +410,32 @@ func DrawActorUILabels(dst *Frame, labels []string, emblem *Image, centerX, y fl
 func DrawUITextAt(dst *Frame, text string, x, y float64, foreground color.RGBA) {
 	drawOrQueueUITextLabel(dst, text, x, y, foreground, color.RGBA{}, false, false, 12)
 }
+
+// DrawUITextAtSize is DrawUITextAt with an explicit font size — use
+// rotheme.Default.Typography.TextSize to match the console windows.
+func DrawUITextAtSize(dst *Frame, text string, x, y float64, foreground color.RGBA, size float32) {
+	drawOrQueueUITextLabel(dst, text, x, y, foreground, color.RGBA{}, false, false, size)
+}
+
+// uiTextMeasureCtx is a tiny throwaway canvas so MeasureUIText uses the
+// exact font metrics the GPU label pipeline renders with.
+var uiTextMeasureOnce sync.Once
+
+// MeasureUIText reports the width of text in the console font, matching
+// the raster the GPU label pipeline produces.
+func MeasureUIText(text string, size float32) float32 {
+	uiTextMeasureOnce.Do(func() {
+		cc := gg.NewContext(4, 4)
+		uiTextMeasureCanvas = uirender.NewCanvas(cc, 4, 4)
+	})
+	if uiTextMeasureCanvas == nil {
+		w, _ := BitmapTextSize(text)
+		return float32(w)
+	}
+	return rotheme.MeasureText(uiTextMeasureCanvas, text, size, false)
+}
+
+var uiTextMeasureCanvas widget.Canvas
 
 func DrawCenteredUITextAt(dst *Frame, text string, centerX, y float64, foreground color.RGBA) {
 	drawOrQueueUITextLabel(dst, text, centerX, y, foreground, color.RGBA{}, true, false, 12)

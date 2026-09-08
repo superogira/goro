@@ -40,6 +40,7 @@ const (
 	characterHUDExpBarH    = 6
 	characterHUDCloseSize  = 17
 	characterHUDStatColumn = 146
+	characterHUDTextSize  = 11
 	characterHUDExpLabelW  = 64
 )
 
@@ -179,7 +180,7 @@ func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
 	// Translucent rounded panel — no opaque window chrome, matching the
 	// DOM chat log's look so the HUD reads as an overlay, not a dialog.
 	DrawSurface(screen, x, y, w.width, w.height, characterHUDBackground, WindowBorderColor)
-	DrawTitleTextAt(screen, x+4, y, characterHUDTitleH, title, characterHUDTextColor)
+	render.DrawUITextAtSize(screen, title, float64(x+4), float64(y+3), characterHUDTextColor, characterHUDTextSize)
 	DrawCloseButton(screen, x+w.width-characterHUDCloseSize-4, y+1, characterHUDCloseSize-2, characterHUDCloseSize-2,
 		characterHUDPanelBack, characterHUDMutedColor)
 
@@ -206,19 +207,19 @@ func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
 	cy += characterHUDTextH + characterHUDRowGap + 4
 
 	// Weight / Zeny row.
-	render.DrawBitmapTextAtColor(screen, fmt.Sprintf("Weight : %d / %d", displayWeight(inventory.Weight), displayWeight(inventory.MaxWeight)),
-		cx, cy, weightColor)
+	render.DrawUITextAtSize(screen, fmt.Sprintf("Weight : %d / %d", displayWeight(inventory.Weight), displayWeight(inventory.MaxWeight)),
+		float64(cx), float64(cy), weightColor, characterHUDTextSize)
 	zeny := fmt.Sprintf("Zeny : %s", formatHUDNumber(inventory.Zeny))
-	if zenyW, _ := render.BitmapTextSize(zeny); zenyW > 0 {
-		render.DrawBitmapTextAtColor(screen, zeny, cx+contentW-zenyW, cy, characterHUDTextColor)
+	if zenyW := int(render.MeasureUIText(zeny, characterHUDTextSize)); zenyW > 0 {
+		render.DrawUITextAtSize(screen, zeny, float64(cx+contentW-zenyW), float64(cy), characterHUDTextColor, characterHUDTextSize)
 	} else {
-		render.DrawBitmapTextAtColor(screen, zeny, cx, cy, characterHUDTextColor)
+		render.DrawUITextAtSize(screen, zeny, float64(cx), float64(cy), characterHUDTextColor, characterHUDTextSize)
 	}
 }
 
 func drawHUDBarsColumn(screen *render.Frame, x, y, width int, label string, current, maxValue int, fill color.RGBA) {
-	render.DrawBitmapTextAtColor(screen, fmt.Sprintf("%s %d / %d", label, current, maxValue),
-		x, y, characterHUDMutedColor)
+	render.DrawUITextAtSize(screen, fmt.Sprintf("%s %d / %d", label, current, maxValue),
+		float64(x), float64(y), characterHUDMutedColor, characterHUDTextSize)
 	barY := y + characterHUDTextH + characterHUDBarGap
 	render.DrawRect(screen, float64(x), float64(barY), float64(width), float64(characterHUDBarH), characterHUDBarBackColor)
 	if ratio := ratioInt(current, maxValue); ratio > 0 {
@@ -231,7 +232,7 @@ func drawHUDBarsColumn(screen *render.Frame, x, y, width int, label string, curr
 }
 
 func drawHUDExpRow(screen *render.Frame, x, y, width int, label string, level int, current, next int64) {
-	render.DrawBitmapTextAtColor(screen, fmt.Sprintf("%s Lv. %d", label, level), x, y, characterHUDTextColor)
+	render.DrawUITextAtSize(screen, fmt.Sprintf("%s Lv. %d", label, level), float64(x), float64(y), characterHUDTextColor, characterHUDTextSize)
 	barX := x + characterHUDExpLabelW
 	barW := width - characterHUDExpLabelW
 	if barW <= 0 {
@@ -247,8 +248,8 @@ func drawHUDExpRow(screen *render.Frame, x, y, width int, label string, level in
 		render.DrawRect(screen, float64(barX), float64(barY), float64(fillW), float64(characterHUDExpBarH), characterHUDEXPColor)
 	}
 	percent := formatEXPPercent(current, next)
-	if percentW, _ := render.BitmapTextSize(percent); percentW > 0 && barW-percentW-4 > 0 {
-		render.DrawBitmapTextAtColor(screen, percent, barX+barW-percentW-4, y, characterHUDMutedColor)
+	if percentW := int(render.MeasureUIText(percent, characterHUDTextSize)); percentW > 0 && barW-percentW-4 > 0 {
+		render.DrawUITextAtSize(screen, percent, float64(barX+barW-percentW-4), float64(y), characterHUDMutedColor, characterHUDTextSize)
 	}
 }
 

@@ -514,7 +514,7 @@ func (m *Manager) readCandidate(candidate string) ([]byte, error) {
 // fallback for deployments that have not split it yet.
 func (m *Manager) scanArchives() {
 	for _, name := range []string{"data_web1.grf", "data_web.grf"} {
-		data, err := webFetchProgress(name, 10*time.Minute, func(loaded, total int64) {
+		data, err := webFetchPack(name, 10*time.Minute, func(loaded, total int64) {
 			reportPackProgress(name, loaded, total)
 		})
 		if err != nil {
@@ -551,7 +551,7 @@ func (m *Manager) StartDeferredWebPack() {
 	p.mu.Unlock()
 	const name = "data_web2.grf"
 	go func() {
-		data, err := webFetchProgress(name, 15*time.Minute, func(loaded, total int64) {
+		data, err := webFetchPack(name, 15*time.Minute, func(loaded, total int64) {
 			reportPackProgress(name, loaded, total)
 		})
 		p.mu.Lock()
@@ -589,6 +589,65 @@ func (m *Manager) PollDeferredWebPack() {
 		return
 	}
 	m.Archives = append(m.Archives, archive)
+}
+
+// webFetchPack downloads a web pack through the page's goroPackFetch
+// helper: CacheStorage-backed (Chrome's HTTP cache refuses entries this
+// large), byte-streamed progress, and a cheap HEAD revalidation for cached
+// copies. Falls back to webFetchProgress when the helper is absent.
+func webFetchPack(path string, timeout time.Duration, onProgress func(loaded, total int64)) ([]byte, error) {
+	helper := js.Global().Get("goroPackFetch")
+	if helper.Type() != js.TypeFunction {
+		return webFetchProgress(path, timeout, onProgress)
+	}
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	progress := js.FuncOf(func(this js.Value, args []js.Value) any {
+		if onProgress != nil && len(args) >= 2 {
+			loaded, total := int64(args[0].Float()), int64(args[1].Float())
+			if total < 0 {
+				total = -1
+			}
+			onProgress(loaded, total)
+		}
+		return nil
+	})
+	onFulfilled := js.FuncOf(func(this js.Value, args []js.Value) any {
+		buffer := args[0]
+		size := buffer.Get("byteLength").Int()
+		data := make([]byte, size)
+		js.CopyBytesToGo(data, buffer)
+		done <- result{data: data}
+		return nil
+	})
+	onRejected := js.FuncOf(func(this js.Value, args []js.Value) any {
+		err := fmt.Errorf("fetch %s failed", path)
+		if len(args) > 0 && args[0].Type() == js.TypeString {
+			err = fmt.Errorf("fetch %s: %s", path, args[0].String())
+		}
+		done <- result{err: err}
+		return nil
+	})
+	helper.Invoke(path, progress).Call("then", onFulfilled, onRejected)
+	defer onFulfilled.Release()
+	defer onRejected.Release()
+	defer progress.Release()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case out := <-done:
+			return out.data, out.err
+		default:
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("fetch %s: timed out", path)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // reportPackProgress forwards pack download progress to the page hook

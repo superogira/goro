@@ -41,6 +41,9 @@ const (
 	characterHUDCloseSize  = 17
 	characterHUDStatColumn = 146
 	characterHUDTextSize  = 11
+
+	hudEdgeTabW = 22
+	hudEdgeTabH = 36
 	characterHUDExpLabelW  = 64
 )
 
@@ -51,8 +54,10 @@ var (
 	characterHUDMutedColor    = color.RGBA{R: 190, G: 200, B: 214, A: 255}
 	characterHUDBarBackColor  = color.RGBA{R: 64, G: 70, B: 82, A: 160}
 	characterHUDEXPColor      = color.RGBA{R: 170, G: 182, B: 200, A: 255}
-	characterHUDBackground    = color.RGBA{R: 16, G: 20, B: 27, A: 185}
+	characterHUDBackground    = color.RGBA{R: 14, G: 18, B: 24, A: 189}
 	characterHUDPanelBack     = color.RGBA{R: 255, G: 255, B: 255, A: 18}
+	characterHUDBorder        = color.RGBA{R: 180, G: 198, B: 218, A: 94}
+	characterHUDRadius        = float32(8)
 )
 
 // CharacterWindow is the always-on character HUD overlay. It keeps the
@@ -112,6 +117,11 @@ func (w *CharacterWindow) Update(ctx client.Context) bool {
 		if !w.dismissed {
 			w.open = true
 		} else {
+			if ctx.Input.MouseJustPressed(input.MouseButtonLeft) && characterEdgeTabHit(ctx.Input.MouseX, ctx.Input.MouseY) {
+				w.open = true
+				w.dismissed = false
+				return true
+			}
 			return false
 		}
 	}
@@ -165,6 +175,10 @@ func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
 	if w.width == 0 {
 		return
 	}
+	if w.dismissed {
+		w.drawEdgeTab(screen)
+		return
+	}
 	character, vitals, progress, inventory := characterWindowData(ctx.Session)
 	name := strings.TrimSpace(character.Name)
 	if name == "" {
@@ -177,10 +191,14 @@ func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
 	}
 
 	x, y := w.x, w.y
-	// Translucent rounded panel — no opaque window chrome, matching the
-	// DOM chat log's look so the HUD reads as an overlay, not a dialog.
-	DrawSurface(screen, x, y, w.width, w.height, characterHUDBackground, WindowBorderColor)
-	render.DrawUITextAtSize(screen, title, float64(x+4), float64(y+3), characterHUDTextColor, characterHUDTextSize)
+	// Translucent rounded panel in the DOM chat log's style (same radius,
+	// background, and border) so every overlay reads as one family.
+	DrawRoundedSurface(screen, x, y, w.width, w.height, characterHUDBackground, characterHUDBorder, characterHUDRadius)
+	if titleW := render.MeasureUIText(title, characterHUDTextSize); titleW > 0 {
+		render.DrawUITextAtSize(screen, title, float64(x+(w.width-int(titleW))/2), float64(y+3), characterHUDTextColor, characterHUDTextSize)
+	} else {
+		render.DrawUITextAtSize(screen, title, float64(x+4), float64(y+3), characterHUDTextColor, characterHUDTextSize)
+	}
 	DrawCloseButton(screen, x+w.width-characterHUDCloseSize-4, y+1, characterHUDCloseSize-2, characterHUDCloseSize-2,
 		characterHUDPanelBack, characterHUDMutedColor)
 
@@ -200,7 +218,7 @@ func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
 
 	// EXP panel.
 	panelH := 2*characterHUDTextH + characterHUDRowGap + 2*4
-	DrawSurface(screen, cx-4, cy-4, contentW+8, panelH+8, characterHUDPanelBack, color.RGBA{})
+	DrawRoundedSurface(screen, cx-4, cy-4, contentW+8, panelH+8, characterHUDPanelBack, color.RGBA{}, 6)
 	drawHUDExpRow(screen, cx, cy, contentW, "Base", progress.BaseLevel, progress.BaseExp, progress.NextBaseExp)
 	cy += characterHUDTextH + 4
 	drawHUDExpRow(screen, cx, cy, contentW, "Job", progress.JobLevel, progress.JobExp, progress.NextJobExp)
@@ -251,6 +269,28 @@ func drawHUDExpRow(screen *render.Frame, x, y, width int, label string, level in
 	if percentW := int(render.MeasureUIText(percent, characterHUDTextSize)); percentW > 0 && barW-percentW-4 > 0 {
 		render.DrawUITextAtSize(screen, percent, float64(barX+barW-percentW-4), float64(y), characterHUDMutedColor, characterHUDTextSize)
 	}
+}
+
+// characterEdgeTabRect is the flush-left tab shown while the HUD is
+// dismissed; clicking it reopens the window.
+func characterEdgeTabRect() (int, int, int, int) {
+	return 0, 8, hudEdgeTabW, hudEdgeTabH
+}
+
+// drawEdgeTab renders a small left-edge tab with a mini HP/SP bar glyph so
+// the reopen affordance matches what the window shows.
+func (w *CharacterWindow) drawEdgeTab(screen *render.Frame) {
+	tx, ty, tw, th := characterEdgeTabRect()
+	DrawRoundedSurface(screen, tx, ty, tw, th, characterHUDBackground, characterHUDBorder, characterHUDRadius)
+	glyphX := tx + tw/2 - 5
+	render.DrawRect(screen, float64(glyphX), float64(ty+9), 10, 4, characterHUDHPColor)
+	render.DrawRect(screen, float64(glyphX), float64(ty+16), 7, 4, characterHUDSPColor)
+	render.DrawRect(screen, float64(glyphX), float64(ty+23), 9, 3, characterHUDEXPColor)
+}
+
+func characterEdgeTabHit(mouseX, mouseY int) bool {
+	tx, ty, tw, th := characterEdgeTabRect()
+	return pointInRect(mouseX, mouseY, tx, ty, tw, th)
 }
 
 func characterWindowData(s *session.Session) (session.Character, session.Vitals, session.Progress, session.Inventory) {

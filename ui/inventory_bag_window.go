@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"fmt"
 	"github.com/kivutar/goro/glog"
+	"fmt"
 	"github.com/kivutar/goro/input"
 	"image"
 	"sort"

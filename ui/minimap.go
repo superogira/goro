@@ -64,6 +64,10 @@ type Minimap struct {
 	guildDrawnRev    uint64
 	guildSnapshotRev uint64
 	guildSnapshotBuf []minimapGuildMarker
+
+	webSyncKey       string
+	webMapKey        string
+	webMapData       string
 	pendingMarker    bool
 	pendingMarkerOld minimapPlayerMarkerState
 }
@@ -106,6 +110,24 @@ type minimapPlayerMarkerState struct {
 
 func (m *Minimap) Update(ctx Context) bool {
 	now := time.Now()
+	if minimapWebEnabled() {
+		if ctx.World == nil || m.hidden {
+			m.hasPosition = false
+			m.minimapWebSyncClosed()
+			return false
+		}
+		previousMap := m.mapName
+		m.ensureImage(ctx.Resources, ctx.World.MapName)
+		m.ensureArrow(ctx.Resources)
+		if previousMap != m.mapName && previousMap != "" {
+			m.clearCompassMarkers()
+			m.clearGuildMarkers()
+			m.ClearBossMarker()
+		}
+		m.pruneCompassMarkers(now)
+		m.minimapWebSync(ctx, now)
+		return false
+	}
 	width, height := ctx.ScreenSize()
 	x, y, w, h := minimapBounds(width, height)
 	m.ensureWindow(w, h)

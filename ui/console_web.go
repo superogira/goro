@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"sync/atomic"
 	"syscall/js"
 )
 
@@ -39,4 +40,29 @@ func consoleWebSync(active bool, lines []ConsoleMessage) {
 		))
 	}
 	fn.Invoke(active, arr)
+}
+
+// consoleTapPending marshals a DOM tap onto the game goroutine: the JS
+// callback cannot touch game state directly without racing the frame loop,
+// so it just raises a flag that UpdatePresentation consumes.
+var consoleTapPending int32
+
+var consoleTapHookInstalled bool
+
+// consoleWebInstallTapHook exposes window.goroConsoleTap for the page: the
+// dormant DOM log calls it when tapped (tablets have no Enter key).
+func consoleWebInstallTapHook() {
+	if consoleTapHookInstalled {
+		return
+	}
+	consoleTapHookInstalled = true
+	js.Global().Set("goroConsoleTap", js.FuncOf(func(this js.Value, args []js.Value) any {
+		atomic.AddInt32(&consoleTapPending, 1)
+		return nil
+	}))
+}
+
+// consoleWebConsumeTap reports and clears a pending DOM tap.
+func consoleWebConsumeTap() bool {
+	return atomic.SwapInt32(&consoleTapPending, 0) > 0
 }

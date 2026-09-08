@@ -12,3 +12,9 @@ func consoleWebLogEnabled() bool { return false }
 
 // consoleWebSync is the native no-op twin of the web build's DOM bridge.
 func consoleWebSync(active bool, lines []ConsoleMessage) {}
+
+// consoleWebInstallTapHook is the native no-op twin of the DOM tap hook.
+func consoleWebInstallTapHook() {}
+
+// consoleWebConsumeTap always reports no pending tap on native.
+func consoleWebConsumeTap() bool { return false }

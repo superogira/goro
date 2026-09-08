@@ -119,7 +119,13 @@ func (c *ChatConsole) UpdatePresentation(ctx client.Context) {
 	c.syncWebConsole()
 	if consoleWebLogEnabled() && !c.active {
 		// Dormant web console: the page DOM shows the log, so the canvas
-		// window (and its per-message raster) stays closed.
+		// window (and its per-message raster) stays closed. Tapping the
+		// DOM log raises a flag here — tablets have no Enter key.
+		consoleWebInstallTapHook()
+		if consoleWebConsumeTap() {
+			c.setActive(true)
+			return
+		}
 		if c.window.IsOpen() {
 			c.window.Close()
 		}

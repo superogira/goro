@@ -99,7 +99,7 @@ func (m *BasicMenu) DrainWebActions(ctx client.Context, callbacks BasicMenuCallb
 		return
 	}
 	m.callbacks = callbacks
-	for _, action := range hudWebDrainActions() {
+	for _, action := range hudWebDrainActions("menu:") {
 		if !strings.HasPrefix(action, "menu:") {
 			continue
 		}

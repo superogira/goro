@@ -50,15 +50,26 @@ func hudWebInstallHooks() {
 	}))
 }
 
-// hudWebDrainActions returns queued DOM interactions.
-func hudWebDrainActions() []string {
+// hudWebDrainActions takes queued DOM interactions whose action starts
+// with the given prefix ("hud:" or "menu:") and leaves the rest queued.
+// Consumers run at different points of the frame loop, so a consumer must
+// never take — let alone discard — another consumer's actions.
+func hudWebDrainActions(prefix string) []string {
 	hudWebActionQueue.Lock()
 	defer hudWebActionQueue.Unlock()
 	if len(hudWebActionQueue.actions) == 0 {
 		return nil
 	}
-	out := hudWebActionQueue.actions
-	hudWebActionQueue.actions = nil
+	var out []string
+	kept := hudWebActionQueue.actions[:0]
+	for _, action := range hudWebActionQueue.actions {
+		if strings.HasPrefix(action, prefix) {
+			out = append(out, action)
+		} else {
+			kept = append(kept, action)
+		}
+	}
+	hudWebActionQueue.actions = kept
 	return out
 }
 

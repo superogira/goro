@@ -7,7 +7,7 @@ package ui
 
 func hudWebInstallHooks() {}
 
-func hudWebDrainActions() []string { return nil }
+func hudWebDrainActions(prefix string) []string { return nil }
 
 func hudWebSync(fields [15]string) {}
 

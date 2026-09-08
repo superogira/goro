@@ -121,7 +121,7 @@ func (w *CharacterWindow) Update(ctx client.Context) bool {
 			w.open = true
 		}
 		w.webSyncState(ctx)
-		for _, action := range hudWebDrainActions() {
+		for _, action := range hudWebDrainActions("hud:") {
 			switch action {
 			case "hud:tab":
 				w.open = true

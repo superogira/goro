@@ -86,6 +86,8 @@ type ChatConsole struct {
 	playerMarkerStableUpdates int
 	messageH                  int
 	messageW                  int
+	webConsoleSyncedActive    bool
+	webConsoleSyncedKey       string
 }
 
 func (c *ChatConsole) Active() bool {
@@ -114,10 +116,35 @@ func (c *ChatConsole) Update(ctx client.Context) bool {
 func (c *ChatConsole) UpdatePresentation(ctx client.Context) {
 	c.ctx = ctx
 	c.updatePlayerMarkerStability(ctx)
+	c.syncWebConsole()
+	if consoleWebLogEnabled() && !c.active {
+		// Dormant web console: the page DOM shows the log, so the canvas
+		// window (and its per-message raster) stays closed.
+		if c.window.IsOpen() {
+			c.window.Close()
+		}
+		return
+	}
 	c.flushPendingMessageRedraw(ctx)
 	c.ensureWindow(ctx)
 	c.Publish(ctx)
 	c.armPendingMessageRedraw()
+}
+
+// syncWebConsole mirrors the visible message list into the page DOM on web
+// builds whenever it changes. The full-list resync is one small JS call per
+// new message; the page rebuilds a handful of text nodes on its own thread.
+func (c *ChatConsole) syncWebConsole() {
+	if !consoleWebLogEnabled() {
+		return
+	}
+	key := c.messagesKey()
+	if key == c.webConsoleSyncedKey && c.webConsoleSyncedActive == c.active {
+		return
+	}
+	c.webConsoleSyncedKey = key
+	c.webConsoleSyncedActive = c.active
+	consoleWebSync(c.active, c.visibleLines())
 }
 
 // UpdateInput handles chat focus, typing, and pointer input after presentation
@@ -172,6 +199,11 @@ func (c *ChatConsole) UpdateInput(ctx client.Context) bool {
 }
 
 func (c *ChatConsole) Publish(ctx client.Context) {
+	if consoleWebLogEnabled() && !c.active {
+		// Dormant web console renders as page DOM; keep the canvas window
+		// closed so no path reopens it behind the HTML log.
+		return
+	}
 	c.ensureWindow(ctx)
 	c.window.Publish(ctx)
 }

@@ -1154,7 +1154,12 @@ func (r *runner) drawUISync(screen *Frame, width, height int, deviceScale float6
 			baseCanvas := uirender.NewCanvas(cc, width, height)
 			canvas := widget.Canvas(scaledImageCanvas{Canvas: baseCanvas, scale: float32(deviceScale)})
 			if textMode, ok := baseCanvas.(widget.TextModeController); ok {
-				textMode.SetTextMode(widget.TextModeVector)
+				// Vector mode was forced for a rounded-clip artifact on the
+				// July gg stack; the September fork tracks damage and clip
+				// rects in its bitmap fast path, so auto mode is safe again
+				// — and its cached-glyph blits are an order of magnitude
+				// cheaper for text-heavy partial redraws.
+				textMode.SetTextMode(widget.TextModeAuto)
 				defer textMode.SetTextMode(widget.TextModeAuto)
 			}
 			drawn = win.DrawTo(canvas)
@@ -1226,7 +1231,7 @@ func (r *runner) drawUIAsync(screen *Frame, width, height int, deviceScale float
 		drawn := false
 		canvasStart := time.Now()
 		recorder := newUIDrawRecorder(width, height, deviceScale)
-		recorder.setTextMode(widget.TextModeVector)
+		recorder.setTextMode(widget.TextModeAuto)
 		drawn = win.DrawTo(recorder)
 		recorder.setTextMode(widget.TextModeAuto)
 		list := recorder.list()

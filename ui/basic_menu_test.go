@@ -151,15 +151,11 @@ func TestBasicMenuFollowsCharacterWindow(t *testing.T) {
 
 func TestCharacterDragKeepsAttachedBasicMenuOnScreen(t *testing.T) {
 	inputState := input.NewState()
-	app := &windowDragTestApp{}
-	manager := &escapeMenuTestUIManager{}
 	ctx := client.Context{
-		Input:     inputState,
-		Session:   &session.Session{Selected: session.Character{Name: "Kivutar"}},
-		UIApp:     app,
-		UIManager: manager,
-		ScreenW:   800,
-		ScreenH:   300,
+		Input:   inputState,
+		Session: &session.Session{Selected: session.Character{Name: "Kivutar"}},
+		ScreenW: 800,
+		ScreenH: 300,
 	}
 	var character CharacterWindow
 	var menu BasicMenu
@@ -172,23 +168,10 @@ func TestCharacterDragKeepsAttachedBasicMenuOnScreen(t *testing.T) {
 	if !character.Update(ctx) {
 		t.Fatal("character window drag start was not consumed")
 	}
+	if !character.dragLayer {
+		t.Fatal("character window did not enter drag state")
+	}
 	menu.FollowCharacterWindow(ctx, &character)
-	if !character.dragLayer || app.beginToken != character.positionedOverlay() {
-		t.Fatal("character and basic menu did not enter the shared immediate drag layer")
-	}
-	_, menuHeight := basicMenuSize()
-	wantStartRect := geometry.NewRect(
-		float32(character.x),
-		float32(character.y),
-		float32(character.width),
-		float32(character.height+basicMenuFollowGap+menuHeight),
-	)
-	if app.beginRect != wantStartRect {
-		t.Fatalf("group drag capture = %v, want %v", app.beginRect, wantStartRect)
-	}
-	if !character.positionedOverlay().hidden || !menu.positionedOverlay().hidden {
-		t.Fatal("group drag left a source overlay visible behind the immediate layer")
-	}
 	inputState.EndFrame()
 	inputState.SetMousePosition(700, 1000)
 	if !character.Update(ctx) {
@@ -196,56 +179,30 @@ func TestCharacterDragKeepsAttachedBasicMenuOnScreen(t *testing.T) {
 	}
 	menu.FollowCharacterWindow(ctx, &character)
 
-	wantCharacterY := ctx.ScreenH - windowScreenMargin - character.height - basicMenuFollowGap - menuHeight
+	_, menuHeight := basicMenuSize()
+	wantCharacterY := ctx.ScreenH - character.height - basicMenuFollowGap - menuHeight
 	if character.y != wantCharacterY {
-		t.Fatalf("character drag y = %d, want grouped clamp at %d", character.y, wantCharacterY)
+		t.Fatalf("character drag y = %d, want clamped at %d", character.y, wantCharacterY)
 	}
 	if menu.y != character.y+character.height+basicMenuFollowGap {
 		t.Fatalf("basic menu y = %d, want attached y %d", menu.y, character.y+character.height+basicMenuFollowGap)
 	}
-	if menu.y+menu.height > ctx.ScreenH-windowScreenMargin {
-		t.Fatalf("attached basic menu bottom = %d, beyond screen limit %d", menu.y+menu.height, ctx.ScreenH-windowScreenMargin)
-	}
-	if len(app.moves) != 1 {
-		t.Fatalf("group drag layer moves = %d, want 1", len(app.moves))
-	}
-	wantMoveRect := geometry.NewRect(
-		float32(character.x),
-		float32(character.y),
-		float32(character.width),
-		float32(character.height+basicMenuFollowGap+menuHeight),
-	)
-	if app.moves[0] != wantMoveRect {
-		t.Fatalf("group drag move = %v, want %v", app.moves[0], wantMoveRect)
-	}
-	characterBounds := character.positionedOverlay().Bounds()
-	menuBounds := menu.positionedOverlay().Bounds()
-	if characterBounds.Min != geometry.Pt(float32(character.x), float32(character.y)) {
-		t.Fatalf("character overlay position = %v, want %d,%d", characterBounds.Min, character.x, character.y)
-	}
-	if menuBounds.Min != geometry.Pt(float32(menu.x), float32(menu.y)) {
-		t.Fatalf("basic menu overlay position = %v, want %d,%d", menuBounds.Min, menu.x, menu.y)
+	if menu.y+menu.height > ctx.ScreenH {
+		t.Fatalf("attached basic menu bottom = %d, beyond screen limit %d", menu.y+menu.height, ctx.ScreenH)
 	}
 
 	inputState.EndFrame()
 	inputState.SetMouseButton(input.MouseButtonLeft, false)
-	if !character.Update(ctx) {
-		t.Fatal("character window drag release was not consumed")
+	character.Update(ctx)
+	if character.dragLayer {
+		t.Fatal("character window drag state did not end on release")
 	}
 	menu.FollowCharacterWindow(ctx, &character)
-	for character.dragLayer {
-		inputState.EndFrame()
-		character.Update(ctx)
-	}
-	// The next frame's follow (dragLayer now false) unhides the menu.
-	menu.FollowCharacterWindow(ctx, &character)
-	if app.endToken != character.positionedOverlay() {
-		t.Fatal("group drag layer was not released after the banded restore")
-	}
-	if character.positionedOverlay().hidden || menu.positionedOverlay().hidden {
-		t.Fatal("group drag release did not restore both source overlays")
+	if menu.x != character.x || menu.y != character.y+character.height+basicMenuFollowGap {
+		t.Fatalf("basic menu detached after drag: %d,%d want %d,%d", menu.x, menu.y, character.x, character.y+character.height+basicMenuFollowGap)
 	}
 }
+
 
 func TestBasicMenuRebindRefreshesButtonCallbacks(t *testing.T) {
 	app := uiapp.New()

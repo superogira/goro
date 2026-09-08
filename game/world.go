@@ -1607,6 +1607,7 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	}
 	now := time.Now()
 	m.drawShowDigit(screen, ctx, now)
+	m.ui.characterWindow.Draw(screen, ctx)
 	m.ui.announcement.Draw(screen, now)
 	m.ui.poptips.Draw(screen, now)
 	m.ui.inventoryBag.DrawTooltip(ctx, screen)

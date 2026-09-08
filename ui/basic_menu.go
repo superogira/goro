@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image/color"
+	"strings"
 
 
 
@@ -45,7 +46,8 @@ type BasicMenu struct {
 	y          int
 	width      int
 	height     int
-	pressedKey string
+	pressedKey    string
+	webSyncedOpen bool
 }
 
 type BasicMenuCallbacks struct {
@@ -131,6 +133,33 @@ func (m *BasicMenu) Update(ctx client.Context, callbacks BasicMenuCallbacks) boo
 		return false
 	}
 	m.callbacks = callbacks
+	if hudWebEnabled() {
+		hudWebInstallHooks()
+		if !m.open && !m.dismissed {
+			m.open = true
+		}
+		if m.open != m.webSyncedOpen {
+			m.webSyncedOpen = m.open
+			menuWebSync(m.open)
+		}
+		for _, action := range hudWebDrainActions() {
+			if !strings.HasPrefix(action, "menu:") {
+				continue
+			}
+			switch key := strings.TrimPrefix(action, "menu:"); key {
+			case "tab":
+				m.open = true
+				m.dismissed = false
+				menuWebSync(true)
+			case "close":
+				m.Close()
+				menuWebSync(false)
+			default:
+				m.invoke(key)
+			}
+		}
+		return false
+	}
 	if ctx.Input == nil {
 		return false
 	}
@@ -186,6 +215,9 @@ func (m *BasicMenu) FollowCharacterWindow(_ client.Context, character *Character
 // every frame from the world's UI overlay pass.
 func (m *BasicMenu) Draw(screen *render.Frame) {
 	if m == nil || screen == nil {
+		return
+	}
+	if hudWebEnabled() {
 		return
 	}
 	if m.width == 0 {

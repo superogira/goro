@@ -75,6 +75,8 @@ type CharacterWindow struct {
 	dragOffY  int
 	// dragBottom keeps a manual drag from overlapping the basic menu.
 	dragBottom int
+
+	webSyncedKey string
 }
 
 func (w *CharacterWindow) IsOpen() bool {
@@ -110,7 +112,27 @@ func (w *CharacterWindow) setPosition(_ client.Context, x, y int) {
 }
 
 func (w *CharacterWindow) Update(ctx client.Context) bool {
-	if w == nil || ctx.Input == nil || ctx.Session == nil {
+	if w == nil || ctx.Session == nil {
+		return false
+	}
+	if hudWebEnabled() {
+		hudWebInstallHooks()
+		if !w.open && !w.dismissed {
+			w.open = true
+		}
+		w.webSyncState(ctx)
+		for _, action := range hudWebDrainActions() {
+			switch action {
+			case "hud:tab":
+				w.open = true
+				w.dismissed = false
+			case "hud:close":
+				w.Close()
+			}
+		}
+		return false
+	}
+	if ctx.Input == nil {
 		return false
 	}
 	if !w.open {
@@ -169,14 +191,22 @@ func (w *CharacterWindow) Update(ctx client.Context) bool {
 // Called every frame from the world's UI overlay pass; the game frame is
 // fully redrawn each frame anyway, so this costs a handful of blits.
 func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
-	if w == nil || !w.open || screen == nil || ctx.Session == nil {
+	if w == nil || screen == nil || ctx.Session == nil {
+		return
+	}
+	if hudWebEnabled() {
 		return
 	}
 	if w.width == 0 {
 		return
 	}
+	// The dismissed check must precede the closed check: the reopen tab is
+	// the only thing the window draws while closed.
 	if w.dismissed {
 		w.drawEdgeTab(screen)
+		return
+	}
+	if !w.open {
 		return
 	}
 	character, vitals, progress, inventory := characterWindowData(ctx.Session)
@@ -269,6 +299,50 @@ func drawHUDExpRow(screen *render.Frame, x, y, width int, label string, level in
 	if percentW := int(render.MeasureUIText(percent, characterHUDTextSize)); percentW > 0 && barW-percentW-4 > 0 {
 		render.DrawUITextAtSize(screen, percent, float64(barX+barW-percentW-4), float64(y), characterHUDMutedColor, characterHUDTextSize)
 	}
+}
+
+// webSyncState mirrors the HUD into the page DOM (web builds only): the
+// full field set travels on every snapshot change; visibility changes
+// push on their own.
+// characterWindowSnapshot keys the HUD state so unchanged frames push
+// nothing to the page.
+func characterWindowSnapshot(s *session.Session) string {
+	character, vitals, progress, inventory := characterWindowData(s)
+	return fmt.Sprintf(
+		"name=%s;job=%d;hp=%d/%d;sp=%d/%d;bl=%d;jl=%d;bexp=%d/%d;jexp=%d/%d;zeny=%d;weight=%d/%d",
+		character.Name, character.Job,
+		vitals.HP, vitals.MaxHP, vitals.SP, vitals.MaxSP,
+		progress.BaseLevel, progress.JobLevel,
+		progress.BaseExp, progress.NextBaseExp, progress.JobExp, progress.NextJobExp,
+		inventory.Zeny, inventory.Weight, inventory.MaxWeight,
+	)
+}
+
+func (w *CharacterWindow) webSyncState(ctx client.Context) {
+	snapshot := characterWindowSnapshot(ctx.Session)
+	key := strconv.FormatBool(w.open) + "|" + strconv.FormatBool(w.dismissed) + "|" + snapshot
+	if key == w.webSyncedKey {
+		return
+	}
+	w.webSyncedKey = key
+	character, vitals, progress, inventory := characterWindowData(ctx.Session)
+	open := "0"
+	if w.open {
+		open = "1"
+	}
+	hudWebSync([15]string{
+		open,
+		strings.TrimSpace(character.Name),
+		db.JobDisplayName(int(character.Job)),
+		strconv.Itoa(vitals.HP), strconv.Itoa(vitals.MaxHP),
+		strconv.Itoa(vitals.SP), strconv.Itoa(vitals.MaxSP),
+		strconv.Itoa(progress.BaseLevel),
+		strconv.FormatInt(progress.BaseExp, 10), strconv.FormatInt(progress.NextBaseExp, 10),
+		strconv.Itoa(progress.JobLevel),
+		strconv.FormatInt(progress.JobExp, 10), strconv.FormatInt(progress.NextJobExp, 10),
+		strconv.Itoa(inventory.Weight) + "/" + strconv.Itoa(inventory.MaxWeight),
+		hudFormatNumber(inventory.Zeny),
+	})
 }
 
 // characterEdgeTabRect is the flush-left tab shown while the HUD is

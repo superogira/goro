@@ -92,7 +92,7 @@ func (w *StatsWindow) webSync(ctx Context) {
 		{"FLEE", fmt.Sprintf("%d + %d", stats.Flee, stats.FleeBonus)},
 		{"ASPD", fmt.Sprintf("%d", stats.ASPD)},
 	}
-	statsWebSync(w.webOpen, rowArr, derived, stats.Points, canInc)
+	statsWebSync(w.webOpen, rowArr, derived, stats.Points, canInc, statsGuildName(ctx.Session))
 }
 
 func (w *StatsWindow) OpenWindow(ctx Context) {

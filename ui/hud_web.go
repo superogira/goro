@@ -107,7 +107,7 @@ func hudWebSync(fields [15]string) {
 }
 
 // statsWebSync pushes the status window state to the page.
-func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, canIncrease [6]bool) {
+func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, canIncrease [6]bool, guild string) {
 	fn := js.Global().Get("goroStatsSync")
 	if fn.Type() != js.TypeFunction {
 		return
@@ -133,6 +133,7 @@ func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, c
 	}
 	obj.Set("derived", derArr)
 	obj.Set("points", points)
+	obj.Set("guild", guild)
 	fn.Invoke(obj)
 }
 

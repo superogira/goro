@@ -267,7 +267,7 @@ func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.Inventory
 	desc, _ := ctx.Resources.ItemDescription(int(item.ItemID), item.Identified)
 	obj := js.Global().Get("Object").New()
 	obj.Set("title", title)
-	obj.Set("desc", strings.Join(desc, "\n"))
+	obj.Set("descHTML", itemInfoWebDescHTML(strings.Join(desc, "\n")))
 	cards := js.Global().Get("Array").New(0)
 	for _, cardID := range item.Cards {
 		if cardID == 0 {
@@ -278,8 +278,15 @@ func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.Inventory
 		}
 	}
 	obj.Set("cards", cards)
+	// The item's own icon rides along (same cached data URL as the cells).
+	if resourceName, ok := ctx.Resources.ItemResourceName(int(item.ItemID), item.Identified); ok {
+		obj.Set("icon", hotbarWebIconKeyOnly(ctx, resourceName, item.ItemID, item.Identified))
+	} else {
+		obj.Set("icon", "")
+	}
 	fn.Invoke(obj)
 }
+
 
 // hotbarWebEnabled reports whether the page provides the DOM hotbar.
 func hotbarWebEnabled() bool {
@@ -288,6 +295,20 @@ func hotbarWebEnabled() bool {
 
 // hotbarWebIconCache memoizes PNG data URLs per icon key.
 var hotbarWebIconCache = map[string]string{}
+
+// hotbarWebIconKeyOnly resolves an item icon by resource name and returns
+// its cached data URL.
+func hotbarWebIconKeyOnly(ctx Context, resourceName string, itemID uint16, identified bool) string {
+	key := fmt.Sprintf("item:%d:%t", itemID, identified)
+	if url, ok := hotbarWebIconCache[key]; ok {
+		return url
+	}
+	img, _, err := res.LoadImage(ctx.Resources, res.ItemIconTextureCandidates(resourceName))
+	if err != nil {
+		return ""
+	}
+	return hotbarWebIcon(key, img)
+}
 
 // hotbarWebIcon encodes an icon image as a cached data URL.
 func hotbarWebIcon(key string, img image.Image) string {

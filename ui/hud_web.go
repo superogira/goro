@@ -290,7 +290,8 @@ func (b *ShortcutBar) hotbarWebSync(ctx Context) {
 // hotbarWebKey summarizes slot contents for change detection.
 func (b *ShortcutBar) hotbarWebKey(ctx Context) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "rows=%d|", b.visibleRowCount())
+	x, y := b.bounds(ctx)
+	fmt.Fprintf(&sb, "pos=%d,%d|rows=%d|", x, y, b.visibleRowCount())
 	for i := range b.slots {
 		s := &b.slots[i]
 		label := ""

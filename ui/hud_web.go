@@ -338,7 +338,7 @@ func npcDialogWebEnabled() bool {
 // npcDialogWebSync pushes the NPC dialog state: lines with ^RRGGBB runs
 // converted to HTML, the current action (next/close/menu/input), and the
 // menu options.
-func (d *NPCDialog) npcDialogWebSync() {
+func (d *NPCDialog) npcDialogWebSyncName(name string) {
 	fn := js.Global().Get("goroNPCDialogSync")
 	if fn.Type() != js.TypeFunction {
 		return
@@ -350,6 +350,7 @@ func (d *NPCDialog) npcDialogWebSync() {
 		return
 	}
 	obj.Set("open", true)
+	obj.Set("npcName", name)
 	lines := js.Global().Get("Array").New(len(d.lines))
 	for i, line := range d.lines {
 		lines.SetIndex(i, npcDialogWebLineHTML(line))

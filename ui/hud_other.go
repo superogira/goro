@@ -32,7 +32,7 @@ func hotbarWebEnabledStub() {}
 
 func npcDialogWebEnabled() bool { return false }
 
-func (d *NPCDialog) npcDialogWebSync() {}
+func (d *NPCDialog) npcDialogWebSyncName(name string) {}
 
 func inventoryWebEnabled() bool { return false }
 

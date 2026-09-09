@@ -210,7 +210,16 @@ func (d *NPCDialog) Update(ctx Context) bool {
 				d.submitInput(ctx)
 			}
 		}
-		d.npcDialogWebSync()
+		npcName := ""
+		if ctx.World != nil {
+			for _, actor := range ctx.World.Actors {
+				if actor.ID == d.npcID && strings.TrimSpace(actor.Name) != "" {
+					npcName = strings.TrimSpace(actor.Name)
+					break
+				}
+			}
+		}
+		d.npcDialogWebSyncName(npcName)
 		return d.open
 	}
 	if !d.open {

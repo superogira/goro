@@ -77,6 +77,8 @@ type InventoryBagWindow struct {
 	tooltip       tooltipState
 	icons         map[inventoryBagIconKey]image.Image
 	iconMiss      map[inventoryBagIconKey]struct{}
+	webOpen      bool
+	webSyncedKey string
 }
 
 type inventoryBagIconKey struct {
@@ -85,6 +87,15 @@ type inventoryBagIconKey struct {
 }
 
 func (w *InventoryBagWindow) Toggle(ctx Context) {
+	if inventoryWebEnabled() {
+		w.webOpen = !w.webOpen
+		if w.webOpen {
+			w.selectFirstNonEmptyTab(ctx.Session)
+		}
+		w.webSyncedKey = ""
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	if w.IsOpen() {
 		w.hideTooltip()
@@ -102,6 +113,32 @@ func (w *InventoryBagWindow) Toggle(ctx Context) {
 }
 
 func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow, itemInfo *ItemInfoWindow) bool {
+	if inventoryWebEnabled() {
+		hudWebInstallHooks()
+		for _, action := range hudWebDrainActions("inv:") {
+			switch {
+			case action == "inv:close":
+				w.webOpen = false
+			case action == "inv:tab":
+				// handled below via tab index payload
+			case strings.HasPrefix(action, "inv:tab:"):
+				if t, err := strconv.Atoi(strings.TrimPrefix(action, "inv:tab:")); err == nil {
+					w.tab = t
+				}
+			case strings.HasPrefix(action, "inv:use:"):
+				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:use:")); err == nil {
+					for _, item := range w.tabItems(ctx.Session) {
+						if int(item.Index) == idx {
+							_ = UseInventoryItem(ctx, item)
+							break
+						}
+					}
+				}
+			}
+		}
+		w.webSync(ctx)
+		return false
+	}
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	if !w.IsOpen() || ctx.Input == nil {
 		w.hideTooltip()
@@ -357,6 +394,32 @@ func (w *InventoryBagWindow) pointInside(x, y int) bool {
 func (w *InventoryBagWindow) AcceptStorageDrop(ctx Context, item session.InventoryItem, mx, my int) bool {
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	return w.IsOpen() && w.pointInside(mx, my)
+}
+
+// webSync pushes the DOM inventory state when its snapshot changes.
+func (w *InventoryBagWindow) webSync(ctx Context) {
+	if !inventoryWebEnabled() {
+		return
+	}
+	key := fmt.Sprintf("%t|%s", w.webOpen, w.inventorySnapshot(ctx.Session))
+	if key == w.webSyncedKey {
+		return
+	}
+	w.webSyncedKey = key
+	items := w.tabItems(ctx.Session)
+	icons := make([]string, len(items))
+	names := make([]string, len(items))
+	weights := make([]int, len(items))
+	for i, item := range items {
+		icons[i] = hotbarWebIcon(fmt.Sprintf("item:%d:%t", item.ItemID, item.Identified), w.itemIconImage(ctx.Resources, item))
+		if name, ok := ctx.Resources.ItemDisplayName(int(item.ItemID), item.Identified); ok {
+			names[i] = name
+		} else {
+			names[i] = fmt.Sprintf("item %d", item.ItemID)
+		}
+		weights[i] = int(ctx.Session.Inventory.Weight)
+	}
+	inventoryWebSync(w.webOpen, w.tab, items, icons, names, weights)
 }
 
 func inventoryBagDefaultPosition(ctx Context) (int, int) {

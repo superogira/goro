@@ -80,6 +80,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroInvAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "inv:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 }
 
 // hudWebDrainActions takes queued DOM interactions whose action starts
@@ -211,6 +219,36 @@ func DrainCameraActions() []string {
 		out = append(out, strings.TrimPrefix(action, "cam:"))
 	}
 	return out
+}
+
+// inventoryWebEnabled reports whether the page provides the DOM inventory.
+func inventoryWebEnabled() bool {
+	return js.Global().Get("goroInventorySync").Type() == js.TypeFunction
+}
+
+// inventoryWebSync pushes the inventory window state: visibility, active
+// tab, and the tab's items (icon data URLs cached like the hotbar's).
+func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons []string, names []string, weights []int) {
+	fn := js.Global().Get("goroInventorySync")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	obj := js.Global().Get("Object").New()
+	obj.Set("open", open)
+	obj.Set("tab", tab)
+	arr := js.Global().Get("Array").New(len(items))
+	for i, item := range items {
+		entry := js.Global().Get("Object").New()
+		entry.Set("icon", icons[i])
+		entry.Set("name", names[i])
+		entry.Set("amount", item.Amount)
+		entry.Set("equipped", item.Equipped)
+		entry.Set("weight", weights[i])
+		entry.Set("index", item.Index)
+		arr.SetIndex(i, entry)
+	}
+	obj.Set("items", arr)
+	fn.Invoke(obj)
 }
 
 // hotbarWebEnabled reports whether the page provides the DOM hotbar.

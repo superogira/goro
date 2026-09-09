@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gogpu/ui/geometry"
@@ -276,6 +277,57 @@ func TestMinimapUpdateRedrawsWhenVisiblePartyMarkerChanges(t *testing.T) {
 	if app.invalidates == 0 {
 		t.Fatal("party marker move did not invalidate UI app")
 	}
+}
+
+func TestMinimapCompassOnlyRedrawsWhenPresentationChanges(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		world := worldstate.New()
+		world.MapName = "amatsu"
+		app := &minimapTestUIApp{}
+		ctx := Context{
+			World: world, Input: input.NewState(), UIApp: app,
+			UIManager: &escapeMenuTestUIManager{}, ScreenW: 800, ScreenH: 600,
+			Started: time.Now(),
+		}
+		m := &Minimap{}
+		m.Update(ctx)
+		m.ApplyCompass(0, 1, 85, 235, 0xFF3355, time.Now())
+		m.Update(ctx)
+		widget.ClearRedrawInTree(m.window.published)
+		app.invalidates = 0
+		for range 100 {
+			m.Update(ctx)
+		}
+		if app.invalidates != 0 || m.widget.NeedsRedraw() {
+			t.Fatal("unchanged compass marker continuously dirtied the UI")
+		}
+		// A slow raster may leave player-only damage pending when the blink
+		// changes. That small clip must not restrict the full marker redraw.
+		m.widget.dirtyRect = geometry.NewRect(4, 4, 12, 12)
+		m.widget.SetNeedsRedraw(true)
+		time.Sleep(501 * time.Millisecond)
+		m.Update(ctx)
+		if app.invalidates != 1 || !m.widget.NeedsRedraw() {
+			t.Fatal("compass blink did not invalidate the minimap")
+		}
+		if !m.widget.dirtyRect.IsEmpty() {
+			t.Fatal("compass redraw retained an older player-only damage clip")
+		}
+		widget.ClearRedrawInTree(m.window.published)
+		app.invalidates = 0
+		m.ApplyCompass(0, 1, 96, 118, 0xCE6300, time.Now())
+		m.Update(ctx)
+		if app.invalidates != 1 || !m.widget.NeedsRedraw() {
+			t.Fatal("changed compass marker did not invalidate the minimap")
+		}
+		widget.ClearRedrawInTree(m.window.published)
+		app.invalidates = 0
+		m.ApplyCompass(0, 2, 0, 0, 0, time.Now())
+		m.Update(ctx)
+		if app.invalidates != 1 || !m.widget.NeedsRedraw() {
+			t.Fatal("removed compass marker did not invalidate the minimap")
+		}
+	})
 }
 
 func TestMinimapDrawDoesNotPaintInnerMapChrome(t *testing.T) {

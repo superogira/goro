@@ -595,6 +595,9 @@ func (c *Client) readLoop(conn net.Conn) {
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
+			if err == nil {
+				err = c.refreshMapReadDeadline(conn)
+			}
 			if c.trace {
 				headLen := min(n, 32)
 				glog.Debugf("network read n=%d head=%s", n, hex.EncodeToString(buf[:headLen]))
@@ -608,14 +611,10 @@ func (c *Client) readLoop(conn net.Conn) {
 			c.mu.Unlock()
 		}
 		if err != nil {
-			if c.isCurrentConn(conn) {
-				if err == io.EOF {
-					c.addError(ErrDisconnected)
-				} else {
-					c.addError(err)
-				}
+			if err == io.EOF {
+				err = ErrDisconnected
 			}
-			c.clearConn(conn)
+			c.clearConn(conn, err)
 			return
 		}
 	}
@@ -626,10 +625,7 @@ func (c *Client) writeLoop(conn net.Conn, sendCh <-chan outboundPacket) {
 		queued := time.Since(packet.enqueued)
 		start := time.Now()
 		if _, err := conn.Write(packet.data); err != nil {
-			if c.isCurrentConn(conn) {
-				c.addError(err)
-			}
-			c.clearConn(conn)
+			c.clearConn(conn, err)
 			return
 		}
 		elapsed := time.Since(start)
@@ -640,15 +636,15 @@ func (c *Client) writeLoop(conn net.Conn, sendCh <-chan outboundPacket) {
 	}
 }
 
-func (c *Client) isCurrentConn(conn net.Conn) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.conn == conn
-}
-
-func (c *Client) clearConn(conn net.Conn) {
+func (c *Client) clearConn(conn net.Conn, err error) {
 	c.mu.Lock()
 	if c.conn == conn {
+		// Report the failure and detach this connection atomically. Closing it
+		// wakes both I/O loops; only the first error should reach the UI, and
+		// a late error from an old connection must not affect a replacement.
+		if err != nil {
+			c.errs = append(c.errs, err)
+		}
 		sendCh := c.sendCh
 		c.stopMapKeepaliveLocked()
 		c.conn = nil
@@ -665,11 +661,5 @@ func (c *Client) clearConn(conn net.Conn) {
 func (c *Client) setStatus(status string) {
 	c.mu.Lock()
 	c.status = status
-	c.mu.Unlock()
-}
-
-func (c *Client) addError(err error) {
-	c.mu.Lock()
-	c.errs = append(c.errs, err)
 	c.mu.Unlock()
 }

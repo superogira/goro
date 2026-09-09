@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"math"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"strings"
 	"time"
@@ -237,6 +238,7 @@ type uiProfileStats struct {
 type runner struct {
 	app             *gogpu.App
 	ui              *uiapp.App
+	uiWindow        *uiWindowProvider
 	uiImage         *Image
 	uiOverlayCanvas *ggcanvas.Canvas
 	uiTextCache     map[string]cachedOverlayImage
@@ -274,6 +276,7 @@ type runner struct {
 	uiLogicalHeight int
 	uiAsync         *asyncUIRasterizer
 	uiAsyncBusy     bool
+	uiAsyncDraining bool
 	uiPendingLists  []uiDrawList
 	uiGeneration    uint64
 	uiDrag          uiDragLayer
@@ -323,8 +326,9 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 	events := newFanoutEventSource(gg.EventSource())
 	uiTheme := rotheme.Default.AsTheme()
 	uiTheme.Colors.Background = widget.RGBA8(0, 0, 0, 0)
+	uiWindow := &uiWindowProvider{WindowProvider: gg}
 	ui := uiapp.New(
-		uiapp.WithWindowProvider(gg),
+		uiapp.WithWindowProvider(uiWindow),
 		uiapp.WithPlatformProvider(roCursorPlatformProvider{PlatformProvider: gg}),
 		uiapp.WithEventSource(events),
 		uiapp.WithTheme(uiTheme),
@@ -334,6 +338,7 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 	r := &runner{
 		app:        gg,
 		ui:         ui,
+		uiWindow:   uiWindow,
 		game:       game,
 		width:      cfg.Width,
 		height:     cfg.Height,
@@ -345,6 +350,7 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 		vsync:      renderCfg.VSync,
 		fps:        renderCfg.FPS,
 	}
+	defer r.close()
 	if receiver, ok := game.(quitReceiver); ok {
 		receiver.SetQuitFunc(gg.Quit)
 	}
@@ -354,6 +360,17 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 	game.Resize(cfg.Width, cfg.Height)
 	wireInput(events, game.InputState())
 
+	gg.OnSurfaceAvailable(func() {
+		// The primary window is registered before this callback, and close
+		// events are processed afterwards. X/Alt+F4 must drain UI redraws
+		// before GoGPU destroys that window, earlier than App.OnClose.
+		uiWindow.guardClose(gg.PrimaryWindow())
+		// GoGPU v0.54.0 ignores Config.Fullscreen when creating a Windows
+		// window. Apply it once the native window exists.
+		if runtime.GOOS == "windows" && cfg.Fullscreen {
+			gg.SetFullscreen(true)
+		}
+	})
 	gg.OnResize(func(width, height int) {
 		if width <= 0 || height <= 0 {
 			return
@@ -374,27 +391,38 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 			gg.Quit()
 		}
 	})
-	gg.OnClose(func() {
-		if r.cpuProfile != nil {
-			pprof.StopCPUProfile()
-			_ = r.cpuProfile.Close()
-			r.cpuProfile = nil
-		}
-		if r.gpu != nil {
-			r.gpu.release()
-			r.gpu = nil
-		}
-		r.stopAsyncUIRasterizer()
-		if r.uiCanvas != nil {
-			_ = r.uiCanvas.Close()
-			r.uiCanvas = nil
-		}
-		if r.uiOverlayCanvas != nil {
-			_ = r.uiOverlayCanvas.Close()
-			r.uiOverlayCanvas = nil
-		}
-	})
+	gg.OnClose(r.close)
 	return gg.Run()
+}
+
+func (r *runner) close() {
+	// App-level quits reach OnClose before native teardown. Window-close
+	// requests have already drained redraws through the pre-close callback.
+	if r.uiWindow != nil {
+		r.uiWindow.close()
+	}
+	if r.ui != nil {
+		r.ui.Window().Close()
+		r.ui = nil
+	}
+	if r.cpuProfile != nil {
+		pprof.StopCPUProfile()
+		_ = r.cpuProfile.Close()
+		r.cpuProfile = nil
+	}
+	if r.gpu != nil {
+		r.gpu.release()
+		r.gpu = nil
+	}
+	r.stopAsyncUIRasterizer()
+	if r.uiCanvas != nil {
+		_ = r.uiCanvas.Close()
+		r.uiCanvas = nil
+	}
+	if r.uiOverlayCanvas != nil {
+		_ = r.uiOverlayCanvas.Close()
+		r.uiOverlayCanvas = nil
+	}
 }
 
 func configureGogpuVSync(renderCfg config.RenderConfig) {
@@ -1344,6 +1372,9 @@ func (r *runner) submitPendingUIDrawLists() {
 	list := r.uiPendingLists[len(r.uiPendingLists)-1]
 	r.uiPendingLists = nil
 	r.submitUIDrawList(list)
+	// Let this replacement reach the screen before recording more work.
+	// Otherwise continuous animation can keep every result superseded forever.
+	r.uiAsyncDraining = r.uiAsyncBusy
 }
 
 func (r *runner) collectAsyncUIResults(width, height int, deviceScale float64) {
@@ -1354,6 +1385,7 @@ func (r *runner) collectAsyncUIResults(width, height int, deviceScale float64) {
 		select {
 		case result := <-r.uiAsync.done:
 			r.uiAsyncBusy = false
+			r.uiAsyncDraining = false
 			if result.err != nil {
 				glog.Warnf("async ui raster failed: %v", result.err)
 				r.uiGeneration++
@@ -1408,6 +1440,7 @@ func (r *runner) stopAsyncUIRasterizer() {
 	r.uiAsync.stop()
 	r.uiAsync = nil
 	r.uiAsyncBusy = false
+	r.uiAsyncDraining = false
 	r.uiPendingLists = nil
 }
 
@@ -1585,7 +1618,7 @@ func (r *runner) shouldRecordAsyncUI(needsWork bool) bool {
 	if !needsWork {
 		return false
 	}
-	if r != nil && r.uiAsyncBusy && len(r.uiPendingLists) > 0 {
+	if r != nil && r.uiAsyncBusy && (r.uiAsyncDraining || len(r.uiPendingLists) > 0) {
 		r.lastUIWork = true
 		return false
 	}

@@ -8,6 +8,10 @@ import (
 	"github.com/kivutar/goro/glog"
 )
 
+// Heartbeat replies arrive even when the player is idle. Allow two normal
+// heartbeat intervals before treating a silent map connection as disconnected.
+const mapReadTimeout = 10 * time.Second
+
 // startMapKeepalive ties the map-server heartbeat to the connection rather
 // than the game or render loop. A reconnect stops the old loop before the new
 // connection can receive any of its packets.
@@ -23,10 +27,25 @@ func (c *Client) startMapKeepalive(conn net.Conn) {
 	interval := c.mapKeepaliveInterval
 	c.mu.Unlock()
 
+	if err := c.refreshMapReadDeadline(conn); err != nil {
+		c.clearConn(conn, err)
+		return
+	}
 	if interval <= 0 {
 		interval = defaultMapKeepaliveInterval
 	}
 	go c.runMapKeepalive(conn, stop, interval)
+}
+
+// Only map connections expect regular replies. Refresh on receipt, never on
+// send: successful writes can merely be queued in TCP while the route is dead.
+func (c *Client) refreshMapReadDeadline(conn net.Conn) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != conn || c.mapKeepaliveStop == nil {
+		return nil
+	}
+	return conn.SetReadDeadline(time.Now().Add(mapReadTimeout))
 }
 
 func (c *Client) runMapKeepalive(conn net.Conn, stop <-chan struct{}, interval time.Duration) {

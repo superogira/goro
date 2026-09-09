@@ -165,7 +165,7 @@ func (m *Minimap) Update(ctx Context) bool {
 	visualKey := m.currentVisualKey(ctx, now)
 	visualChanged := visualKey != m.visualKey
 	needsPublish := false
-	fullRedraw := mapChanged || visualChanged || compassChanged || m.compassDrawnRev != m.compassRevision || m.guildDrawnRev != m.guildRevision || len(m.widget.compassMarkers) > 0
+	fullRedraw := mapChanged || visualChanged || compassChanged || m.compassDrawnRev != m.compassRevision || m.guildDrawnRev != m.guildRevision
 	markerOnly := markerChanged && !fullRedraw
 	drawPendingMarker := m.pendingMarker && !markerChanged
 	needsRedraw := fullRedraw || drawPendingMarker
@@ -423,6 +423,7 @@ func (m *Minimap) markCompassDirty() {
 
 func (m *Minimap) markRedraw(ctx Context) {
 	if m.widget != nil {
+		m.widget.dirtyRect = geometry.Rect{}
 		m.widget.SetNeedsRedraw(true)
 	}
 	if m.window.published != nil {

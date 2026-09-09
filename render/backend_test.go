@@ -1,13 +1,17 @@
 package render
 
 import (
+	"fmt"
+	"image/color"
 	"math"
 	"os"
 	"testing"
 
 	uiapp "github.com/gogpu/ui/app"
+	"github.com/gogpu/ui/core/scrollview"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/config"
@@ -473,6 +477,159 @@ func TestDrawUIAsyncRecordsChangesBeforePublishingCompletedResult(t *testing.T) 
 		}
 	default:
 		t.Fatal("newer UI job was not queued")
+	}
+}
+
+func TestDrawUIAsyncPublishesDuringContinuousRedraw(t *testing.T) {
+	for _, updatesPerRaster := range []int{1, 3} {
+		for _, firstImage := range []bool{false, true} {
+			t.Run(fmt.Sprintf("updates=%d/first=%t", updatesPerRaster, firstImage), func(t *testing.T) {
+				app := uiapp.New(uiapp.WithRenderMode(uiapp.RenderModeFrameworkManaged))
+				app.SetRoot(primitives.Box().Width(24).Height(12))
+				app.Frame()
+				if !app.Window().DrawTo(&uitest.MockCanvas{}) {
+					t.Fatal("initial UI draw did not render")
+				}
+				worker := &asyncUIRasterizer{jobs: make(chan uiRasterJob, 1), done: make(chan uiRasterResult, 1)}
+				r := &runner{
+					ui: app, uiAsync: worker, uiAsyncBusy: true, uiGeneration: 2,
+					uiLogicalWidth: 800, uiLogicalHeight: 600, uiScale: 1,
+				}
+				if !firstImage {
+					r.uiImage = NewImage(8, 8)
+					r.uiDrawnOnce = true
+				}
+				for batch := 0; batch < 20; batch++ {
+					previous := r.uiImage
+					for completion := 0; completion < 2; completion++ {
+						for update := 0; update < updatesPerRaster; update++ {
+							// Model a continuously animated widget and a worker that
+							// finishes either every frame or only every third frame.
+							r.requestUIRedraw()
+							if update == updatesPerRaster-1 {
+								worker.done <- uiRasterResult{generation: 2, width: 800, height: 600, scale: 1, image: NewImage(8, 8)}
+							}
+							if err := r.drawUIAsync(NewFrame(800, 600), 800, 600, 1); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if !r.uiAsyncBusy {
+							// Start the next batch from the dirty state accumulated
+							// during catch-up; no fresh invalidation should be needed.
+							if err := r.drawUIAsync(NewFrame(800, 600), 800, 600, 1); err != nil {
+								t.Fatal(err)
+							}
+						}
+						select {
+						case <-worker.jobs:
+						default:
+							t.Fatal("UI changes were lost while the worker was busy")
+						}
+					}
+					if r.uiImage == previous || !r.uiDrawnOnce {
+						t.Fatalf("batch %d: UI did not advance after two completed rasters", batch)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAsyncUICatchupKeepsCorrectedScrollPosition(t *testing.T) {
+	// Represent the top and bottom of a chat log with different solid colors
+	// so the test checks rasterized pixels, not just the live scroll signal.
+	scrollY := state.NewSignal[float32](16)
+	view := scrollview.New(primitives.Box(
+		primitives.Box().Width(32).Height(16).Background(widget.ColorRed),
+		primitives.Box().Width(32).Height(16).Background(widget.ColorBlue),
+	), scrollview.ScrollYSignal(scrollY), scrollview.ScrollbarOpt(scrollview.ScrollbarNever))
+	ctx := widget.NewContext()
+	view.Layout(ctx, geometry.Tight(geometry.Sz(32, 16)))
+	view.SetBounds(geometry.NewRect(0, 0, 32, 16))
+	worker := &asyncUIRasterizer{jobs: make(chan uiRasterJob, 1), done: make(chan uiRasterResult, 1)}
+	r := &runner{uiAsync: worker, uiGeneration: 1}
+	var raster uiRasterState
+	defer raster.close()
+	record := func(offset float32) {
+		t.Helper()
+		scrollY.Set(offset)
+		recorder := newUIDrawRecorder(32, 16, 1)
+		defer recorder.close()
+		recorder.Clear(widget.ColorTransparent)
+		view.Draw(ctx, recorder)
+		r.enqueueUIDrawList(recorder.list())
+	}
+	complete := func() {
+		t.Helper()
+		select {
+		case job := <-worker.jobs:
+			result := raster.rasterize(job)
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			worker.done <- result
+			r.collectAsyncUIResults(32, 16, 1)
+		default:
+			t.Fatal("no raster job available")
+		}
+	}
+	assertBottom := func() {
+		t.Helper()
+		if r.uiImage == nil {
+			t.Fatal("scroll view was not published")
+		}
+		if got := r.uiImage.pix.RGBAAt(8, 8); got != (color.RGBA{B: 255, A: 255}) {
+			t.Fatalf("published scroll view pixel = %v, want blue bottom-of-log content", got)
+		}
+	}
+	record(16)
+	complete()
+	assertBottom()
+	previous := r.uiImage
+	record(0)
+	record(16)
+	complete()
+	if r.uiImage != previous {
+		t.Fatal("superseded top-of-log image reached the screen")
+	}
+	if r.shouldRecordAsyncUI(true) {
+		t.Fatal("new recording could supersede the scroll correction during catch-up")
+	}
+	complete()
+	if r.uiImage == previous {
+		t.Fatal("corrected scroll view never reached the screen")
+	}
+	assertBottom()
+	if !r.shouldRecordAsyncUI(true) {
+		t.Fatal("UI recording did not resume after publishing the correction")
+	}
+}
+
+func TestAsyncUIDrainResumesAfterDiscardedResult(t *testing.T) {
+	for _, reason := range []string{"generation", "size", "scale", "error"} {
+		t.Run(reason, func(t *testing.T) {
+			worker := &asyncUIRasterizer{done: make(chan uiRasterResult, 1)}
+			r := &runner{uiAsync: worker, uiAsyncBusy: true, uiAsyncDraining: true, uiGeneration: 2}
+			result := uiRasterResult{generation: 2, width: 800, height: 600, scale: 1, image: NewImage(8, 8)}
+			switch reason {
+			case "generation":
+				result.generation--
+			case "size":
+				result.width--
+			case "scale":
+				result.scale = 1.5
+			case "error":
+				result.err = fmt.Errorf("test raster failure")
+			}
+			worker.done <- result
+			r.collectAsyncUIResults(800, 600, 1)
+			if r.uiImage != nil {
+				t.Fatal("invalid raster was published")
+			}
+			if r.uiAsyncDraining || r.uiAsyncBusy || !r.shouldRecordAsyncUI(true) {
+				t.Fatal("discarded raster left UI recording blocked")
+			}
+		})
 	}
 }
 

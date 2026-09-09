@@ -2,6 +2,8 @@ package game
 
 import (
 	"errors"
+	"net"
+	"os"
 	"testing"
 
 	"github.com/kivutar/goro/client"
@@ -71,14 +73,19 @@ func TestHandleNetworkDisconnectErrorsIgnoresFrameErrors(t *testing.T) {
 }
 
 func TestHandleNetworkDisconnectErrorsOpensAlert(t *testing.T) {
-	var modal gameui.ConfirmModal
-	handled := handleNetworkDisconnectErrors(client.Context{ScreenW: 800, ScreenH: 600}, &modal, []error{
+	for _, err := range []error{
 		network.ErrDisconnected,
-	}, nil)
-	if !handled {
-		t.Fatal("disconnect error was not handled")
-	}
-	if !modal.IsOpen() {
-		t.Fatal("disconnect dialog did not open")
+		&net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded},
+	} {
+		t.Run(err.Error(), func(t *testing.T) {
+			var modal gameui.ConfirmModal
+			handled := handleNetworkDisconnectErrors(client.Context{ScreenW: 800, ScreenH: 600}, &modal, []error{err}, nil)
+			if !handled {
+				t.Fatal("disconnect error was not handled")
+			}
+			if !modal.IsOpen() {
+				t.Fatal("disconnect dialog did not open")
+			}
+		})
 	}
 }

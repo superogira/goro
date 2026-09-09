@@ -278,9 +278,10 @@ func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.Inventory
 		}
 	}
 	obj.Set("cards", cards)
-	// The item's own icon rides along (same cached data URL as the cells).
+	// The illustration (collection art, the big picture the canvas window
+	// showed at 75x100) rides along as a cached data URL.
 	if resourceName, ok := ctx.Resources.ItemResourceName(int(item.ItemID), item.Identified); ok {
-		obj.Set("icon", hotbarWebIconKeyOnly(ctx, resourceName, item.ItemID, item.Identified))
+		obj.Set("icon", collectionWebIcon(ctx, resourceName, item.ItemID, item.Identified))
 	} else {
 		obj.Set("icon", "")
 	}
@@ -295,6 +296,20 @@ func hotbarWebEnabled() bool {
 
 // hotbarWebIconCache memoizes PNG data URLs per icon key.
 var hotbarWebIconCache = map[string]string{}
+
+// collectionWebIcon resolves the item's collection illustration (the big
+// art from data/texture/유저인터페이스/collection) as a cached data URL.
+func collectionWebIcon(ctx Context, resourceName string, itemID uint16, identified bool) string {
+	key := fmt.Sprintf("collection:%d:%t", itemID, identified)
+	if url, ok := hotbarWebIconCache[key]; ok {
+		return url
+	}
+	img, _, err := res.LoadImage(ctx.Resources, res.ItemCollectionTextureCandidates(resourceName))
+	if err != nil {
+		return ""
+	}
+	return hotbarWebIcon(key, img)
+}
 
 // hotbarWebIconKeyOnly resolves an item icon by resource name and returns
 // its cached data URL.

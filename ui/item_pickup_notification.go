@@ -51,7 +51,7 @@ func (n *ItemPickupNotification) Show(ctx Context, item session.InventoryItem, c
 	n.text = itemPickupNotificationTextFor(ctx.Resources, item, count)
 	n.shownAt = now
 	if pickupWebEnabled() {
-		pickupWebShow(n.text)
+		pickupWebShow(n.text, pickupWebIcon(ctx.Resources, item))
 	}
 }
 

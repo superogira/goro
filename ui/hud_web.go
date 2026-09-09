@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall/js"
 
+	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 )
 
@@ -171,17 +172,45 @@ func pickupWebEnabled() bool {
 }
 
 // pickupWebShow raises the pickup toast on the page; the page times it out.
-func pickupWebShow(text string) {
+// The item's icon travels beside the text as a cached data URL.
+func pickupWebShow(text string, icon string) {
 	fn := js.Global().Get("goroPickupShow")
-	if fn.Type() == js.TypeFunction {
-		fn.Invoke(text)
+	if fn.Type() != js.TypeFunction {
+		return
 	}
+	fn.Invoke(text, icon)
+}
+
+// pickupWebIcon resolves and caches the item icon data URL.
+func pickupWebIcon(manager *res.Manager, item session.InventoryItem) string {
+	if manager == nil || item.ItemID == 0 {
+		return ""
+	}
+	key := fmt.Sprintf("pickup:%d:%t", item.ItemID, item.Identified)
+	if url, ok := hotbarWebIconCache[key]; ok {
+		return url
+	}
+	resourceName, ok := manager.ItemResourceName(int(item.ItemID), item.Identified)
+	if !ok {
+		return ""
+	}
+	img, _, err := res.LoadImage(manager, res.ItemIconTextureCandidates(resourceName))
+	if err != nil {
+		return ""
+	}
+	url := hotbarWebIcon(key, img)
+	return url
 }
 
 // DrainCameraActions takes queued camera-button presses; it runs even when
-// the rest of the UI chain is gated.
+// the rest of the UI chain is gated. The cam: prefix is stripped so
+// consumers match bare action names.
 func DrainCameraActions() []string {
-	return hudWebDrainActions("cam:")
+	var out []string
+	for _, action := range hudWebDrainActions("cam:") {
+		out = append(out, strings.TrimPrefix(action, "cam:"))
+	}
+	return out
 }
 
 // hotbarWebEnabled reports whether the page provides the DOM hotbar.

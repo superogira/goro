@@ -2,6 +2,11 @@
 
 package ui
 
+import (
+	"github.com/kivutar/goro/res"
+	"github.com/kivutar/goro/session"
+)
+
 // Native builds keep the HUD and basic menu on the game canvas, where the
 // raster is dpi-matched by the window system and text renders crisply.
 
@@ -27,7 +32,9 @@ func DrainCameraActions() []string { return nil }
 
 func pickupWebEnabled() bool { return false }
 
-func pickupWebShow(text string) {}
+func pickupWebShow(text string, icon string) {}
+
+func pickupWebIcon(manager *res.Manager, item session.InventoryItem) string { return "" }
 
 func (b *ShortcutBar) hotbarWebSync(ctx Context) {}
 

@@ -74,10 +74,12 @@ func cameraFollowLerp(delta time.Duration) float64 {
 	return math.Min(float64(delta)/float64(time.Millisecond)*defaultCameraFollowLerpPerMS, 1.0)
 }
 
-// Camera button steps for the on-screen touch controls.
+// Camera button steps for the on-screen touch controls. Yaw is measured in
+// degrees (cameraDragYawDelta spans 720° across the screen; the earlier
+// radian constants here were invisible ~1-6° nudges).
 const (
-	cameraButtonZoomStep    = 1.25
-	cameraButtonRotateStep  = math.Pi
+	cameraButtonZoomStep   = 1.25
+	cameraButtonRotateStep = 90.0
 )
 
 func (c *followCamera) Rotate(delta float64) {

@@ -5,10 +5,9 @@ package render
 import "syscall/js"
 
 // webFullscreenButton enables the on-screen fullscreen toggle on the web
-// build only. The button lives outside the widget UI layer (drawn straight
-// to the frame like the FPS meter) so it stays visible with ?noui=1 and
-// never participates in dirty-region repaints.
-const webFullscreenButton = true
+// build only. Superseded: the page's DOM camera-control group owns the
+// fullscreen button now, so the canvas variant stays off.
+const webFullscreenButton = false
 
 var lastFullscreenButtonRect [4]int
 

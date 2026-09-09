@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strconv"
+	"strings"
 	"fmt"
 	"image"
 
@@ -63,6 +65,7 @@ type shortcutSlotState struct {
 
 type ShortcutBar struct {
 	slots         [shortcutTotalSlots]shortcutSlotState
+	webSyncKey    string
 	visibleRows   int
 	hotkeyVersion int
 	content       widget.Widget
@@ -87,6 +90,31 @@ type shortcutItemIconKey struct {
 }
 
 func (b *ShortcutBar) Update(ctx Context, actions GameActions) bool {
+	if hotbarWebEnabled() {
+		hudWebInstallHooks()
+		assets, _ := actions.(AssetProvider)
+		b.assets = assets
+		b.ctx = ctx
+		b.actions = actions
+		b.SyncFromSession(ctx)
+		for _, action := range hudWebDrainActions("hot:") {
+			switch {
+			case action == "hot:rows:+":
+				b.setVisibleRows(ctx, b.visibleRowCount()+1)
+			case action == "hot:rows:-":
+				b.setVisibleRows(ctx, b.visibleRowCount()-1)
+			case strings.HasPrefix(action, "hot:tap:"):
+				if slot, err := strconv.Atoi(strings.TrimPrefix(action, "hot:tap:")); err == nil {
+					b.activate(ctx, actions, slot)
+				}
+			}
+		}
+		if key := b.hotbarWebKey(ctx); key != b.webSyncKey {
+			b.webSyncKey = key
+			b.hotbarWebSync(ctx)
+		}
+		return false
+	}
 	if ctx.Input == nil {
 		return false
 	}

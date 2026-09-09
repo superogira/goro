@@ -19,4 +19,18 @@ func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, c
 
 func statsWebEnabled() bool { return false }
 
+func hotbarWebEnabled() bool { return false }
+
+func hotbarWebEnabledStub() {}
+
+func DrainCameraActions() []string { return nil }
+
+func pickupWebEnabled() bool { return false }
+
+func pickupWebShow(text string) {}
+
+func (b *ShortcutBar) hotbarWebSync(ctx Context) {}
+
+func (b *ShortcutBar) hotbarWebKey(ctx Context) string { return "" }
+
 func hudFormatNumber(value int64) string { return formatHUDNumber(value) }

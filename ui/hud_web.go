@@ -3,10 +3,17 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"image"
+	"image/png"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall/js"
+
+	"github.com/kivutar/goro/session"
 )
 
 // The HUD and basic menu render as page DOM on the web build — the same
@@ -52,6 +59,22 @@ func hudWebInstallHooks() {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()
 			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "stats:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroCamAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "cam:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroHotbarAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "hot:"+args[0].String())
 			hudWebActionQueue.Unlock()
 		}
 		return nil
@@ -140,6 +163,119 @@ func statsWebSync(open bool, rows [6]statRow, derived [][2]string, points int, c
 // statsWebEnabled reports whether the page provides the DOM status window.
 func statsWebEnabled() bool {
 	return js.Global().Get("goroStatsSync").Type() == js.TypeFunction
+}
+
+// pickupWebEnabled reports whether the page provides the DOM pickup toast.
+func pickupWebEnabled() bool {
+	return js.Global().Get("goroPickupShow").Type() == js.TypeFunction
+}
+
+// pickupWebShow raises the pickup toast on the page; the page times it out.
+func pickupWebShow(text string) {
+	fn := js.Global().Get("goroPickupShow")
+	if fn.Type() == js.TypeFunction {
+		fn.Invoke(text)
+	}
+}
+
+// DrainCameraActions takes queued camera-button presses; it runs even when
+// the rest of the UI chain is gated.
+func DrainCameraActions() []string {
+	return hudWebDrainActions("cam:")
+}
+
+// hotbarWebEnabled reports whether the page provides the DOM hotbar.
+func hotbarWebEnabled() bool {
+	return js.Global().Get("goroHotbarSync").Type() == js.TypeFunction
+}
+
+// hotbarWebIconCache memoizes PNG data URLs per icon key.
+var hotbarWebIconCache = map[string]string{}
+
+// hotbarWebIcon encodes an icon image as a cached data URL.
+func hotbarWebIcon(key string, img image.Image) string {
+	if img == nil {
+		return ""
+	}
+	if url, ok := hotbarWebIconCache[key]; ok {
+		return url
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return ""
+	}
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	hotbarWebIconCache[key] = url
+	return url
+}
+
+// hotbarWebSync pushes the hotbar layout and slot contents to the page.
+// The slot rects stay in Go (slotAt) so canvas-originated drag-drops keep
+// landing; the DOM only renders what Go lays out.
+func (b *ShortcutBar) hotbarWebSync(ctx Context) {
+	fn := js.Global().Get("goroHotbarSync")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	rows := b.visibleRowCount()
+	x, y := b.bounds(ctx)
+	obj := js.Global().Get("Object").New()
+	obj.Set("x", x)
+	obj.Set("y", y)
+	obj.Set("rows", rows)
+	slots := js.Global().Get("Array").New(shortcutTotalSlots)
+	for i := 0; i < shortcutTotalSlots; i++ {
+		entry := js.Global().Get("Object").New()
+		icon, label := "", ""
+		switch b.slots[i].kind {
+		case shortcutItem:
+			item := session.InventoryItem{ItemID: b.slots[i].itemID, Index: b.slots[i].itemIndex, Identified: b.slots[i].identified, Amount: 1}
+			if live, ok := inventoryItemForShortcut(ctx.Session, b.slots[i].itemIndex, b.slots[i].itemID); ok {
+				item = live
+			}
+			icon = hotbarWebIcon(fmt.Sprintf("item:%d:%t", item.ItemID, item.Identified), b.itemIconImage(ctx.Resources, item))
+			if item.Amount > 1 {
+				label = strconv.Itoa(int(item.Amount))
+			}
+		case shortcutSkill:
+			skill, _ := skillForShortcut(ctx.Session, b.slots[i])
+			if skill.ID == 0 {
+				skill = session.Skill{ID: b.slots[i].skillID, Level: b.slots[i].skillLevel}
+			}
+			if b.assets != nil {
+				icon = hotbarWebIcon(fmt.Sprintf("skill:%d", skill.ID), b.assets.SkillIconImage(ctx.Resources, skill, 24))
+			}
+			if skill.Level > 0 {
+				label = "Lv" + strconv.Itoa(maxInt(1, skill.Level))
+			}
+		}
+		entry.Set("icon", icon)
+		entry.Set("label", label)
+		slots.SetIndex(i, entry)
+	}
+	obj.Set("slots", slots)
+	fn.Invoke(obj)
+}
+
+// hotbarWebKey summarizes slot contents for change detection.
+func (b *ShortcutBar) hotbarWebKey(ctx Context) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "rows=%d|", b.visibleRowCount())
+	for i := range b.slots {
+		s := &b.slots[i]
+		label := ""
+		if s.kind == shortcutItem {
+			if live, ok := inventoryItemForShortcut(ctx.Session, s.itemIndex, s.itemID); ok && live.Amount > 1 {
+				label = strconv.Itoa(int(live.Amount))
+			}
+		} else if s.kind == shortcutSkill {
+			if skill, _ := skillForShortcut(ctx.Session, *s); skill.Level > 0 {
+				label = strconv.Itoa(skill.Level)
+			}
+		}
+		fmt.Fprintf(&sb, "%d:%d:%d:%d:%s;", i, s.kind, s.itemID, s.skillID, label)
+	}
+	return sb.String()
 }
 
 // menuWebSync reports the menu window's visibility.

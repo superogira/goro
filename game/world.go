@@ -230,6 +230,36 @@ func (u *worldUI) KeyboardShortcutsBlocked(ctx client.Context) bool {
 	return playerIsDead(ctx) || u.keyboardInputBlocked(ctx)
 }
 
+// drainCameraButtons services the on-screen camera controls (web): touch
+// devices have no wheel or two-finger rotate, so zoom and rotation ride on
+// buttons fed through the same DOM action queue as the other overlays.
+func (m *WorldMode) drainCameraButtons(ctx client.Context) {
+	for _, action := range gameui.DrainCameraActions() {
+		switch action {
+		case "zoomin":
+			if !cameraZoomLockedForMap(ctx) {
+				m.camera.ZoomBy(1 / cameraButtonZoomStep)
+			}
+		case "zoomout":
+			if !cameraZoomLockedForMap(ctx) {
+				m.camera.ZoomBy(cameraButtonZoomStep)
+			}
+		case "rotl":
+			if !cameraRotationLockedForMap(ctx) {
+				m.camera.Rotate(-cameraButtonRotateStep)
+			}
+		case "rotr":
+			if !cameraRotationLockedForMap(ctx) {
+				m.camera.Rotate(cameraButtonRotateStep)
+			}
+		case "reset":
+			if !cameraRotationLockedForMap(ctx) {
+				m.camera.ResetRotation()
+			}
+		}
+	}
+}
+
 func (u *worldUI) keyboardInputBlocked(ctx client.Context) bool {
 	if u == nil {
 		return false
@@ -1108,6 +1138,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.statsWindow.Update(ctx) {
 		return nil, nil
 	}
+	m.drainCameraButtons(ctx)
 	m.ui.basicMenu.DrainWebActions(ctx, m.basicMenuCallbacks(ctx))
 	if !m.ui.keyboardInputBlocked(ctx) {
 		if m.ui.basicMenu.Update(ctx, m.basicMenuCallbacks(ctx)) {

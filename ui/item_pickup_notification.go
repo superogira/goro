@@ -50,10 +50,16 @@ func (n *ItemPickupNotification) Show(ctx Context, item session.InventoryItem, c
 	n.item = item
 	n.text = itemPickupNotificationTextFor(ctx.Resources, item, count)
 	n.shownAt = now
+	if pickupWebEnabled() {
+		pickupWebShow(n.text)
+	}
 }
 
 func (n *ItemPickupNotification) Draw(screen *render.Frame, ctx Context, assets AssetProvider, now time.Time) {
 	if screen == nil || n == nil || assets == nil || !n.visible(now) {
+		return
+	}
+	if pickupWebEnabled() {
 		return
 	}
 	screenW := screen.Bounds().Dx()

@@ -74,6 +74,12 @@ func cameraFollowLerp(delta time.Duration) float64 {
 	return math.Min(float64(delta)/float64(time.Millisecond)*defaultCameraFollowLerpPerMS, 1.0)
 }
 
+// Camera button steps for the on-screen touch controls.
+const (
+	cameraButtonZoomStep    = 1.25
+	cameraButtonRotateStep  = math.Pi / 4
+)
+
 func (c *followCamera) Rotate(delta float64) {
 	c.yawOffset = normalizeCameraYaw(c.yawOffset + delta)
 }

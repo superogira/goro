@@ -18,6 +18,10 @@ var lastFullscreenButtonRect [4]int
 // state synchronously in the gesture task — requestFullscreen is rejected
 // outside a user activation window.
 func publishFullscreenButtonRect(x, y, size int) {
+	// A page-provided fullscreen control replaces the canvas button.
+	if js.Global().Get("goroDomFS").Truthy() {
+		x, y, size = 0, 0, 0
+	}
 	if lastFullscreenButtonRect == [4]int{x, y, size, size} {
 		return
 	}

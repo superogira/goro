@@ -185,6 +185,13 @@ func (b *ShortcutBar) visibleRowCount() int {
 
 func (b *ShortcutBar) setVisibleRows(ctx Context, rows int) {
 	rows = clampShortcutRows(rows)
+	if hotbarWebEnabled() {
+		// DOM hotbar: row count lives in the page; rebuilding canvas
+		// overlays here would publish the retired canvas bar instead.
+		b.visibleRows = rows
+		b.webSyncKey = ""
+		return
+	}
 	if rows == b.visibleRowCount() {
 		return
 	}

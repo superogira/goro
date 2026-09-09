@@ -77,7 +77,7 @@ func cameraFollowLerp(delta time.Duration) float64 {
 // Camera button steps for the on-screen touch controls.
 const (
 	cameraButtonZoomStep    = 1.25
-	cameraButtonRotateStep  = math.Pi / 4
+	cameraButtonRotateStep  = math.Pi / 2
 )
 
 func (c *followCamera) Rotate(delta float64) {

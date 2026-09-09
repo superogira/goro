@@ -280,6 +280,7 @@ func (b *ShortcutBar) hotbarWebSync(ctx Context) {
 		}
 		entry.Set("icon", icon)
 		entry.Set("label", label)
+		entry.Set("key", shortcutKeyLabels[i])
 		slots.SetIndex(i, entry)
 	}
 	obj.Set("slots", slots)

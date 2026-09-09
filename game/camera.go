@@ -29,15 +29,17 @@ type followCamera struct {
 	z           float64
 	lastUpdate  time.Time
 	yawOffset   float64
+	yawTarget   float64
 	pitch       float64
 	zoom        float64
 	zoomTarget  float64
 }
 
 func (c *followCamera) ResetTracking() {
-	yawOffset, pitch, zoom, zoomTarget := c.yawOffset, c.pitch, c.zoom, c.zoomTarget
+	yawOffset, yawTarget, pitch, zoom, zoomTarget := c.yawOffset, c.yawTarget, c.pitch, c.zoom, c.zoomTarget
 	*c = followCamera{
 		yawOffset:  yawOffset,
+		yawTarget:  yawTarget,
 		pitch:      pitch,
 		zoom:       zoom,
 		zoomTarget: zoomTarget,
@@ -64,6 +66,7 @@ func (c *followCamera) Update(ctx client.Context, now time.Time) {
 	c.z += (targetZ - c.z) * lerp
 	zoomLerp := cameraZoomLerp(lerp)
 	c.zoom += (c.targetZoom() - c.currentZoom()) * zoomLerp
+	c.yawOffset = normalizeCameraYaw(c.yawOffset + cameraYawShortestDelta(c.yawOffset, c.yawTarget)*lerp)
 	c.store(ctx)
 }
 
@@ -79,11 +82,21 @@ func cameraFollowLerp(delta time.Duration) float64 {
 // radian constants here were invisible ~1-6° nudges).
 const (
 	cameraButtonZoomStep   = 1.25
-	cameraButtonRotateStep = 90.0
+	cameraButtonRotateStep = 45.0
 )
 
+// Rotate moves the yaw target; the displayed yaw eases toward it in
+// Update (fast at first, slowing as it arrives — the same exponential
+// settle the zoom uses).
 func (c *followCamera) Rotate(delta float64) {
-	c.yawOffset = normalizeCameraYaw(c.yawOffset + delta)
+	c.yawTarget = normalizeCameraYaw(c.yawTarget + delta)
+}
+
+// RotateImmediate sets both target and displayed yaw — continuous inputs
+// (right-drag, two-finger pan) must track the finger 1:1 with no lag.
+func (c *followCamera) RotateImmediate(delta float64) {
+	c.yawTarget = normalizeCameraYaw(c.yawTarget + delta)
+	c.yawOffset = c.yawTarget
 }
 
 func (c *followCamera) Tilt(delta float64) {
@@ -139,7 +152,7 @@ func cameraZoomLerp(followLerp float64) float64 {
 }
 
 func (c *followCamera) ResetRotation() {
-	c.yawOffset = 0
+	c.yawTarget = 0
 }
 
 func (c *followCamera) Projection(ctx client.Context, width, height int, now time.Time) sceneProjection {
@@ -222,7 +235,7 @@ func (m *WorldMode) updateCameraRotation(ctx client.Context) {
 		m.camera.Tilt(cameraDragPitchDelta(int(panDY)))
 	}
 	if delta != 0 {
-		m.camera.Rotate(delta)
+		m.camera.RotateImmediate(delta)
 	}
 }
 
@@ -372,6 +385,19 @@ func clampCameraPitch(pitch float64) float64 {
 		pitch = defaultSceneCameraPitch
 	}
 	return math.Max(defaultCameraMinPitch, math.Min(defaultCameraMaxPitch, pitch))
+}
+
+// cameraYawShortestDelta returns the signed angular difference taking
+// the shorter arc, so easing from 170° to -170° travels 20°, not 340°.
+func cameraYawShortestDelta(from, to float64) float64 {
+	delta := math.Mod(to-from, 360)
+	if delta > 180 {
+		delta -= 360
+	}
+	if delta < -180 {
+		delta += 360
+	}
+	return delta
 }
 
 func normalizeCameraYaw(yaw float64) float64 {

@@ -263,14 +263,21 @@ func TestFollowCameraProjectionIncludesRuntimeYawOffset(t *testing.T) {
 	ctx := client.Context{World: world}
 	camera := followCamera{initialized: true, x: 10.5, y: 20.5, z: 0}
 
-	camera.Rotate(90)
+	camera.RotateImmediate(90)
 	projection := camera.Projection(ctx, 800, 600, time.Now())
 	if got := projection.cameraYaw; got != 90 {
 		t.Fatalf("projection yaw = %.1f, want 90.0", got)
 	}
 
 	camera.ResetRotation()
-	projection = camera.Projection(ctx, 800, 600, time.Now())
+	// Reset eases home like the rotate buttons; step time forward until
+	// the settle completes.
+	now := time.Now()
+	for i := 0; i < 240; i++ {
+		now = now.Add(16 * time.Millisecond)
+		camera.Update(ctx, now)
+	}
+	projection = camera.Projection(ctx, 800, 600, now)
 	if got := projection.cameraYaw; got != defaultSceneCameraYaw {
 		t.Fatalf("reset projection yaw = %.1f, want %.1f", got, defaultSceneCameraYaw)
 	}
@@ -295,7 +302,7 @@ func TestIndoorCameraYawIsLockedWithoutLosingOutdoorRotation(t *testing.T) {
 	}
 	camera := followCamera{initialized: true, x: 10.5, y: 20.5, z: 0}
 
-	camera.Rotate(90)
+	camera.RotateImmediate(90)
 	camera.Tilt(30)
 	projection := camera.Projection(ctx, 800, 600, time.Now())
 	if got := projection.cameraYaw; got != -45 {
@@ -340,7 +347,7 @@ func TestCameraRotationIsDisabledOnIndoorMap(t *testing.T) {
 	inputState.SetKey(input.KeyShift, true)
 	inputState.SetMousePosition(200, 160)
 	mode := &WorldMode{}
-	mode.camera.Rotate(90)
+	mode.camera.RotateImmediate(90)
 	mode.camera.Tilt(15)
 	ctx := client.Context{
 		Resources: manager,
@@ -387,7 +394,7 @@ func TestShiftRightDragTiltsCameraWithoutRotating(t *testing.T) {
 	inputState.SetKey(input.KeyShift, true)
 	inputState.SetMousePosition(200, 160)
 	mode := &WorldMode{}
-	mode.camera.Rotate(45)
+	mode.camera.RotateImmediate(45)
 	ctx := client.Context{
 		World:   &worldstate.World{MapName: "prontera"},
 		Input:   inputState,

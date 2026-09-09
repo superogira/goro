@@ -96,6 +96,15 @@ func (w *StatsWindow) webSync(ctx Context) {
 }
 
 func (w *StatsWindow) OpenWindow(ctx Context) {
+	if statsWebEnabled() {
+		// The level-up notification button and menu entry land here too;
+		// on web they must raise the DOM panel, not the retired canvas
+		// window.
+		w.webOpen = true
+		w.webSyncedKey = ""
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(statsWindowWidth, statsWindowHeight)
 	if w.IsOpen() {
 		w.Publish(ctx)

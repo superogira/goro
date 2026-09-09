@@ -245,6 +245,8 @@ func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons [
 		entry.Set("equipped", item.Equipped)
 		entry.Set("weight", weights[i])
 		entry.Set("index", item.Index)
+		entry.Set("stackable", inventoryItemTypeStackable(item.Type))
+		entry.Set("maxAmount", inventoryDropMaxAmount(item))
 		arr.SetIndex(i, entry)
 	}
 	obj.Set("items", arr)

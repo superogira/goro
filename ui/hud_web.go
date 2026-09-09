@@ -80,6 +80,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroNPCAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "npc:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 	js.Global().Set("goroInvAction", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()
@@ -321,6 +329,83 @@ func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.Inventory
 	fn.Invoke(obj)
 }
 
+
+// npcDialogWebEnabled reports whether the page provides the DOM NPC dialog.
+func npcDialogWebEnabled() bool {
+	return js.Global().Get("goroNPCDialogSync").Type() == js.TypeFunction
+}
+
+// npcDialogWebSync pushes the NPC dialog state: lines with ^RRGGBB runs
+// converted to HTML, the current action (next/close/menu/input), and the
+// menu options.
+func (d *NPCDialog) npcDialogWebSync() {
+	fn := js.Global().Get("goroNPCDialogSync")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	obj := js.Global().Get("Object").New()
+	if !d.open {
+		obj.Set("open", false)
+		fn.Invoke(obj)
+		return
+	}
+	obj.Set("open", true)
+	lines := js.Global().Get("Array").New(len(d.lines))
+	for i, line := range d.lines {
+		lines.SetIndex(i, npcDialogWebLineHTML(line))
+	}
+	obj.Set("lines", lines)
+	switch d.action {
+	case npcDialogActionNext:
+		obj.Set("action", "next")
+	case npcDialogActionClose:
+		obj.Set("action", "close")
+	case npcDialogActionMenu:
+		obj.Set("action", "menu")
+		options := js.Global().Get("Array").New(len(d.options))
+		for i, opt := range d.options {
+			options.SetIndex(i, npcDialogWebLineHTML(opt))
+		}
+		obj.Set("options", options)
+	case npcDialogActionNumberInput:
+		obj.Set("action", "number")
+	case npcDialogActionStringInput:
+		obj.Set("action", "string")
+	default:
+		obj.Set("action", "none")
+	}
+	fn.Invoke(obj)
+}
+
+// npcDialogWebLineHTML converts one dialog line's ^RRGGBB codes into HTML
+// spans. ^000000 resets to the window's base color.
+func npcDialogWebLineHTML(text string) string {
+	runes := []rune(text)
+	var b strings.Builder
+	const base = "#2a2622"
+	active := false
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '^' && i+6 < len(runes) && isHexRunes(runes[i+1:i+7]) {
+			code := string(runes[i+1 : i+7])
+			if active {
+				b.WriteString("</span>")
+			}
+			color := "#" + code
+			if strings.EqualFold(code, "000000") {
+				color = base
+			}
+			b.WriteString(`<span style="color:` + color + `">`)
+			active = true
+			i += 6
+			continue
+		}
+		b.WriteRune(runes[i])
+	}
+	if active {
+		b.WriteString("</span>")
+	}
+	return b.String()
+}
 
 // hotbarWebEnabled reports whether the page provides the DOM hotbar.
 func hotbarWebEnabled() bool {

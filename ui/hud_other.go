@@ -30,6 +30,10 @@ func hotbarWebEnabled() bool { return false }
 
 func hotbarWebEnabledStub() {}
 
+func npcDialogWebEnabled() bool { return false }
+
+func (d *NPCDialog) npcDialogWebSync() {}
+
 func inventoryWebEnabled() bool { return false }
 
 func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.InventoryItem) {}

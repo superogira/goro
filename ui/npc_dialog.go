@@ -183,6 +183,36 @@ func (d *NPCDialog) IsOpen() bool {
 }
 
 func (d *NPCDialog) Update(ctx Context) bool {
+	if npcDialogWebEnabled() {
+		hudWebInstallHooks()
+		for _, action := range hudWebDrainActions("npc:") {
+			switch {
+			case action == "npc:next" && d.action == npcDialogActionNext:
+				d.next(ctx)
+			case action == "npc:close" && d.action == npcDialogActionClose:
+				d.close(ctx)
+			case action == "npc:cancel":
+				if d.action == npcDialogActionMenu {
+					d.choose(ctx, 255)
+				} else if d.action == npcDialogActionClose {
+					d.close(ctx)
+				}
+			case strings.HasPrefix(action, "npc:choose:"):
+				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "npc:choose:")); err == nil {
+					d.choose(ctx, idx)
+				}
+			case strings.HasPrefix(action, "npc:input:"):
+				d.input = strings.TrimPrefix(action, "npc:input:")
+				if d.inputField != nil {
+					d.inputField.SetText(d.input)
+				}
+			case action == "npc:submit":
+				d.submitInput(ctx)
+			}
+		}
+		d.npcDialogWebSync()
+		return d.open
+	}
 	if !d.open {
 		if d.dialogWindow.published != nil || d.menuWindow.published != nil || d.inputWindow.published != nil {
 			d.publish(ctx)

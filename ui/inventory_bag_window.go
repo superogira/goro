@@ -134,6 +134,24 @@ func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage
 						}
 					}
 				}
+			case strings.HasPrefix(action, "inv:info:"):
+				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:info:")); err == nil {
+					for _, item := range w.tabItems(ctx.Session) {
+						if int(item.Index) == idx {
+							w.itemInfoWebSync(ctx, item)
+							break
+						}
+					}
+				}
+			case strings.HasPrefix(action, "inv:equip:"):
+				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:equip:")); err == nil {
+					for _, item := range w.tabItems(ctx.Session) {
+						if int(item.Index) == idx {
+							equipInventoryItem(ctx, item)
+							break
+						}
+					}
+				}
 			case strings.HasPrefix(action, "inv:drop:"):
 				// "inv:drop:<index>:<amount>" — the page's amount dialog
 				// resolves stackables; single items arrive with amount 1.

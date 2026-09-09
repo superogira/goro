@@ -32,6 +32,8 @@ func hotbarWebEnabledStub() {}
 
 func inventoryWebEnabled() bool { return false }
 
+func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.InventoryItem) {}
+
 func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons []string, names []string, weights []int) {}
 
 func hotbarWebIcon(key string, img image.Image) string { return "" }

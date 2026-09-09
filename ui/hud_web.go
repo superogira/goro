@@ -253,6 +253,34 @@ func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons [
 	fn.Invoke(obj)
 }
 
+// itemInfoWebSync opens the DOM item-info panel for one item: title with
+// refine, description lines, and card slots.
+func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.InventoryItem) {
+	fn := js.Global().Get("goroItemInfoSync")
+	if fn.Type() != js.TypeFunction {
+		return
+	}
+	title := inventoryItemDisplayName(ctx.Resources, item)
+	if item.Refine > 0 {
+		title = fmt.Sprintf("+%d %s", item.Refine, title)
+	}
+	desc, _ := ctx.Resources.ItemDescription(int(item.ItemID), item.Identified)
+	obj := js.Global().Get("Object").New()
+	obj.Set("title", title)
+	obj.Set("desc", strings.Join(desc, "\n"))
+	cards := js.Global().Get("Array").New(0)
+	for _, cardID := range item.Cards {
+		if cardID == 0 {
+			continue
+		}
+		if name, ok := ctx.Resources.ItemDisplayName(int(cardID), true); ok {
+			cards.Call("push", name)
+		}
+	}
+	obj.Set("cards", cards)
+	fn.Invoke(obj)
+}
+
 // hotbarWebEnabled reports whether the page provides the DOM hotbar.
 func hotbarWebEnabled() bool {
 	return js.Global().Get("goroHotbarSync").Type() == js.TypeFunction

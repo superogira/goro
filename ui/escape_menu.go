@@ -26,6 +26,18 @@ type EscapeMenu struct {
 	pendingAction EscapeMenuAction
 	deathMode     bool
 	ctx           client.Context
+	webOpen       bool
+	webSyncKey    string
+}
+
+// IsOpen reports the menu's open state. On web the DOM panel owns the
+// visibility, so the canvas window's state must not be consulted there —
+// the input blocker chain depends on this answer.
+func (m *EscapeMenu) IsOpen() bool {
+	if escapeMenuWebEnabled() {
+		return m.webOpen
+	}
+	return m.Window.IsOpen()
 }
 
 type EscapeMenuAction int
@@ -42,6 +54,17 @@ const (
 
 func (m *EscapeMenu) Toggle(ctx client.Context) {
 	m.ctx = ctx
+	if escapeMenuWebEnabled() {
+		m.webOpen = !m.webOpen
+		if !m.deathMode {
+			m.action = EscapeMenuActionNone
+			m.pending = false
+			m.pendingAction = EscapeMenuActionNone
+		}
+		m.webSyncKey = ""
+		m.webSync(ctx)
+		return
+	}
 	m.ensureSize(ctx)
 	if m.IsOpen() {
 		m.Window.Close()
@@ -63,6 +86,15 @@ func (m *EscapeMenu) Toggle(ctx client.Context) {
 func (m *EscapeMenu) OpenDeath(ctx client.Context) {
 	m.ctx = ctx
 	m.deathMode = true
+	if escapeMenuWebEnabled() {
+		m.webOpen = true
+		m.action = EscapeMenuActionNone
+		m.pending = false
+		m.pendingAction = EscapeMenuActionNone
+		m.webSyncKey = ""
+		m.webSync(ctx)
+		return
+	}
 	m.ensureSize(ctx)
 	m.action = EscapeMenuActionNone
 	m.pending = false
@@ -83,6 +115,16 @@ func (m *EscapeMenu) ResetDeath(ctx client.Context) {
 		return
 	}
 	m.ctx = ctx
+	if escapeMenuWebEnabled() {
+		m.webOpen = false
+		m.deathMode = false
+		m.action = EscapeMenuActionNone
+		m.pending = false
+		m.pendingAction = EscapeMenuActionNone
+		m.webSyncKey = ""
+		m.webSync(ctx)
+		return
+	}
 	m.Window.Close()
 	m.Publish(ctx)
 	m.deathMode = false
@@ -100,6 +142,23 @@ func (m *EscapeMenu) Update(ctx client.Context) bool {
 	m.ctx = ctx
 	if m.action != EscapeMenuActionNone {
 		return true
+	}
+	if escapeMenuWebEnabled() {
+		for _, action := range hudWebDrainActions("esc:") {
+			m.handleOptionWebAction(ctx, action)
+		}
+		if key := m.optionWebKey(ctx); key != m.webSyncKey {
+			m.webSyncKey = key
+			m.webSync(ctx)
+		}
+		if ctx.Input == nil {
+			return m.webOpen && !m.deathMode
+		}
+		if ctx.Input.JustPressed(input.KeyEscape) {
+			m.Toggle(ctx)
+			return true
+		}
+		return m.webOpen && !m.deathMode
 	}
 	if ctx.Input == nil {
 		return false

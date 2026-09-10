@@ -18,9 +18,26 @@ const (
 
 type SettingsWindow struct {
 	Window
+	webOpen    bool
+	webSyncKey string
+}
+
+// IsOpen reports the settings window's open state. On web the DOM panel
+// owns visibility; the input blocker chain consults this answer.
+func (w *SettingsWindow) IsOpen() bool {
+	if settingsWebEnabled() {
+		return w.webOpen
+	}
+	return w.Window.IsOpen()
 }
 
 func (w *SettingsWindow) OpenWindow(ctx client.Context) {
+	if settingsWebEnabled() {
+		w.webOpen = true
+		w.webSyncKey = ""
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(settingsWindowW, settingsWindowH)
 	w.ctx = ctx
 	w.Open(ctx, w.widgetTree(ctx))
@@ -28,6 +45,17 @@ func (w *SettingsWindow) OpenWindow(ctx client.Context) {
 }
 
 func (w *SettingsWindow) Update(ctx client.Context) bool {
+	if settingsWebEnabled() {
+		w.ctx = ctx
+		for _, action := range hudWebDrainActions("set:") {
+			w.handleSettingsWebAction(ctx, action)
+		}
+		if key := w.settingsWebKey(ctx); key != w.webSyncKey {
+			w.webSyncKey = key
+			w.webSync(ctx)
+		}
+		return false
+	}
 	w.EnsureWindow(settingsWindowW, settingsWindowH)
 	w.ctx = ctx
 	if !w.IsOpen() {
@@ -39,6 +67,11 @@ func (w *SettingsWindow) Update(ctx client.Context) bool {
 }
 
 func (w *SettingsWindow) Rebind(ctx client.Context) {
+	if settingsWebEnabled() {
+		w.ctx = ctx
+		w.webSyncKey = ""
+		return
+	}
 	if !w.IsOpen() {
 		return
 	}

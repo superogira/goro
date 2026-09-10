@@ -44,6 +44,9 @@ type EquipmentWindow struct {
 	lastClickAt   time.Time
 	icons         map[equipmentItemIconKey]image.Image
 	iconMiss      map[equipmentItemIconKey]struct{}
+	assets        AssetProvider
+	webOpen       bool
+	webSyncKey    string
 }
 
 type equipmentItemIconKey struct {
@@ -95,6 +98,12 @@ var (
 )
 
 func (w *EquipmentWindow) Toggle(ctx Context) {
+	if equipmentWebEnabled() {
+		w.webOpen = !w.webOpen
+		w.webSyncKey = ""
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(equipmentWindowWidth, equipmentWindowHeight)
 	if w.IsOpen() {
 		w.hideTooltip()
@@ -111,6 +120,18 @@ func (w *EquipmentWindow) Toggle(ctx Context) {
 }
 
 func (w *EquipmentWindow) Update(ctx Context, itemInfo *ItemInfoWindow, cart *CartWindow, assets AssetProvider) bool {
+	if equipmentWebEnabled() {
+		w.cart = cart
+		w.assets = assets
+		for _, action := range hudWebDrainActions("eq:") {
+			w.handleEquipWebAction(ctx, action)
+		}
+		if key := w.equipmentWebKey(ctx); key != w.webSyncKey {
+			w.webSyncKey = key
+			w.webSync(ctx)
+		}
+		return false
+	}
 	w.EnsureWindow(equipmentWindowWidth, equipmentWindowHeight)
 	if !w.IsOpen() {
 		w.hideTooltip()
@@ -143,6 +164,12 @@ func (w *EquipmentWindow) Update(ctx Context, itemInfo *ItemInfoWindow, cart *Ca
 }
 
 func (w *EquipmentWindow) Rebind(ctx Context, itemInfo *ItemInfoWindow, cart *CartWindow, assets AssetProvider) {
+	if equipmentWebEnabled() {
+		w.cart = cart
+		w.assets = assets
+		w.webSyncKey = ""
+		return
+	}
 	w.EnsureWindow(equipmentWindowWidth, equipmentWindowHeight)
 	if !w.IsOpen() {
 		return

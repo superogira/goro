@@ -36,7 +36,7 @@ func (d *NPCDialog) npcDialogWebSyncName(name string) {}
 
 func inventoryWebEnabled() bool { return false }
 
-func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.InventoryItem) {}
+func itemInfoWebShow(ctx Context, item session.InventoryItem) {}
 
 func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons []string, names []string, weights []int) {}
 

@@ -138,7 +138,7 @@ func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage
 				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:info:")); err == nil {
 					for _, item := range w.tabItems(ctx.Session) {
 						if int(item.Index) == idx {
-							w.itemInfoWebSync(ctx, item)
+							itemInfoWebShow(ctx, item)
 							break
 						}
 					}

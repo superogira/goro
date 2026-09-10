@@ -105,6 +105,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroEquipAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "eq:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 }
 
 // hudWebDrainActions takes queued DOM interactions whose action starts
@@ -270,9 +278,10 @@ func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons [
 	fn.Invoke(obj)
 }
 
-// itemInfoWebSync opens the DOM item-info panel for one item: title with
-// refine, description lines, and card slots.
-func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.InventoryItem) {
+// itemInfoWebShow opens the DOM item-info panel for one item: title with
+// refine, description lines, and card slots. Shared by the inventory and
+// equipment windows.
+func itemInfoWebShow(ctx Context, item session.InventoryItem) {
 	fn := js.Global().Get("goroItemInfoSync")
 	if fn.Type() != js.TypeFunction {
 		return

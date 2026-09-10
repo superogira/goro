@@ -113,6 +113,22 @@ func (b *ShortcutBar) Update(ctx Context, actions GameActions) bool {
 			b.webSyncKey = key
 			b.hotbarWebSync(ctx)
 		}
+		if ctx.Input != nil {
+			// The DOM hotbar replaced the canvas bar, not the keyboard path:
+			// shortcut keys must still fire. The same blocker chain as the
+			// native build (chat active, NPC dialog or a modal window open)
+			// gates it, since wasm receives keydowns even while a page
+			// input is focused.
+			if blocker, ok := actions.(KeyboardShortcutBlocker); ok && blocker.KeyboardShortcutsBlocked(ctx) {
+				return false
+			}
+			for i, key := range shortcutKeys {
+				if ctx.Input.JustPressed(key) {
+					b.activate(ctx, actions, i)
+					return true
+				}
+			}
+		}
 		return false
 	}
 	if ctx.Input == nil {

@@ -364,6 +364,9 @@ type pendingSkillTarget struct {
 	skill       session.Skill
 	maxLevel    int
 	targetID    uint32
+	ground      bool
+	x, y        int
+	text        string
 	expires     time.Time
 	readyAt     time.Time
 	source      string
@@ -705,6 +708,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if next, stop := m.handleNetworkPackets(ctx, now); stop {
 		return next, nil
 	}
+	// Status presentation must follow server updates even when a window or
+	// modal consumes input for the rest of the frame.
+	removeExpiredStatusEffects(ctx.Session, now)
+	m.ui.statusIcons.Update(ctx, now)
 	m.updateMail(ctx, now)
 	m.ui.pvpCounter.Update(ctx)
 	// The FPS/MEM HUD is a debug instrument (?stats=1 / -render-stats). Kept
@@ -931,7 +938,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		}
 		return nil, nil
 	}
-	if m.ui.teleportModal.Update(ctx, m) {
+	if m.ui.teleportModal.Update(ctx) {
 		return nil, nil
 	}
 	if m.updateAutoSpellWindow(ctx) {
@@ -1162,8 +1169,6 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		}
 	}
 	minimapDragging := m.ui.minimap.Update(ctx)
-	removeExpiredStatusEffects(ctx.Session, now)
-	m.ui.statusIcons.Update(ctx, now)
 	m.syncLevel99AuraEffects(ctx, now)
 	pointerBlocked := minimapDragging || m.mapPointerBlocked(ctx)
 	if !pointerBlocked {
@@ -1535,6 +1540,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.skillTextPrompt = m.ui.skillTextPrompt
 	next.ui.shortcutBar = m.ui.shortcutBar
 	next.ui.minimap = m.ui.minimap
+	next.ui.statusIcons = m.ui.statusIcons
 	next.ui.pvpCounter = m.ui.pvpCounter
 	next.ui.perfHUD = m.ui.perfHUD
 	next.ui.levelUpNotifications = m.ui.levelUpNotifications

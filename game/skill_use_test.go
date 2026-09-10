@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -67,9 +68,12 @@ func TestLevelOneTeleportQueuesRandomSelectionWithCast(t *testing.T) {
 	defer serverConn.Close()
 
 	mode := &WorldMode{}
+	world := worldstate.New()
+	world.Player = worldstate.Actor{ID: 0x11223344, X: 10, Y: 20}
 	ctx := client.Context{
 		Network: netClient,
 		Session: &session.Session{AccountID: 0x11223344},
+		World:   world,
 	}
 	skill := session.Skill{ID: db.SkillALTeleport, Type: skillTargetSelf, Level: 1}
 	if err := mode.skills().SendToID(ctx, skill, ctx.Session.AccountID, "test"); err != nil {
@@ -97,6 +101,86 @@ func TestLevelOneTeleportQueuesRandomSelectionWithCast(t *testing.T) {
 	}
 	if mapName := string(packets[14:20]); mapName != "Random" {
 		t.Fatalf("selection map = %q, want Random", mapName)
+	}
+	if len(mode.worldEffects) != 0 {
+		t.Fatalf("world effects before server reply = %+v, want none", mode.worldEffects)
+	}
+
+	mode.applySkillFailAck(ctx, network.SkillFailAck{SkillID: skill.ID, Cause: 1})
+	if len(mode.worldEffects) != 0 {
+		t.Fatalf("world effects after insufficient SP reply = %+v, want none", mode.worldEffects)
+	}
+	if messages := mode.ui.console.Messages(); len(messages) != 1 || messages[0].Text != "Not enough SP." {
+		t.Fatalf("console messages = %+v, want insufficient SP error", messages)
+	}
+}
+
+func TestTeleportWaitsForMapChange(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		level  int
+		maps   []string
+		cancel bool
+	}{
+		{name: "level one", level: 1, maps: []string{"Random"}},
+		{name: "level two random", level: 2, maps: []string{"Random", "prontera"}},
+		{name: "cancel level two", level: 2, maps: []string{"Random", "prontera"}, cancel: true},
+		{name: "server skips menu", level: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			netClient, serverConn := newBotTestConnection(t, 20080910)
+			world := worldstate.New()
+			world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
+			mode := &WorldMode{}
+			ctx := client.Context{
+				Network: netClient,
+				Session: &session.Session{AccountID: 2000000},
+				World:   world,
+				Input:   input.NewState(),
+			}
+			skill := session.Skill{ID: db.SkillALTeleport, Type: skillTargetSelf, Level: tc.level}
+			if err := mode.skills().Use(ctx, skill, "test"); err != nil {
+				t.Fatal(err)
+			}
+			want := network.BuildUseSkillToIDPacketForClientDate(skill.ID, uint16(tc.level), world.Player.ID, 20080910)
+			if tc.level == 1 {
+				want = append(want, network.BuildSelectWarpPointPacket(skill.ID, "Random")...)
+			}
+			readBotTestPackets(t, serverConn, want)
+			if tc.maps != nil {
+				mode.applyWarpPointList(ctx, network.WarpPointList{SkillID: skill.ID, MapNames: tc.maps})
+				if tc.level == 2 {
+					if !mode.ui.teleportModal.IsOpen() {
+						t.Fatal("level-two Teleport did not open its destination dialog")
+					}
+					key := input.KeyEnter
+					if tc.cancel {
+						key = input.KeyEscape
+					}
+					ctx.Input.SetKey(key, true)
+					mode.ui.teleportModal.Update(ctx)
+				}
+				if !tc.cancel {
+					readBotTestPackets(t, serverConn, network.BuildSelectWarpPointPacket(skill.ID, "Random"))
+				}
+			}
+			if mode.ui.teleportModal.IsOpen() {
+				t.Fatal("Teleport destination dialog remained open")
+			}
+			if len(mode.worldEffects) != 0 || len(mode.scheduledSounds) != 0 || mode.mapFade.phase != mapFadeNone {
+				t.Fatalf("Teleport played before map confirmation: effects=%+v sounds=%+v fade=%+v", mode.worldEffects, mode.scheduledSounds, mode.mapFade)
+			}
+
+			// Even after canceling, a later unrelated warp follows the same
+			// server-driven transition without a leftover Teleport effect.
+			_, stop := mode.handleNetworkPacket(ctx, testMapChangePacket("prontera", 100, 120), time.Now())
+			if !stop || mode.mapFade.phase != mapFadeOut || !mode.mapFade.hasChange {
+				t.Fatalf("confirmed map change did not start the fade: stop=%t fade=%+v", stop, mode.mapFade)
+			}
+			if len(mode.worldEffects) != 0 || len(mode.scheduledSounds) != 0 {
+				t.Fatal("map transition fabricated a local Teleport effect or sound")
+			}
+		})
 	}
 }
 
@@ -238,6 +322,163 @@ func TestMercenaryTargetSkillChasesFromMercenaryPosition(t *testing.T) {
 	}
 	if mode.pendingSkill.targetID != target.ID || mode.pendingSkill.skill.ID != db.SkillMsBash {
 		t.Fatalf("pending mercenary skill = %+v", mode.pendingSkill)
+	}
+}
+
+func TestHealApproachesZombieWithoutWalkingAwayOnOtherAxis(t *testing.T) {
+	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	world := worldstate.New()
+	world.GAT = flatWalkableGAT(64, 64)
+	world.Player = worldstate.Actor{ID: 200, Job: db.JobAcolyte, X: 20, Y: 20}
+	zombie := worldstate.Actor{
+		ID: 300, Job: 1015, X: 31, Y: 22,
+		ObjectType: actorObjectTypeMob, HasObjectType: true,
+	}
+	world.UpsertActor(zombie)
+	ctx := client.Context{
+		World: world, Network: networkClient,
+		Session: &session.Session{AccountID: 200},
+	}
+	mode := &WorldMode{}
+	skill := session.Skill{ID: db.SkillALHeal, Level: 1, Type: skillTargetFriend, Range: 9}
+	if err := mode.skills().UseTarget(ctx, skill, zombie, "test"); err != nil {
+		t.Fatal(err)
+	}
+	want, ok := network.BuildWalkToXYPacketForClientDate(22, 20, 20080910)
+	if !ok {
+		t.Fatal("could not build expected approach packet")
+	}
+	readBotTestPackets(t, serverConn, want)
+	if mode.pendingSkill.targetID != zombie.ID || mode.pendingSkill.skill.ID != skill.ID {
+		t.Fatalf("pending skill = %+v, want Heal on the zombie", mode.pendingSkill)
+	}
+
+	// Once the server has moved us into range, cast on the original target.
+	world.Player.X = 22
+	mode.skills().UpdatePendingTarget(ctx, "test", false)
+	if mode.pendingSkill.readyAt.IsZero() {
+		t.Fatal("Heal was not scheduled after reaching range")
+	}
+	mode.pendingSkill.readyAt = time.Now().Add(-time.Millisecond)
+	mode.skills().ProcessPendingTarget(ctx)
+	readBotTestPackets(t, serverConn, network.BuildUseSkillToIDPacketForClientDate(skill.ID, 1, zombie.ID, 20080910))
+	if mode.pendingSkill.skill.ID != 0 {
+		t.Fatal("Heal remained pending after casting")
+	}
+}
+
+func TestHealApproachesDiagonalZombiesWithinServerRange(t *testing.T) {
+	for _, offset := range [][2]int{{11, 11}, {-11, 11}, {11, -11}, {-11, -11}, {9, 9}} {
+		t.Run(fmt.Sprintf("offset_%d_%d", offset[0], offset[1]), func(t *testing.T) {
+			networkClient, serverConn := newBotTestConnection(t, 20080910)
+			world := worldstate.New()
+			world.GAT = flatWalkableGAT(64, 64)
+			world.Player = worldstate.Actor{ID: 200, Job: db.JobAcolyte, X: 20, Y: 20}
+			zombie := worldstate.Actor{
+				ID: 300, Job: 1015, X: 20 + offset[0], Y: 20 + offset[1],
+				ObjectType: actorObjectTypeMob, HasObjectType: true,
+			}
+			world.UpsertActor(zombie)
+			ctx := client.Context{
+				World: world, Network: networkClient,
+				Session: &session.Session{AccountID: 200},
+			}
+			mode := &WorldMode{}
+			skill := session.Skill{ID: db.SkillALHeal, Level: 1, Type: skillTargetFriend, Range: 9}
+			if err := mode.skills().UseTarget(ctx, skill, zombie, "test"); err != nil {
+				t.Fatal(err)
+			}
+			// At range 9 (+1 client allowance), the nearest diagonal cell
+			// is seven cells from the target on each axis, not nine.
+			x, y := zombie.X-7, zombie.Y-7
+			if offset[0] < 0 {
+				x = zombie.X + 7
+			}
+			if offset[1] < 0 {
+				y = zombie.Y + 7
+			}
+			want, ok := network.BuildWalkToXYPacketForClientDate(x, y, 20080910)
+			if !ok {
+				t.Fatal("could not build expected approach packet")
+			}
+			readBotTestPackets(t, serverConn, want)
+			applySelfMoveAck(ctx, network.SelfMoveAck{FromX: 20, FromY: 20, ToX: x, ToY: y})
+			world.Player.MoveStarted = time.Now().Add(-world.Player.MoveDuration / 2)
+			mode.skills().UpdatePendingTarget(ctx, "test", false)
+			if !mode.pendingSkill.readyAt.IsZero() {
+				t.Fatal("Heal scheduled while still outside circular range")
+			}
+
+			world.Player.MoveStarted = time.Now().Add(-world.Player.MoveDuration - time.Millisecond)
+			mode.skills().UpdatePendingTarget(ctx, "test", false)
+			if mode.pendingSkill.readyAt.IsZero() {
+				t.Fatal("Heal not scheduled after reaching circular range")
+			}
+			// rAthena's player distance is int(hypot(dx,dy)-0.1).
+			if distance := int(math.Hypot(float64(x-zombie.X), float64(y-zombie.Y)) - 0.1); distance > skill.Range {
+				t.Fatalf("approach cell is still outside server range: distance=%d range=%d", distance, skill.Range)
+			}
+			mode.pendingSkill.readyAt = time.Now().Add(-time.Millisecond)
+			mode.skills().ProcessPendingTarget(ctx)
+			readBotTestPackets(t, serverConn, network.BuildUseSkillToIDPacketForClientDate(skill.ID, 1, zombie.ID, 20080910))
+			if mode.pendingSkill.skill.ID != 0 {
+				t.Fatal("Heal remained pending after casting")
+			}
+		})
+	}
+}
+
+func TestSkillCasterRangeMatchesReference(t *testing.T) {
+	skill := session.Skill{ID: db.SkillALHeal, Range: 9}
+	for _, tc := range []struct {
+		name    string
+		kind    skillCasterKind
+		dx, dy  int
+		inRange bool
+	}{
+		{"player cardinal allowance", skillCasterPlayer, 10, 0, true},
+		{"player diagonal inside circle", skillCasterPlayer, 7, 7, true},
+		{"player square corner outside circle", skillCasterPlayer, 9, 9, false},
+		{"player beyond allowance", skillCasterPlayer, 11, 0, false},
+		{"mercenary square corner", skillCasterMercenary, 9, 9, true},
+		{"mercenary no allowance", skillCasterMercenary, 10, 0, false},
+		{"homunculus square corner", skillCasterHomunculus, 9, 9, true},
+		{"homunculus no allowance", skillCasterHomunculus, 10, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caster := skillCaster{kind: tc.kind}
+			rangeCells := skillTargetRangeForCaster(caster, skill)
+			if got := caster.targetWithinRange(20, 20, 20+tc.dx, 20+tc.dy, rangeCells); got != tc.inRange {
+				t.Fatalf("in range = %t, want %t (range %d)", got, tc.inRange, rangeCells)
+			}
+		})
+	}
+}
+
+func TestPendingHealRechecksCircularRangeBeforeCasting(t *testing.T) {
+	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	world := worldstate.New()
+	world.GAT = flatWalkableGAT(64, 64)
+	world.Player = worldstate.Actor{ID: 200, X: 20, Y: 20}
+	// The zombie moved into a square corner after Heal was scheduled.
+	world.UpsertActor(worldstate.Actor{ID: 300, Job: 1015, X: 29, Y: 29})
+	ctx := client.Context{World: world, Network: networkClient, Session: &session.Session{AccountID: 200}}
+	mode := &WorldMode{
+		pendingSkill: pendingSkillTarget{
+			skill:    session.Skill{ID: db.SkillALHeal, Level: 1, Type: skillTargetFriend, Range: 9},
+			targetID: 300,
+			readyAt:  time.Now().Add(-time.Second),
+			expires:  time.Now().Add(time.Second),
+		},
+	}
+	mode.skills().ProcessPendingTarget(ctx)
+	want, ok := network.BuildWalkToXYPacketForClientDate(22, 22, 20080910)
+	if !ok {
+		t.Fatal("could not build expected approach packet")
+	}
+	readBotTestPackets(t, serverConn, want)
+	if mode.pendingSkill.targetID != 300 || !mode.pendingSkill.readyAt.IsZero() {
+		t.Fatalf("pending Heal = %+v, want to keep chasing the zombie", mode.pendingSkill)
 	}
 }
 

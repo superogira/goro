@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kivutar/goro/config"
+	"github.com/kivutar/goro/glog"
 )
 
 func TestNewForceUserAIEnablesCompanionCustomAI(t *testing.T) {
@@ -27,7 +28,7 @@ func TestNewForceUserAIEnablesCompanionCustomAI(t *testing.T) {
 		Gameplay: config.GameplayConfig{
 			ForceUserAI: true,
 		},
-		Log: config.LogConfig{
+		Log: glog.LogConfig{
 			Level: "info",
 		},
 	})

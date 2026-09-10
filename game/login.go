@@ -3,13 +3,14 @@ package game
 import (
 	"context"
 	"fmt"
-	"github.com/kivutar/goro/glog"
-	"github.com/kivutar/goro/input"
 	"image"
 	"image/color"
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/kivutar/goro/glog"
+	"github.com/kivutar/goro/input"
 
 	"github.com/kivutar/goro/client"
 	gameaudio "github.com/kivutar/goro/audio"
@@ -1061,7 +1062,7 @@ func (m *LoginMode) connectAndMaybeLogin(ctx client.Context, conn res.Connection
 	if err != nil {
 		m.loginPending = false
 		m.status = err.Error()
-		openConnectionFailedDialog(ctx, &m.disconnectDialog)
+		m.showConnectionFailed(ctx)
 		return
 	}
 
@@ -1176,7 +1177,7 @@ func (m *LoginMode) connectCharServer(ctx client.Context, server network.CharSer
 	if err != nil {
 		m.status = "char connect failed: " + err.Error()
 		glog.Infof("char connect failed addr=%s port=%d: %v", server.Address, server.Port, err)
-		openConnectionFailedDialog(ctx, &m.disconnectDialog)
+		m.showConnectionFailed(ctx)
 		return false
 	}
 
@@ -1197,7 +1198,7 @@ func (m *LoginMode) connectMapServer(ctx client.Context, zone network.ZoneServer
 	cancel()
 	if err != nil {
 		m.status = "map connect failed: " + err.Error()
-		openConnectionFailedDialog(ctx, &m.disconnectDialog)
+		m.showConnectionFailed(ctx)
 		return
 	}
 

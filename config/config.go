@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kivutar/goro/glog"
 )
 
 type Config struct {
@@ -24,7 +26,7 @@ type Config struct {
 	Fog      FogConfig
 	Gameplay GameplayConfig
 	Script   ScriptConfig
-	Log      LogConfig
+	Log      glog.LogConfig
 }
 
 type WindowConfig struct {
@@ -110,11 +112,6 @@ type GameplayConfig struct {
 
 type ScriptConfig struct {
 	Path string
-}
-
-type LogConfig struct {
-	Level string
-	File  string
 }
 
 func LoadConfig(args []string) (Config, error) {
@@ -256,7 +253,7 @@ func defaultConfig() Config {
 		Gameplay: GameplayConfig{
 			NoCtrl: true,
 		},
-		Log: LogConfig{
+		Log: glog.LogConfig{
 			Level: "info",
 		},
 	}

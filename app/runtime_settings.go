@@ -1,6 +1,10 @@
 package app
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/gogpu/gogpu"
+)
 
 type runtimeSettings struct {
 	fullscreen atomic.Bool
@@ -40,6 +44,10 @@ func (s *runtimeSettings) SetVSync(value bool) {
 	if s != nil {
 		s.vsync.Store(value)
 	}
+	// On the web this also retargets the frame pacing immediately, so the
+	// settings checkbox takes effect without a restart; native builds keep
+	// needing one until the surface is recreated.
+	gogpu.SetBrowserVSync(value)
 }
 
 func (s *runtimeSettings) FPS() bool {

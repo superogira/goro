@@ -135,6 +135,7 @@ func LoadConfig(args []string) (Config, error) {
 		return Config{}, err
 	}
 	applyServerINI(&cfg)
+	applyStoredUserINI(&cfg)
 	applyWebLoginQuery(&cfg)
 	cfg.DataDir = resolveDataDir(cfg.DataDir)
 	return cfg, nil
@@ -198,13 +199,6 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 	if settings.SFXVolume < 0 || settings.SFXVolume > 1 {
 		return "", fmt.Errorf("sfx volume must be between 0 and 1")
 	}
-	path, err := UserConfigPath()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
-	}
 	values := map[string]map[string]string{
 		"window": {
 			"fullscreen": formatINIValueBool(settings.Fullscreen),
@@ -225,15 +219,9 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 			"itemsnap":     formatINIValueBool(settings.SnapItems),
 		},
 	}
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	data := upsertINIValues(string(existing), values)
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
-		return "", err
-	}
-	return path, nil
+	// Native builds write the user goro.ini; web builds store the same ini
+	// text in localStorage, where it survives page reloads.
+	return writeUserSettings(values)
 }
 
 func defaultConfig() Config {

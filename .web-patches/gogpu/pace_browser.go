@@ -4,6 +4,7 @@ package gogpu
 
 import (
 	"sync"
+	"sync/atomic"
 	"syscall/js"
 	"time"
 )
@@ -27,10 +28,20 @@ const (
 )
 
 var (
-	rafOnce   sync.Once
-	rafSignal = make(chan struct{}, 1)
-	rafFunc   js.Func
+	rafOnce     sync.Once
+	rafSignal   = make(chan struct{}, 1)
+	rafFunc     js.Func
+	paceNoVSync atomic.Bool
 )
+
+// SetBrowserVSync toggles compositor-paced frames on the browser backend.
+// The browser always composites on vsync; with vsync disabled the loop stops
+// waiting for requestAnimationFrame and ticks on a short timer instead, so
+// the game can run past the display refresh rate — the web equivalent of
+// switching the native present mode away from FIFO.
+func SetBrowserVSync(enabled bool) {
+	paceNoVSync.Store(!enabled)
+}
 
 func rafCallback() js.Func {
 	rafOnce.Do(func() {
@@ -48,6 +59,12 @@ func rafCallback() js.Func {
 // paceBrowserFrame blocks until the next requestAnimationFrame callback or
 // the fallback timeout, yielding to the browser event loop while waiting.
 func paceBrowserFrame() {
+	if paceNoVSync.Load() {
+		// Uncapped: run the frame now and yield just enough to keep the JS
+		// event loop (input, audio, promises) serviced between frames.
+		time.Sleep(pacePollInterval)
+		return
+	}
 	// Drain a stale signal — e.g. a late rAF from a previous timed-out wait
 	// that fired during frame work — so this frame really waits for the
 	// next compositor tick.

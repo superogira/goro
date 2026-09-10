@@ -463,6 +463,9 @@ func (a *App) shutdown(platWindow platform.PlatformWindow) {
 func (a *App) startRunLoop() {
 	a.running.Store(true)
 	a.lifecycle = AppRunning
+	// Frame pacing on the browser backend follows the vsync setting from the
+	// first frame; later toggles go through SetBrowserVSync.
+	SetBrowserVSync(a.config.VSync)
 
 	// ADR-026: surface available on desktop = once at init.
 	if a.onSurfaceAvailable != nil {

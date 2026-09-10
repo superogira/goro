@@ -97,6 +97,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroSkillAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "skill:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 }
 
 // hudWebDrainActions takes queued DOM interactions whose action starts

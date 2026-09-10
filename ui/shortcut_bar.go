@@ -107,6 +107,60 @@ func (b *ShortcutBar) Update(ctx Context, actions GameActions) bool {
 				if slot, err := strconv.Atoi(strings.TrimPrefix(action, "hot:tap:")); err == nil {
 					b.activate(ctx, actions, slot)
 				}
+			case strings.HasPrefix(action, "hot:assign-item:"):
+				// hot:assign-item:<slot>:<inventory index> — an item dragged
+				// from the DOM inventory onto a hotbar slot.
+				parts := strings.Split(strings.TrimPrefix(action, "hot:assign-item:"), ":")
+				if len(parts) != 2 {
+					continue
+				}
+				slot, err1 := strconv.Atoi(parts[0])
+				index, err2 := strconv.ParseUint(parts[1], 10, 16)
+				if err1 != nil || err2 != nil || slot < 0 || slot >= shortcutTotalSlots {
+					continue
+				}
+				item, ok := inventoryItemForShortcut(ctx.Session, uint16(index), 0)
+				if !ok {
+					continue
+				}
+				b.ctx = ctx
+				b.slots[slot] = shortcutSlotState{
+					kind:       shortcutItem,
+					itemIndex:  item.Index,
+					itemID:     item.ItemID,
+					identified: item.Identified,
+				}
+				b.sendSlotChange(ctx, slot)
+			case strings.HasPrefix(action, "hot:assign-skill:"):
+				// hot:assign-skill:<slot>:<skill id> — a skill dragged from
+				// the DOM skill window onto a hotbar slot.
+				parts := strings.Split(strings.TrimPrefix(action, "hot:assign-skill:"), ":")
+				if len(parts) != 2 {
+					continue
+				}
+				slot, err1 := strconv.Atoi(parts[0])
+				skillID, err2 := strconv.ParseUint(parts[1], 10, 16)
+				if err1 != nil || err2 != nil || slot < 0 || slot >= shortcutTotalSlots {
+					continue
+				}
+				skill, ok := shortcutSkillByID(ctx.Session, uint16(skillID))
+				if !ok || !skillCanUseShortcut(skill) {
+					continue
+				}
+				b.ctx = ctx
+				b.slots[slot] = shortcutSlotState{
+					kind:       shortcutSkill,
+					skillID:    skill.ID,
+					skillLevel: skill.Level,
+				}
+				b.sendSlotChange(ctx, slot)
+			case strings.HasPrefix(action, "hot:clear:"):
+				// Right-click (or long-press) clears one slot.
+				if slot, err := strconv.Atoi(strings.TrimPrefix(action, "hot:clear:")); err == nil && slot >= 0 && slot < shortcutTotalSlots && b.slots[slot].kind != shortcutEmpty {
+					b.ctx = ctx
+					b.slots[slot] = shortcutSlotState{}
+					b.sendSlotChange(ctx, slot)
+				}
 			}
 		}
 		if key := b.hotbarWebKey(ctx); key != b.webSyncKey {

@@ -98,9 +98,17 @@ type SkillWindow struct {
 	gridMode       bool
 	gridRows       int
 	selectedLevels map[uint16]int
+	webOpen        bool
+	webSyncKey     string
 }
 
 func (w *SkillWindow) Toggle(ctx Context) {
+	if skillWebEnabled() {
+		w.webOpen = !w.webOpen
+		w.webSyncKey = ""
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(skillWindowWidth, skillWindowHeight)
 	if w.IsOpen() {
 		w.close(ctx)
@@ -110,6 +118,14 @@ func (w *SkillWindow) Toggle(ctx Context) {
 }
 
 func (w *SkillWindow) OpenWindow(ctx Context) {
+	if skillWebEnabled() {
+		// Menu entry and level-up notification land here; on web they must
+		// raise the DOM panel, not the retired canvas window.
+		w.webOpen = true
+		w.webSyncKey = ""
+		w.webSync(ctx)
+		return
+	}
 	w.EnsureWindow(skillWindowWidth, skillWindowHeight)
 	if w.IsOpen() {
 		w.Publish(ctx)
@@ -120,6 +136,21 @@ func (w *SkillWindow) OpenWindow(ctx Context) {
 }
 
 func (w *SkillWindow) Update(ctx Context, shortcuts *ShortcutBar, actions GameActions) bool {
+	if skillWebEnabled() {
+		w.actions = actions
+		if assets, ok := actions.(AssetProvider); ok && assets != nil && !w.lastIconAssets {
+			w.assets = assets
+			w.lastIconAssets = true
+		}
+		for _, action := range hudWebDrainActions("skill:") {
+			w.handleSkillWebAction(ctx, actions, action)
+		}
+		if key := w.skillWebKey(ctx); key != w.webSyncKey {
+			w.webSyncKey = key
+			w.webSync(ctx)
+		}
+		return false
+	}
 	w.EnsureWindow(skillWindowWidth, skillWindowHeight)
 	if !w.IsOpen() {
 		return false
@@ -183,6 +214,10 @@ func (w *SkillWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar) bool {
 }
 
 func (w *SkillWindow) Draw(screen *render.Frame, ctx Context, assets AssetProvider) {
+	if skillWebEnabled() {
+		// The DOM window owns the skill UI on web; nothing to publish.
+		return
+	}
 	w.EnsureWindow(skillWindowWidth, skillWindowHeight)
 	if !w.IsOpen() {
 		w.Unpublish(ctx)
@@ -209,6 +244,14 @@ func (w *SkillWindow) Publish(ctx Context) {
 }
 
 func (w *SkillWindow) Rebind(ctx Context, actions GameActions) {
+	if skillWebEnabled() {
+		if assets, ok := actions.(AssetProvider); ok && assets != nil {
+			w.assets = assets
+			w.lastIconAssets = true
+		}
+		w.webSyncKey = ""
+		return
+	}
 	w.EnsureWindow(skillWindowWidth, skillWindowHeight)
 	if !w.IsOpen() {
 		return

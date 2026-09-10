@@ -85,6 +85,20 @@ func (m *ConfirmModal) Update(ctx client.Context) bool {
 	return true
 }
 
+// DialogTitle/DialogMessage/DialogOKOnly expose the modal's content so the
+// web title layer can mirror it as a DOM alert while the canvas is covered.
+func (m *ConfirmModal) DialogTitle() string {
+	return m.title
+}
+
+func (m *ConfirmModal) DialogMessage() string {
+	return m.message
+}
+
+func (m *ConfirmModal) DialogOKOnly() bool {
+	return m.okOnly
+}
+
 func (m *ConfirmModal) Confirm(ctx client.Context) {
 	m.Close(ctx)
 	if m.onOK != nil {

@@ -145,6 +145,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroTitleAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "title:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 }
 
 // InstallWebActionHooks exposes the page action hooks from any mode —
@@ -152,6 +160,12 @@ func hudWebInstallHooks() {
 // them lazily.
 func InstallWebActionHooks() {
 	hudWebInstallHooks()
+}
+
+// DrainWebActions is the exported drain for modes that own their DOM
+// layer directly (the title screen) instead of through a window Update.
+func DrainWebActions(prefix string) []string {
+	return hudWebDrainActions(prefix)
 }
 
 // hudWebDrainActions takes queued DOM interactions whose action starts

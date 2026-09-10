@@ -39,6 +39,8 @@ type LoginMode struct {
 	titleWebBG          string
 	titleWebPhase       string
 	titleWebFade        string
+	titleWebStatus      string
+	titleWebAlert       string
 	bgSource            string
 	bgLoaded            bool
 	bgmStarted          bool

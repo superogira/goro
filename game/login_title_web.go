@@ -30,14 +30,21 @@ func (m *LoginMode) skipCanvasTitleBackground() bool {
 }
 
 // syncTitleWeb pushes the title layer state to the page: the background
-// as a one-time PNG data URL, the current phase, and the fade-cover alpha
-// (the layer's opacity is 1-alpha). Only changed values are sent, so the
-// steady state costs nothing per frame.
+// as a one-time PNG data URL, the current phase, the fade-cover alpha
+// (the layer's opacity is 1-alpha), the status line, and the login-phase
+// modal alert (refused login / lost connection) that the skipped canvas
+// can no longer show. Only changed values are sent, so the steady state
+// costs nothing per frame. It also drains the layer's own "title:"
+// actions here — the modals swallow Update input while open, so this is
+// the one path that always runs.
 func (m *LoginMode) syncTitleWeb(ctx client.Context, alpha float64) {
 	if !titleWebEnabled() {
 		return
 	}
 	gameui.InstallWebActionHooks()
+	for _, action := range gameui.DrainWebActions("title:") {
+		m.handleTitleWebAction(ctx, action)
+	}
 	phase := "account"
 	switch m.phase {
 	case loginPhaseCharacter:
@@ -46,7 +53,9 @@ func (m *LoginMode) syncTitleWeb(ctx client.Context, alpha float64) {
 		phase = "create"
 	}
 	fade := strconv.FormatFloat(alpha, 'f', 3, 64)
-	if m.titleWebBG != "" && m.titleWebPhase == phase && m.titleWebFade == fade {
+	alert := m.titleWebAlertState()
+	if m.titleWebBG != "" && m.titleWebPhase == phase && m.titleWebFade == fade &&
+		m.titleWebStatus == m.status && m.titleWebAlert == alert {
 		return
 	}
 	if m.titleWebBG == "" {
@@ -59,9 +68,68 @@ func (m *LoginMode) syncTitleWeb(ctx client.Context, alpha float64) {
 	obj.Set("phase", phase)
 	obj.Set("fade", alpha)
 	obj.Set("bg", m.titleWebBG)
+	obj.Set("status", m.status)
+	if alert != "" {
+		title, message, okOnly := m.titleWebAlertContent()
+		alertObj := js.Global().Get("Object").New()
+		alertObj.Set("title", title)
+		alertObj.Set("message", message)
+		alertObj.Set("okOnly", okOnly)
+		obj.Set("alert", alertObj)
+	} else {
+		obj.Set("alert", nil)
+	}
 	m.titleWebPhase = phase
 	m.titleWebFade = fade
+	m.titleWebStatus = m.status
+	m.titleWebAlert = alert
 	js.Global().Get("goroTitleSync").Invoke(obj)
+}
+
+// titleWebAlertState returns a signature of the open login-phase modal
+// ("" when none), and titleWebAlertContent its pieces. While the DOM
+// layer covers the account phase the canvas is not drawn, so a canvas
+// modal there would be invisible yet still swallow all input — the DOM
+// alert is the only visible face of it.
+func (m *LoginMode) titleWebAlertState() string {
+	if m.disconnectDialog.IsOpen() {
+		title, message, okOnly := m.alertDialogContent(&m.disconnectDialog)
+		return title + "\x00" + message + "\x00" + strconv.FormatBool(okOnly)
+	}
+	if m.quitConfirm.IsOpen() {
+		title, message, okOnly := m.alertDialogContent(&m.quitConfirm)
+		return title + "\x00" + message + "\x00" + strconv.FormatBool(okOnly)
+	}
+	return ""
+}
+
+func (m *LoginMode) titleWebAlertContent() (string, string, bool) {
+	if m.disconnectDialog.IsOpen() {
+		return m.alertDialogContent(&m.disconnectDialog)
+	}
+	return m.alertDialogContent(&m.quitConfirm)
+}
+
+func (m *LoginMode) alertDialogContent(dialog *gameui.ConfirmModal) (string, string, bool) {
+	return dialog.DialogTitle(), dialog.DialogMessage(), dialog.DialogOKOnly()
+}
+
+func (m *LoginMode) handleTitleWebAction(ctx client.Context, action string) {
+	if action != "title:alertok" && action != "title:alertcancel" {
+		return
+	}
+	target := &m.disconnectDialog
+	if !target.IsOpen() {
+		target = &m.quitConfirm
+	}
+	if !target.IsOpen() {
+		return
+	}
+	if action == "title:alertok" || target.DialogOKOnly() {
+		target.Confirm(ctx)
+		return
+	}
+	target.Cancel(ctx)
 }
 
 // titleWebBackgroundData composes the current title background (single

@@ -58,3 +58,6 @@ func hudFormatNumber(value int64) string { return formatHUDNumber(value) }
 
 // InstallWebActionHooks is a no-op on native builds.
 func InstallWebActionHooks() {}
+
+// DrainWebActions is a no-op on native builds.
+func DrainWebActions(prefix string) []string { return nil }

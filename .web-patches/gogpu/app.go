@@ -844,6 +844,12 @@ func (a *App) classifyEvent(event *platform.Event, lastResize *platform.Event, s
 			if w := a.windowManager.getByPlatformID(event.WindowID); w != nil {
 				a.windowManager.setFocus(w.id)
 			}
+		} else {
+			// Focus went elsewhere (alt-tab, another window): the OS eats
+			// any pending key/pointer releases, so drop every held key and
+			// button now — a stuck "pressed" mouse button made the first
+			// clicks after switching back dead on the web build.
+			a.releaseHeldInputs()
 		}
 		if a.eventSource != nil {
 			a.eventSource.dispatchFocus(event.Focused)
@@ -915,6 +921,21 @@ func (a *App) dispatchKeyToEventSource(key gpucontext.Key, mods gpucontext.Modif
 		a.eventSource.dispatchKeyPress(key, mods)
 	} else {
 		a.eventSource.dispatchKeyRelease(key, mods)
+	}
+}
+
+// releaseHeldInputs clears pressed keys and mouse buttons. Called when the
+// window loses focus so input state cannot stick on a release event the OS
+// swallowed.
+func (a *App) releaseHeldInputs() {
+	if a.inputState == nil {
+		return
+	}
+	for key := input.Key(0); key < input.KeyCount; key++ {
+		a.inputState.Keyboard().SetKey(key, false)
+	}
+	for b := input.MouseButton(0); b < input.MouseButtonCount; b++ {
+		a.inputState.Mouse().SetButton(b, false)
 	}
 }
 

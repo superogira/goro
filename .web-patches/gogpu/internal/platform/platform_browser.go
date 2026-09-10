@@ -237,6 +237,7 @@ func (w *browserWindow) requestWakeLockOnce() {
 		}
 		return nil
 	})
+
 }
 
 // enqueueEvent adds an event to the platform event queue.
@@ -278,6 +279,29 @@ func (w *browserWindow) registerEventListeners(p *browserPlatform) {
 	// canvas-level listener would swallow every keystroke.
 	w.canvas.Call("setAttribute", "tabindex", "0")
 	doc := js.Global().Get("document")
+
+	// Window focus follows the OS focus (alt-tab, clicking another app's
+	// window). Losing focus must reach the app as EventFocus(false) like it
+	// does on the desktop platforms — the app releases held buttons and keys
+	// there, and without it a pointerup lost to the desktop left the mouse
+	// "stuck pressed" after switching back: clicks stopped registering
+	// until the next full press-and-release.
+	w.addEventListener(js.Global(), "blur", func(_ js.Value, _ []js.Value) any {
+		p.enqueueEvent(Event{
+			WindowID: w.id,
+			Type:     EventFocus,
+			Focused:  false,
+		})
+		return nil
+	})
+	w.addEventListener(js.Global(), "focus", func(_ js.Value, _ []js.Value) any {
+		p.enqueueEvent(Event{
+			WindowID: w.id,
+			Type:     EventFocus,
+			Focused:  true,
+		})
+		return nil
+	})
 
 	w.addEventListener(doc, "keydown", func(_ js.Value, args []js.Value) any {
 		ev := args[0]

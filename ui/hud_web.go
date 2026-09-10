@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall/js"
 
+	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 )
@@ -286,22 +287,22 @@ func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.Inventory
 		}
 	}
 	obj.Set("cards", cards)
-	// Card slots footer: the game shows 4 slot frames — filled ones for
-	// slots the item has (empty_card_slot icon, or the card's own icon +
-	// name when equipped), hatched ones when the item has fewer slots.
+	// Card slots footer, equipment only: filled frames show equipped
+	// cards, dashed frames mark open slots. Items with no slots — and
+	// non-gear entirely — send no slots array, so the page renders no
+	// footer at all (matching the classic client).
 	slotCount, _ := ctx.Resources.ItemSlotCount(int(item.ItemID))
-	obj.Set("slotCount", slotCount)
-	slots := js.Global().Get("Array").New(4)
-	for i := 0; i < 4; i++ {
-		entry := js.Global().Get("Object").New()
-		cardID := uint16(0)
-		if i < len(item.Cards) {
-			cardID = item.Cards[i]
-			if cardID == 0x00ff || cardID == 0x00fe || cardID == 0xff00 {
-				cardID = 0
+	if item.Type == db.ItemTypeWeapon || item.Type == db.ItemTypeArmor || item.Type == db.ItemTypeShadowGear {
+		slots := js.Global().Get("Array").New(slotCount)
+		for i := 0; i < slotCount; i++ {
+			entry := js.Global().Get("Object").New()
+			cardID := uint16(0)
+			if i < len(item.Cards) {
+				cardID = item.Cards[i]
+				if cardID == 0x00ff || cardID == 0x00fe || cardID == 0xff00 {
+					cardID = 0
+				}
 			}
-		}
-		if i < slotCount {
 			if cardID != 0 {
 				entry.Set("state", "card")
 				if name, ok := ctx.Resources.ItemDisplayName(int(cardID), true); ok {
@@ -313,12 +314,10 @@ func (w *InventoryBagWindow) itemInfoWebSync(ctx Context, item session.Inventory
 			} else {
 				entry.Set("state", "empty")
 			}
-		} else {
-			entry.Set("state", "none")
+			slots.SetIndex(i, entry)
 		}
-		slots.SetIndex(i, entry)
+		obj.Set("slots", slots)
 	}
-	obj.Set("slots", slots)
 	// The illustration (collection art, the big picture the canvas window
 	// showed at 75x100) rides along as a cached data URL.
 	if resourceName, ok := ctx.Resources.ItemResourceName(int(item.ItemID), item.Identified); ok {

@@ -234,6 +234,7 @@ type Renderer struct {
 
 	// PowerPreference for adapter selection
 	powerPreference gputypes.PowerPreference
+	forceSoftwareAdapter      bool
 
 	// Primary RenderTarget — backward compatibility for single-window API.
 	// TODO(lifecycle-phase3): remove once all callers use per-window surfaces.
@@ -258,9 +259,10 @@ type Renderer struct {
 }
 
 // newRenderer creates and initializes a new renderer.
-func newRenderer(platWin platform.PlatformWindow, graphicsAPI types.GraphicsAPI, vsync bool, powerPref gputypes.PowerPreference, transparent bool) (*Renderer, error) {
+func newRenderer(platWin platform.PlatformWindow, graphicsAPI types.GraphicsAPI, vsync bool, powerPref gputypes.PowerPreference, transparent bool, forceSoftware bool) (*Renderer, error) {
 	r := &Renderer{
-		powerPreference: powerPref,
+		powerPreference:      powerPref,
+		forceSoftwareAdapter: forceSoftware,
 	}
 	r.primary = &RenderTarget{
 		renderer:    r,
@@ -376,8 +378,9 @@ func (r *Renderer) initInstance(graphicsAPI types.GraphicsAPI) error {
 // backend can return a real adapter backed by a live EGL context.
 func (r *Renderer) initAdapterDevice(surfaceHint *wgpu.Surface) error {
 	opts := &wgpu.RequestAdapterOptions{
-		PowerPreference:   r.powerPreference,
-		CompatibleSurface: surfaceHint,
+		PowerPreference:      r.powerPreference,
+		CompatibleSurface:    surfaceHint,
+		ForceFallbackAdapter: r.forceSoftwareAdapter,
 	}
 	var err error
 	r.adapter, err = r.instance.RequestAdapter(opts)
@@ -394,6 +397,13 @@ func (r *Renderer) initAdapterDevice(surfaceHint *wgpu.Surface) error {
 		}
 		fallbackAdapter, fallbackErr := r.instance.RequestAdapter(fallbackOpts)
 		if fallbackErr != nil {
+			if r.forceSoftwareAdapter {
+				// Both requests asked for a software adapter. Chrome ships
+				// WebGPU software rendering (SwiftShader) disabled by default,
+				// so an explicit request returning null is almost always that
+				// switch, not broken drivers.
+				return fmt.Errorf("gogpu: failed to request software adapter: %w (Chrome ships WebGPU software rendering disabled — enable chrome://flags/#enable-unsafe-swiftshader and reload)", err)
+			}
 			return fmt.Errorf("gogpu: failed to request adapter: %w (no hardware GPU and software fallback unavailable — update GPU drivers or enable chrome://flags/#enable-unsafe-webgpu)", err)
 		}
 		slog.Warn("no hardware GPU adapter; using software fallback adapter (expect lower performance)")

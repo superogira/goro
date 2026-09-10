@@ -91,6 +91,9 @@ type Config struct {
 	// this controls which GPU is selected.
 	// PowerPreferenceNone (default) lets the driver decide.
 	PowerPreference gputypes.PowerPreference
+	// ForceSoftwareAdapter requests the browser's fallback (software/SwiftShader)
+	// adapter on the first request instead of only as an error retry.
+	ForceSoftwareAdapter bool
 
 	// RenderMode controls 2D rendering path selection (ADR-020).
 	// RenderModeAuto (default): CPU rasterizer on software adapter, GPU on real hardware.
@@ -311,6 +314,11 @@ func (c Config) WithTransparent(transparent bool) Config {
 // Use gputypes.PowerPreferenceLowPower to prefer integrated GPU (battery saving).
 // Use gputypes.PowerPreferenceHighPerformance to prefer discrete GPU (performance).
 // Use gputypes.PowerPreferenceNone (default) to let the driver decide.
+func (c Config) WithForceSoftwareAdapter(force bool) Config {
+	c.ForceSoftwareAdapter = force
+	return c
+}
+
 func (c Config) WithPowerPreference(pref gputypes.PowerPreference) Config {
 	c.PowerPreference = pref
 	return c

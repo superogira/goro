@@ -61,4 +61,16 @@ func applyWebLoginQuery(cfg *Config) {
 	if query.Get("fps") == "1" {
 		cfg.Render.FPS = true
 	}
+	// gpu= picks the GPU adapter: software forces the browser's fallback
+	// adapter (SwiftShader — the escape hatch for blocklisted or broken
+	// drivers), low/high set the power preference. Kept out of the wiki-
+		// style debug flags above because players with GPU trouble need it.
+	switch strings.ToLower(strings.TrimSpace(query.Get("gpu"))) {
+	case "software", "soft", "swiftshader":
+		cfg.Render.ForceSoftware = true
+	case "low", "power-saving", "powersaving":
+		cfg.Render.PowerPreference = "low"
+	case "high", "performance", "perf":
+		cfg.Render.PowerPreference = "high"
+	}
 }

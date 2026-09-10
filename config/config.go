@@ -77,6 +77,8 @@ type BackgroundConfig struct {
 
 type RenderConfig struct {
 	GraphicsAPI        string
+	PowerPreference    string
+	ForceSoftware      bool
 	VSync              bool
 	FPS                bool
 	NoUI               bool
@@ -328,6 +330,8 @@ func applyCLI(cfg *Config, args []string) error {
 	fs.Float64Var(&cfg.Audio.BGMVolume, "bgm-volume", cfg.Audio.BGMVolume, "BGM volume from 0 to 1")
 	fs.Float64Var(&cfg.Audio.SFXVolume, "sfx-volume", cfg.Audio.SFXVolume, "SFX volume from 0 to 1")
 	fs.StringVar(&cfg.Render.GraphicsAPI, "graphics-api", cfg.Render.GraphicsAPI, "graphics API: auto, vulkan, dx12, metal, gles, software")
+	fs.StringVar(&cfg.Render.PowerPreference, "power-preference", cfg.Render.PowerPreference, "GPU power preference: low, high")
+	fs.BoolVar(&cfg.Render.ForceSoftware, "gpu-software", cfg.Render.ForceSoftware, "request the software GPU adapter")
 	fs.BoolVar(&cfg.Render.VSync, "vsync", cfg.Render.VSync, "enable vsync")
 	fs.BoolVar(&cfg.Render.FPS, "fps", cfg.Render.FPS, "show measured FPS counter")
 	fs.BoolVar(&cfg.Render.NoUI, "no-ui", cfg.Render.NoUI, "disable UI rendering for benchmarking")
@@ -428,6 +432,10 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		cfg.Background.LoadingPool = strings.TrimSpace(value)
 	case "render.graphicsapi":
 		cfg.Render.GraphicsAPI = value
+	case "render.powerpreference":
+		cfg.Render.PowerPreference = value
+	case "render.gpusoftware":
+		return setBool(value, &cfg.Render.ForceSoftware)
 	case "render.vsync":
 		return setBool(value, &cfg.Render.VSync)
 	case "render.fps":

@@ -16,6 +16,7 @@ import (
 	"github.com/gogpu/gg"
 	"github.com/gogpu/gg/integration/ggcanvas"
 	"github.com/gogpu/gogpu"
+	gputypes "github.com/gogpu/gputypes"
 	gogputypes "github.com/gogpu/gogpu/gpu/types"
 	"github.com/gogpu/gpucontext"
 	uiapp "github.com/gogpu/ui/app"
@@ -311,6 +312,8 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 	}
 	appConfig = appConfig.
 		WithGraphicsAPI(api).
+		WithPowerPreference(powerPreference(renderCfg.PowerPreference)).
+		WithForceSoftwareAdapter(renderCfg.ForceSoftware).
 		WithTitle(cfg.Title).
 		WithIcon(appicon.Image()).
 		WithSize(cfg.Width, cfg.Height).
@@ -450,6 +453,19 @@ func graphicsAPI(name string) (gogputypes.GraphicsAPI, error) {
 		return gogpu.GraphicsAPISoftware, nil
 	default:
 		return gogpu.GraphicsAPIAuto, fmt.Errorf("unknown graphics api %q", name)
+	}
+}
+
+// powerPreference maps the config string to a gogpu preference; empty and
+// unknown values fall back to the driver's default choice.
+func powerPreference(name string) gputypes.PowerPreference {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "low", "power-saving", "powersaving":
+		return gputypes.PowerPreferenceLowPower
+	case "high", "performance", "perf":
+		return gputypes.PowerPreferenceHighPerformance
+	default:
+		return gputypes.PowerPreferenceNone
 	}
 }
 

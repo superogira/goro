@@ -58,6 +58,23 @@ func NewLoginWindow(ctx client.Context, username, password string, callbacks Log
 	return w
 }
 
+// ReleaseFocus drops the login fields' focus so the OS keyboard state tears
+// down with the login screens. Entering the world used to leave the fields
+// logically focused (the hidden keyboard input kept DOM focus and the
+// keyboard-visible flag stayed set), so the first canvas taps re-raised the
+// keyboard for a moment — on tablets every walk click flashed it.
+func (w *LoginWindow) ReleaseFocus() {
+	if w == nil {
+		return
+	}
+	if w.user != nil {
+		w.user.SetFocused(false)
+	}
+	if w.password != nil {
+		w.password.SetFocused(false)
+	}
+}
+
 func (w *LoginWindow) SetContext(ctx client.Context) {
 	if w == nil {
 		return

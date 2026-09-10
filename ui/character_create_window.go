@@ -75,6 +75,15 @@ type CharacterCreateWindow struct {
 	name      *textfield.Widget
 }
 
+// ReleaseFocus drops the name field's focus so the OS keyboard state tears
+// down with the window (see LoginWindow.ReleaseFocus).
+func (w *CharacterCreateWindow) ReleaseFocus() {
+	if w == nil || w.name == nil {
+		return
+	}
+	w.name.SetFocused(false)
+}
+
 const (
 	characterCreateWindowW = 576
 	characterCreateWindowH = 342

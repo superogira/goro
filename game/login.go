@@ -740,6 +740,8 @@ func (m *LoginMode) publishPhaseWindow(ctx client.Context) {
 }
 
 func (m *LoginMode) clearLoginWindows(ctx client.Context) {
+	m.loginWindow.ReleaseFocus()
+	m.charCreateWindow.ReleaseFocus()
 	m.serviceWindow = nil
 	m.loginWindow = nil
 	m.charSelectWindow = nil

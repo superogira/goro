@@ -140,6 +140,7 @@ func (m *LoginMode) hideLoginWindow(ctx client.Context) {
 	}
 	m.username = m.loginWindow.Username
 	m.password = m.loginWindow.Password
+	m.loginWindow.ReleaseFocus()
 	m.loginWindow.Unpublish(ctx)
 	m.loginWindow = nil
 }

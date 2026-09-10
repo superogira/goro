@@ -63,7 +63,7 @@ func (w *EquipmentWindow) webPreview(key string, ctx Context) string {
 	if w.assets == nil {
 		return ""
 	}
-	return hotbarWebIcon(key, w.assets.EquipmentPreviewImage(ctx, 112, 106))
+	return hotbarWebIcon(key, w.assets.EquipmentPreviewImage(ctx, 132, 124))
 }
 
 // handleEquipWebAction services one drained "eq:" action from the page.

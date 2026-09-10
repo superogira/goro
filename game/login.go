@@ -36,6 +36,9 @@ type LoginMode struct {
 	background          *render.Image
 	loadingBG            *render.Image
 	bgTiles             []*render.Image
+	titleWebBG          string
+	titleWebPhase       string
+	titleWebFade        string
 	bgSource            string
 	bgLoaded            bool
 	bgmStarted          bool
@@ -586,12 +589,16 @@ func (m *LoginMode) Draw(ctx client.Context, screen *render.Frame) {
 	// Cleared every frame and re-raised by drawLoadingScreen when a load
 	// cover is actually drawn; memoized on the page side.
 	render.SetWebLoading(false)
+	if m.skipCanvasTitleBackground() {
+		return
+	}
 	m.drawBackground(ctx, screen)
 }
 
 func (m *LoginMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 	now := time.Now()
 	m.drawFade(ctx, screen, now)
+	m.syncTitleWeb(ctx, float64(m.fadeAlpha(now))/255)
 	if ctx.Config.Render.NoUI {
 		return
 	}

@@ -44,6 +44,14 @@ func NewLoginWindow(ctx client.Context, username, password string, callbacks Log
 		layout:    layout,
 		callbacks: callbacks,
 	}
+	if loginWebEnabled() {
+		// The DOM panel owns the login form on web; no canvas window. The
+		// action hooks install here because the title screen runs before
+		// any in-world window has installed them.
+		hudWebInstallHooks()
+		w.loginWebSync(ctx)
+		return w
+	}
 	w.Window = NewWindow(layout.W, layout.H)
 	w.OpenAt(layout.X, layout.Y, w.widgetTree())
 	// Focus is applied after the tree is mounted (not inside widgetTree) so
@@ -79,6 +87,9 @@ func (w *LoginWindow) SetContext(ctx client.Context) {
 	if w == nil {
 		return
 	}
+	if loginWebEnabled() {
+		return
+	}
 	layout := loginWindowLayoutForContext(ctx)
 	sameLayout := loginWindowLayoutEqual(w.layout, layout)
 	w.layout = layout
@@ -93,6 +104,12 @@ func (w *LoginWindow) SetContext(ctx client.Context) {
 
 func (w *LoginWindow) Update(ctx client.Context) bool {
 	if w == nil {
+		return false
+	}
+	if loginWebEnabled() {
+		for _, action := range hudWebDrainActions("login:") {
+			w.handleLoginWebAction(ctx, action)
+		}
 		return false
 	}
 	return w.Window.Update(ctx)

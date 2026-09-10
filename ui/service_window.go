@@ -56,6 +56,12 @@ func NewServiceWindow(ctx client.Context, services []string, options ServiceWind
 		callbacks:    callbacks,
 		lastClickRow: -1,
 	}
+	if serviceWebEnabled() {
+		// The DOM panel owns the service list on web; no canvas window.
+		hudWebInstallHooks()
+		w.serviceWebSync(ctx)
+		return w
+	}
 	w.Window = NewWindow(serviceWindowWidth, serviceWindowHeight)
 	w.CloseOnEsc = false
 	x, y := serviceWindowPosition(ctx)
@@ -73,6 +79,16 @@ func (w *ServiceWindow) SetContext(ctx client.Context) {
 
 func (w *ServiceWindow) Update(ctx client.Context) bool {
 	if w == nil {
+		return false
+	}
+	if serviceWebEnabled() {
+		for _, action := range hudWebDrainActions("svc:") {
+			w.handleServiceWebAction(ctx, action)
+		}
+		if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEnter) {
+			w.confirm()
+			return true
+		}
 		return false
 	}
 	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEnter) {

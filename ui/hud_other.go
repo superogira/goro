@@ -55,3 +55,6 @@ func (b *ShortcutBar) hotbarWebSync(ctx Context) {}
 func (b *ShortcutBar) hotbarWebKey(ctx Context) string { return "" }
 
 func hudFormatNumber(value int64) string { return formatHUDNumber(value) }
+
+// InstallWebActionHooks is a no-op on native builds.
+func InstallWebActionHooks() {}

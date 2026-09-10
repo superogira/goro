@@ -21,9 +21,11 @@ func TestConfirmModalFooterAfterReuse(t *testing.T) {
 		height  int
 	}{
 		{"return", "Return this mail and its attachments to the sender?", false, 126},
-		{"delete_after_return", "Delete this message permanently?", false, 112},
-		{"alert", "Disconnected from Server.", true, 156},
-		{"delete_after_alert", "Delete this message permanently?", false, 112},
+		{"delete_after_return", "Delete this message permanently?", false, 126},
+		{"alert", "Disconnected from Server.", true, 126},
+		{"long_alert", "First line\nSecond line\nThird line", true, 140},
+		{"login_failed_after_long_alert", "Incorrect Password.", true, 126},
+		{"delete_after_alert", "Delete this message permanently?", false, 126},
 		{"return_after_delete", "Return this mail and its attachments to the sender?", false, 126},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,13 +77,20 @@ func TestConfirmModalOpenAlertEscapeConfirms(t *testing.T) {
 	}
 }
 
-func TestConfirmModalUsesCompactHeightForOneLinePrompt(t *testing.T) {
-	var modal ConfirmModal
-	modal.Open(client.Context{ScreenW: 800, ScreenH: 600}, "Expel Party Member", "Expel Alice from the party?", nil, nil)
+func TestConfirmModalReservesTwoLinesForShortPrompt(t *testing.T) {
+	for _, message := range []string{"", "Expel Alice from the party?", "First line\nSecond line"} {
+		t.Run(message, func(t *testing.T) {
+			var modal ConfirmModal
+			modal.Open(client.Context{ScreenW: 800, ScreenH: 600}, "Confirm", message, nil, nil)
 
-	want := ROWindowTitleHeight + smallPromptContentH + ROWindowFooterHeight
-	if modal.height != want {
-		t.Fatalf("modal height = %d, want %d", modal.height, want)
+			if got := modal.messageMaxLines(); got != 2 {
+				t.Fatalf("reserved message lines = %d, want 2", got)
+			}
+			want := ROWindowTitleHeight + smallPromptContentH + smallPromptLineH + ROWindowFooterHeight
+			if modal.height != want {
+				t.Fatalf("modal height = %d, want %d", modal.height, want)
+			}
+		})
 	}
 }
 
@@ -92,8 +101,31 @@ func TestConfirmModalKeepsRoomForWrappedPrompt(t *testing.T) {
 	var wrapped ConfirmModal
 	wrapped.Open(client.Context{ScreenW: 800, ScreenH: 600}, "Confirm", "Would you like to invite Some Very Long Character Name to join your party?", nil, nil)
 
-	if wrapped.height <= oneLine.height {
-		t.Fatalf("wrapped height = %d, want greater than one-line height %d", wrapped.height, oneLine.height)
+	if wrapped.messageMaxLines() != 2 || wrapped.height != oneLine.height {
+		t.Fatalf("wrapped prompt = %d lines, height %d; want 2 lines with the same height %d as a one-line prompt", wrapped.messageMaxLines(), wrapped.height, oneLine.height)
+	}
+}
+
+func TestConfirmModalAlertUsesSameSizing(t *testing.T) {
+	ctx := client.Context{ScreenW: 800, ScreenH: 600}
+	for _, message := range []string{
+		"",
+		"Incorrect Password.",
+		"First line\nSecond line",
+		"Your connection is terminated because your IP doesn't match the authorized IP from the account server.",
+	} {
+		t.Run(message, func(t *testing.T) {
+			var confirmation, alert ConfirmModal
+			confirmation.Open(ctx, "Confirm", message, nil, nil)
+			alert.OpenAlert(ctx, "Alert", message, nil)
+
+			if got, want := alert.messageMaxLines(), confirmation.messageMaxLines(); got != want {
+				t.Errorf("alert reserved lines = %d, want %d like confirmation", got, want)
+			}
+			if alert.height != confirmation.height {
+				t.Errorf("alert height = %d, want %d like confirmation", alert.height, confirmation.height)
+			}
+		})
 	}
 }
 
@@ -112,9 +144,9 @@ func TestConfirmModalShowsCompleteStarPlaceWarning(t *testing.T) {
 }
 
 func TestSmallPromptLinesWrapLongDisconnectMessage(t *testing.T) {
-	lines := smallPromptLines("You have been forced to disconnect by the Game Master Team.", alertPromptMaxLines)
-	if len(lines) != alertPromptMaxLines {
-		t.Fatalf("line count = %d, want %d", len(lines), alertPromptMaxLines)
+	lines := smallPromptLines("You have been forced to disconnect by the Game Master Team.", smallPromptDefaultLines)
+	if len(lines) != smallPromptDefaultLines {
+		t.Fatalf("line count = %d, want %d", len(lines), smallPromptDefaultLines)
 	}
 	if lines[0] == "" || lines[1] == "" {
 		t.Fatalf("message was not wrapped into visible rows: %#v", lines)

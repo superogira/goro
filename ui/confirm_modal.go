@@ -13,12 +13,11 @@ import (
 const (
 	smallPromptWidth        = 286
 	smallPromptHeight       = 128
-	alertPromptHeight       = 156
 	smallPromptContentH     = 42
 	smallPromptSidePad      = 12
 	smallPromptLineH        = 14
 	smallPromptDefaultLines = 2
-	alertPromptMaxLines     = 4
+	smallPromptMaxLines     = 4
 	smallPromptLineMaxRunes = 42
 )
 
@@ -113,17 +112,11 @@ func (m *ConfirmModal) openWindow(ctx client.Context) {
 }
 
 func (m *ConfirmModal) promptHeight() int {
-	if m.okOnly {
-		return alertPromptHeight
-	}
 	return ROWindowTitleHeight + smallPromptContentH + smallPromptLineH*(m.messageMaxLines()-1) + ROWindowFooterHeight
 }
 
 func (m *ConfirmModal) messageMaxLines() int {
-	if m.okOnly {
-		return alertPromptMaxLines
-	}
-	return smallPromptVisibleLineCount(m.message, alertPromptMaxLines)
+	return max(smallPromptDefaultLines, smallPromptVisibleLineCount(m.message, smallPromptMaxLines))
 }
 
 func (m *ConfirmModal) widgetTree(ctx client.Context) widget.Widget {

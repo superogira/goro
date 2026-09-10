@@ -49,10 +49,12 @@ func NewLoginWindow(ctx client.Context, username, password string, callbacks Log
 	// Focus is applied after the tree is mounted (not inside widgetTree) so
 	// the account field's keyboard-show notification is the last one — the
 	// focus manager blurs widgets leaving the tree during mounts, and a
-	// trailing blur collapses the OS keyboard.
+	// trailing blur collapses the OS keyboard. restoreFocus then registers
+	// the focused field with the focus manager so Tab advances from it.
 	if w.user != nil {
 		w.user.SetFocused(true)
 	}
+	w.restoreFocus(ctx)
 	return w
 }
 
@@ -68,7 +70,8 @@ func (w *LoginWindow) SetContext(ctx client.Context) {
 	if sameLayout {
 		return
 	}
-	w.rebuild()
+	w.SetContent(w.widgetTree())
+	w.restoreFocus(ctx)
 }
 
 func (w *LoginWindow) Update(ctx client.Context) bool {
@@ -78,6 +81,22 @@ func (w *LoginWindow) Update(ctx client.Context) bool {
 	return w.Window.Update(ctx)
 }
 
+func (w *LoginWindow) restoreFocus(ctx client.Context) {
+	if wc := windowWidgetContext(ctx); wc != nil {
+		// Register the initial/rebuilt field with the focus manager too, so
+		// Tab advances from it instead of selecting it a second time.
+		if w.user.IsFocused() {
+			wc.RequestFocus(w.user)
+		} else if w.password.IsFocused() {
+			wc.RequestFocus(w.password)
+		}
+	}
+	w.advanceToPassword = false
+}
+
+// rebuild re-mounts the field tree for an in-place focus change (Enter on
+// the username advancing to the password). It keeps the mount-time focus
+// wiring in widgetTree, which the soft-keyboard flow depends on.
 func (w *LoginWindow) rebuild() {
 	userFocused, passwordFocused := w.fieldFocus()
 	w.SetContent(w.widgetTree())

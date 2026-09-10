@@ -78,8 +78,7 @@ func Win(options ...WindowOption) widget.Widget {
 		).
 			CrossAlign(primitives.CrossAxisStretch).
 			PaddingXY(ROWindowFooterPadding, 0).
-			Height(ROWindowFooterHeight - 1).
-			Background(rotheme.Default.Colors.WindowFooter)
+			Height(ROWindowFooterHeight - 1)
 		footer := primitives.Box(
 			primitives.HBox(
 				primitives.Expanded(
@@ -89,7 +88,7 @@ func Win(options ...WindowOption) widget.Widget {
 				),
 			).
 				Height(1),
-			footerBody,
+			&roFooterWidget{BoxWidget: footerBody},
 		).
 			CrossAlign(primitives.CrossAxisStretch)
 		children = append(children,

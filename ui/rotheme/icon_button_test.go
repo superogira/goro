@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gogpu/ui/core/button"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 )
 
@@ -40,6 +42,25 @@ func TestIconButtonGlyphKeepsIntegerXAndQuarterPixelY(t *testing.T) {
 	}
 	if got := canvas.lines[0].to; got != geometry.Pt(11, 11.25) {
 		t.Fatalf("close icon second point = %v, want 11,11.25", got)
+	}
+}
+
+func TestIconButtonShadowMatchesSharedButton(t *testing.T) {
+	bounds := geometry.NewRect(0, 0, IconButtonSize, IconButtonSize)
+	for _, kind := range []IconButtonKind{IconButtonClose, IconButtonPlus, IconButtonMinus} {
+		painted := &uitest.MockCanvas{}
+		IconButtonPainter{Kind: kind}.PaintButton(painted, button.PaintState{Bounds: bounds})
+		direct := &uitest.MockCanvas{}
+		DrawIconButton(direct, bounds, kind, false, false)
+		if len(painted.RoundRects) != 3 || len(direct.RoundRects) != 3 {
+			t.Fatalf("icon %v: expected two shadow layers and one reflection in both draw paths", kind)
+		}
+		for i, offset := range []float32{2, 1} {
+			shadow := painted.RoundRects[i]
+			if shadow != direct.RoundRects[i] || shadow.Bounds != bounds.TranslateXY(0, offset) || shadow.Radius != ButtonRadius {
+				t.Fatalf("icon %v: inconsistent shadow layer %d: painted %v, direct %v", kind, i, shadow, direct.RoundRects[i])
+			}
+		}
 	}
 }
 

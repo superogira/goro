@@ -60,8 +60,6 @@ type gpuRenderer struct {
 	textures               map[*Image]*gpuImageTexture
 	bindGroups             map[bindGroupKey]*wgpu.BindGroup
 	worldMeshes            map[*WorldMesh]*gpuWorldMesh
-	worldBatchGPU          map[drawBatchKey]*worldMeshBatchGPU
-	meshStability          map[*WorldMesh]uint64
 	depthTex               *wgpu.Texture
 	depthView              *wgpu.TextureView
 	depthWidth             int
@@ -75,6 +73,11 @@ type gpuRenderer struct {
 	neutralLightmap        *Image
 	worldMeshBatches       []worldMeshBatch
 	worldMeshBatchByKey    map[drawBatchKey]int
+	worldMeshBatchCache    map[drawBatchKey]*gpuWorldMeshBatch
+	worldMeshBatchFloats   []float32
+	worldMeshBatchIndices  []uint32
+	worldMeshBufferPages   []*worldMeshBufferPage
+	worldMeshSubmission    worldMeshSubmissionCache
 	worldBillboardBatches  []worldBillboardBatch
 	worldBillboardFloats   []float32
 	statsEnabled           bool
@@ -106,8 +109,9 @@ type gpuWorldMesh struct {
 }
 
 type worldMeshBatch struct {
-	key    drawBatchKey
-	meshes []*WorldMesh
+	key      drawBatchKey
+	meshes   []*WorldMesh
+	revision uint64
 }
 
 type worldBillboardBatch struct {
@@ -526,8 +530,9 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 	r.lastWorldBuildDur = time.Since(worldBuildStart)
 	r.lastWorldBatchCount = len(world.batches)
 	r.lastScreenBatchCount = len(frame.batches)
+	meshBatches := r.depthWriteWorldMeshBatches(screen)
 	if r.statsEnabled && time.Since(r.statsLast) >= time.Second {
-		glog.Debugf("render stats world_commands=%d world_mesh_commands=%d world_billboards=%d retained_world_meshes=%d world_batches=%d world_vertices=%d world_indices=%d commands=%d batches=%d vertices=%d indices=%d textures=%d bindgroups=%d", len(screen.worldCommands), len(screen.worldMeshes), len(screen.worldBillboards), len(r.worldMeshes), len(world.batches), len(world.floats)/worldVertexFloatCount, len(world.indices), len(screen.commands), len(frame.batches), len(frame.floats)/screenVertexFloatCount, len(frame.indices), len(r.textures), len(r.bindGroups))
+		glog.Debugf("render stats world_commands=%d world_mesh_commands=%d world_mesh_batches=%d world_mesh_buffer_pages=%d world_billboards=%d retained_world_meshes=%d world_batches=%d world_vertices=%d world_indices=%d commands=%d batches=%d vertices=%d indices=%d textures=%d bindgroups=%d", len(screen.worldCommands), len(screen.worldMeshes), len(meshBatches), len(r.worldMeshBufferPages), len(screen.worldBillboards), len(r.worldMeshes), len(world.batches), len(world.floats)/worldVertexFloatCount, len(world.indices), len(screen.commands), len(frame.batches), len(frame.floats)/screenVertexFloatCount, len(frame.indices), len(r.textures), len(r.bindGroups))
 		r.statsLast = time.Now()
 	}
 	if r.worldDebug && time.Since(r.worldDebugLast) >= time.Second {
@@ -582,7 +587,7 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 	}
 	worldState := renderPassState{}
 	if screen.camera.Enabled {
-		for _, batch := range r.depthWriteWorldMeshBatches(screen) {
+		for _, batch := range meshBatches {
 			if err := r.drawWorldMeshBatch(ctx, pass, batch, &worldState); err != nil {
 				_ = pass.End()
 				return false, err
@@ -946,19 +951,33 @@ func (r *gpuRenderer) drawWorldMesh(ctx *gogpu.Context, pass *wgpu.RenderPassEnc
 }
 
 func (r *gpuRenderer) depthWriteWorldMeshBatches(screen *Frame) []worldMeshBatch {
-	if screen == nil || len(screen.worldMeshes) == 0 {
-		return nil
+	var commands []WorldMeshCommand
+	if screen != nil {
+		commands = screen.worldMeshes
 	}
+	if r.worldMeshSubmission.matches(commands) {
+		// A batch growing during the previous draw may have left an empty page.
+		r.pruneWorldMeshBufferPages()
+		return r.worldMeshBatches
+	}
+	r.worldMeshSubmission.remember(commands)
 	for i := range r.worldMeshBatches {
+		r.worldMeshBatches[i].key = drawBatchKey{}
+		clear(r.worldMeshBatches[i].meshes)
 		r.worldMeshBatches[i].meshes = r.worldMeshBatches[i].meshes[:0]
 	}
 	r.worldMeshBatches = r.worldMeshBatches[:0]
+	commandCount := len(commands)
 	if r.worldMeshBatchByKey == nil {
-		r.worldMeshBatchByKey = make(map[drawBatchKey]int, len(screen.worldMeshes))
+		r.worldMeshBatchByKey = make(map[drawBatchKey]int, commandCount)
 	} else {
 		clear(r.worldMeshBatchByKey)
 	}
-	for _, meshCommand := range screen.worldMeshes {
+	if commandCount == 0 {
+		r.pruneWorldMeshBatchCache()
+		return nil
+	}
+	for _, meshCommand := range commands {
 		mesh := meshCommand.Mesh
 		if mesh == nil || !mesh.options.DepthWrite || mesh.texture == nil || mesh.texture.pix == nil || len(mesh.vertices) == 0 || len(mesh.indices) == 0 {
 			continue
@@ -966,12 +985,19 @@ func (r *gpuRenderer) depthWriteWorldMeshBatches(screen *Frame) []worldMeshBatch
 		key := drawBatchKey{texture: mesh.texture, lightTexture: mesh.lightTexture, options: mesh.options}
 		batchIndex, ok := r.worldMeshBatchByKey[key]
 		if !ok {
-			r.worldMeshBatches = append(r.worldMeshBatches, worldMeshBatch{key: key})
-			batchIndex = len(r.worldMeshBatches) - 1
+			batchIndex = len(r.worldMeshBatches)
+			if batchIndex < cap(r.worldMeshBatches) {
+				r.worldMeshBatches = r.worldMeshBatches[:batchIndex+1]
+				r.worldMeshBatches[batchIndex].key = key
+			} else {
+				r.worldMeshBatches = append(r.worldMeshBatches, worldMeshBatch{key: key})
+			}
+			r.worldMeshBatches[batchIndex].revision = r.worldMeshSubmission.revision
 			r.worldMeshBatchByKey[key] = batchIndex
 		}
 		r.worldMeshBatches[batchIndex].meshes = append(r.worldMeshBatches[batchIndex].meshes, mesh)
 	}
+	r.pruneWorldMeshBatchCache()
 	return r.worldMeshBatches
 }
 
@@ -982,217 +1008,38 @@ func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPa
 	if state == nil {
 		state = &renderPassState{}
 	}
-	// Split stable (geometry unchanged since the previous frame) from
-	// animating meshes. Stable terrain meshes merge into ONE retained GPU
-	// buffer per texture batch and draw with a single DrawIndexed call —
-	// per-mesh setVertexBuffer/setIndexBuffer/DrawIndexed trips dominate
-	// the wasm encode path otherwise (thousands of Go→JS calls per frame).
-	var stable, animating []*WorldMesh
-	for _, mesh := range batch.meshes {
-		if r.meshIsStable(mesh) {
-			stable = append(stable, mesh)
-		} else {
-			animating = append(animating, mesh)
-		}
+	tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
+	if err != nil {
+		return err
 	}
-	if len(stable) > 0 || len(animating) > 0 {
-		tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
-		if err != nil {
-			return err
-		}
-		lightTex, err := r.ensureBatchLightTexture(ctx, batch.key)
-		if err != nil {
-			return err
-		}
-		sampler, err := r.sampler(batch.key.options)
-		if err != nil {
-			return err
-		}
-		bg, err := r.bindWorldGroup(r.worldUniform, 96, tex.tex, lightTex.tex, sampler)
-		if err != nil {
-			return err
-		}
-		// Bound for the whole batch. The first frame in a map has no stable
-		// meshes yet (all are first-seen), and drawing without a pipeline
-		// puts native wgpu's encoder into a hard error state.
-		state.setPipeline(pass, r.worldPipelineFor(batch.key.options.Blend, batch.key.options.DepthWrite))
-		state.setBindGroup(pass, bg)
-		if len(stable) > 0 {
-			ranges, err := r.ensureWorldMeshBatchRanges(batch.key, stable)
-			if err != nil {
-				return err
-			}
-			state.setVertexBuffer(pass, r.worldBatchGPU[batch.key].vertexBuf)
-			state.setIndexBuffer(pass, r.worldBatchGPU[batch.key].indexBuf)
-			// Coalesce adjacent ranges so the common full-set frame collapses
-			// into a single draw; culled subsets still draw per contiguous run.
-			first, count := uint32(0), uint32(0)
-			for _, mesh := range stable {
-				rg := ranges[mesh]
-				if count > 0 && first+count == rg.firstIndex {
-					count += rg.indexCount
-					continue
-				}
-				if count > 0 {
-					pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: count, InstanceCount: 1, FirstIndex: first})
-				}
-				first, count = rg.firstIndex, rg.indexCount
-			}
-			if count > 0 {
-				pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: count, InstanceCount: 1, FirstIndex: first})
-			}
-		}
-		for _, mesh := range animating {
-			gpuMesh, err := r.ensureWorldMesh(mesh)
-			if err != nil {
-				return err
-			}
-			state.setVertexBuffer(pass, gpuMesh.vertexBuf)
-			state.setIndexBuffer(pass, gpuMesh.indexBuf)
-			pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: gpuMesh.indexCount, InstanceCount: 1})
-		}
+	lightTex, err := r.ensureBatchLightTexture(ctx, batch.key)
+	if err != nil {
+		return err
 	}
+	sampler, err := r.sampler(batch.key.options)
+	if err != nil {
+		return err
+	}
+	bg, err := r.bindWorldGroup(r.worldUniform, 96, tex.tex, lightTex.tex, sampler)
+	if err != nil {
+		return err
+	}
+	state.setPipeline(pass, r.worldPipelineFor(batch.key.options.Blend, batch.key.options.DepthWrite))
+	state.setBindGroup(pass, bg)
+	gpuBatch, err := r.ensureWorldMeshBatch(batch)
+	if err != nil {
+		return err
+
+	}
+	state.setVertexBuffer(pass, gpuBatch.allocation.page.buf)
+	state.setIndexBuffer(pass, gpuBatch.allocation.page.buf)
+	pass.DrawIndexed(gputypes.DrawIndexedArgs{
+		IndexCount:    gpuBatch.indexCount,
+		InstanceCount: 1,
+		FirstIndex:    gpuBatch.firstIndex,
+		BaseVertex:    int32(gpuBatch.allocation.offset / worldVertexStride),
+	})
 	return nil
-}
-
-// worldMeshBatchGPU is the merged GPU geometry for the stable meshes of one
-// texture batch: one vertex buffer, one index buffer, per-mesh index ranges.
-// It holds the UNION of meshes seen so far, so camera culling that varies the
-// submitted subset frame to frame never triggers a rebuild — only new meshes
-// or version bumps do.
-type worldMeshBatchGPU struct {
-	ranges    map[*WorldMesh]worldMeshRange
-	vertexBuf *wgpu.Buffer
-	indexBuf  *wgpu.Buffer
-}
-
-type worldMeshRange struct {
-	firstIndex uint32
-	indexCount uint32
-	version    uint64
-}
-
-// meshIsStable reports whether the mesh geometry has not changed since the
-// previous observation. First-seen meshes are unstable so per-frame animated
-// meshes (water) never trigger merged-buffer rebuilds.
-func (r *gpuRenderer) meshIsStable(mesh *WorldMesh) bool {
-	if r.meshStability == nil {
-		r.meshStability = make(map[*WorldMesh]uint64)
-	}
-	last, seen := r.meshStability[mesh]
-	r.meshStability[mesh] = mesh.version
-	return seen && last == mesh.version
-}
-
-// ensureWorldMeshBatchRanges returns the index range of every submitted mesh
-// inside the merged buffers, rebuilding them only when an unknown mesh or a
-// version bump appears. On rebuild, known meshes that are absent from the
-// submitted set are kept (temporarily camera-culled chunks) unless they make
-// up more than half of the known set — the map-change case.
-func (r *gpuRenderer) ensureWorldMeshBatchRanges(key drawBatchKey, meshes []*WorldMesh) (map[*WorldMesh]worldMeshRange, error) {
-	cached := r.worldBatchGPU[key]
-	needRebuild := cached == nil
-	if cached != nil {
-		for _, mesh := range meshes {
-			rg, ok := cached.ranges[mesh]
-			if !ok || rg.version != mesh.version {
-				needRebuild = true
-				break
-			}
-		}
-	}
-	if !needRebuild {
-		return cached.ranges, nil
-	}
-	width, height := key.texture.Bounds().Dx(), key.texture.Bounds().Dy()
-	if width <= 0 || height <= 0 {
-		return nil, fmt.Errorf("world mesh batch texture has invalid size")
-	}
-	submitted := make(map[*WorldMesh]struct{}, len(meshes))
-	for _, mesh := range meshes {
-		submitted[mesh] = struct{}{}
-	}
-	var buildSet []*WorldMesh
-	if cached != nil {
-		absent := 0
-		for mesh := range cached.ranges {
-			if _, ok := submitted[mesh]; !ok {
-				absent++
-			}
-		}
-		// Keep absent meshes while they are plausibly just culled; drop them
-		// when the majority of the known set vanished (map change).
-		if absent*2 <= len(cached.ranges) {
-			buildSet = make([]*WorldMesh, 0, len(cached.ranges)+len(meshes))
-			for mesh := range cached.ranges {
-				buildSet = append(buildSet, mesh)
-			}
-		}
-	}
-	included := make(map[*WorldMesh]struct{}, len(buildSet)+len(meshes))
-	for _, mesh := range buildSet {
-		included[mesh] = struct{}{}
-	}
-	for _, mesh := range meshes {
-		if _, ok := included[mesh]; !ok {
-			buildSet = append(buildSet, mesh)
-			included[mesh] = struct{}{}
-		}
-	}
-	floats := make([]float32, 0, len(buildSet)*64*worldVertexFloatCount)
-	indices := make([]uint32, 0, len(buildSet)*192)
-	ranges := make(map[*WorldMesh]worldMeshRange, len(buildSet))
-	for _, mesh := range buildSet {
-		first := uint32(len(indices))
-		cmd := WorldCommand{
-			Vertices:     mesh.vertices,
-			Indices:      mesh.indices,
-			Texture:      mesh.texture,
-			LightTexture: mesh.lightTexture,
-			Options:      mesh.options,
-		}
-		lw, lh := lightTextureSize(mesh.lightTexture, width, height)
-		floats, indices = appendWorldCommand(floats, indices, cmd, width, height, lw, lh)
-		ranges[mesh] = worldMeshRange{firstIndex: first, indexCount: uint32(len(indices)) - first, version: mesh.version}
-	}
-	vertexBuf, err := r.dev.CreateBuffer(&wgpu.BufferDescriptor{
-		Label: "goro-world-batch-vertices",
-		Size:  uint64(len(floats) * 4),
-		Usage: wgpu.BufferUsageVertex | wgpu.BufferUsageCopyDst,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := r.queue.WriteBuffer(vertexBuf, 0, floatBytes(floats)); err != nil {
-		vertexBuf.Release()
-		return nil, err
-	}
-	indexBuf, err := r.dev.CreateBuffer(&wgpu.BufferDescriptor{
-		Label: "goro-world-batch-indices",
-		Size:  uint64(len(indices) * 4),
-		Usage: wgpu.BufferUsageIndex | wgpu.BufferUsageCopyDst,
-	})
-	if err != nil {
-		vertexBuf.Release()
-		return nil, err
-	}
-	if err := r.queue.WriteBuffer(indexBuf, 0, u32Bytes(indices)); err != nil {
-		vertexBuf.Release()
-		indexBuf.Release()
-		return nil, err
-	}
-	if old := r.worldBatchGPU[key]; old != nil {
-		old.release()
-	}
-	if r.worldBatchGPU == nil {
-		r.worldBatchGPU = make(map[drawBatchKey]*worldMeshBatchGPU)
-	}
-	r.worldBatchGPU[key] = &worldMeshBatchGPU{
-		ranges:    ranges,
-		vertexBuf: vertexBuf,
-		indexBuf:  indexBuf,
-	}
-	return ranges, nil
 }
 
 func (r *gpuRenderer) drawWorldBillboards(ctx *gogpu.Context, pass *wgpu.RenderPassEncoder, commands []WorldBillboardCommand) error {
@@ -1482,6 +1329,11 @@ func (r *gpuRenderer) ensureDepth(width, height int) error {
 }
 
 func (r *gpuRenderer) release() {
+	for key, batch := range r.worldMeshBatchCache {
+		batch.release()
+		delete(r.worldMeshBatchCache, key)
+	}
+	r.pruneWorldMeshBufferPages()
 	for _, bg := range r.bindGroups {
 		if bg != nil {
 			bg.Release()
@@ -1502,11 +1354,6 @@ func (r *gpuRenderer) release() {
 			}
 		}
 	}
-	for _, merged := range r.worldBatchGPU {
-		merged.release()
-	}
-	clear(r.worldBatchGPU)
-	clear(r.meshStability)
 	for _, sampler := range r.samplers {
 		if sampler != nil {
 			sampler.Release()
@@ -1702,16 +1549,4 @@ func (r *gpuRenderer) bindGroupCount() int {
 		return 0
 	}
 	return len(r.bindGroups)
-}
-
-func (m *worldMeshBatchGPU) release() {
-	if m == nil {
-		return
-	}
-	if m.vertexBuf != nil {
-		m.vertexBuf.Release()
-	}
-	if m.indexBuf != nil {
-		m.indexBuf.Release()
-	}
 }

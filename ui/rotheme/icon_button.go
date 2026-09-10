@@ -88,6 +88,7 @@ func DrawIconButton(canvas widget.Canvas, bounds geometry.Rect, kind IconButtonK
 		color = Default.Colors.MutedText
 		border = Default.Colors.FooterLine
 	}
+	drawButtonShadow(canvas, bounds, ButtonRadius)
 	drawButtonGradientColors(canvas, bounds, top, bottom, ButtonRadius)
 	drawButtonReflect(canvas, bounds, ButtonRadius)
 	canvas.StrokeRoundRect(bounds, border, ButtonRadius, 1)

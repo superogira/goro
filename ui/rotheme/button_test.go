@@ -86,6 +86,12 @@ func TestButtonHoverInvalidatesItsScreenPosition(t *testing.T) {
 	if !app.Window().DrawTo(hoverCanvas) {
 		t.Fatal("hovered button frame was not drawn")
 	}
+	// Hover changes the face and border; the unchanged shadow outside the
+	// repaint clip remains in the backing image.
+	borderBounds := wrapper.button.ScreenBounds().Expand(0.5)
+	if clip := app.Window().LastDirtyUnion(); !clip.ContainsRect(borderBounds) {
+		t.Fatalf("hover repaint clip %v does not cover button border %v", clip, borderBounds)
+	}
 	for _, dirty := range app.Window().DirtyRegions() {
 		if dirty.Contains(buttonCenter) {
 			return
@@ -100,8 +106,8 @@ func TestButtonUsesContinuousLightenedTitleBarGradient(t *testing.T) {
 
 	ButtonPainter{}.PaintButton(canvas, button.PaintState{Bounds: bounds})
 
-	if len(canvas.Rects) != 0 || len(canvas.RoundRects) != 1 || len(canvas.Images) != 1 {
-		t.Fatalf("button background draws = %d rectangles, %d rounded reflections, and %d images; want one gradient and one reflection", len(canvas.Rects), len(canvas.RoundRects), len(canvas.Images))
+	if len(canvas.Rects) != 0 || len(canvas.RoundRects) != 3 || len(canvas.Images) != 1 {
+		t.Fatalf("button background draws = %d rectangles, %d rounded rectangles, and %d images; want two shadow layers, one gradient and one reflection", len(canvas.Rects), len(canvas.RoundRects), len(canvas.Images))
 	}
 	call := canvas.Images[0]
 	if call.At != bounds.Min || call.Image.Bounds().Size() != image.Pt(80, 22) {
@@ -109,7 +115,7 @@ func TestButtonUsesContinuousLightenedTitleBarGradient(t *testing.T) {
 	}
 	assertGradientColor(t, call.Image, 0, 0, expectedLighterColor(Default.Colors.WindowTitle, 2))
 	assertGradientColor(t, call.Image, 0, 21, expectedLighterColor(Default.Colors.WindowTitleTop, 2))
-	reflect := canvas.RoundRects[0]
+	reflect := canvas.RoundRects[2]
 	wantReflectBounds := geometry.NewRect(6, 8, 74, 8)
 	if reflect.Bounds != wantReflectBounds || reflect.Radius != 3 {
 		t.Fatalf("button reflection = bounds %v radius %.1f, want bounds %v radius 3", reflect.Bounds, reflect.Radius, wantReflectBounds)
@@ -120,6 +126,35 @@ func TestButtonUsesContinuousLightenedTitleBarGradient(t *testing.T) {
 	}
 	if len(canvas.StrokeRoundRects) != 1 {
 		t.Fatalf("button borders = %d, want 1", len(canvas.StrokeRoundRects))
+	}
+}
+
+func TestButtonShadowMatchesShapeInEveryState(t *testing.T) {
+	bounds := geometry.NewRect(3, 5, 80, 22)
+	radius := float32(4)
+	for name, state := range map[string]button.PaintState{
+		"normal":   {},
+		"hovered":  {Hovered: true},
+		"pressed":  {Pressed: true},
+		"disabled": {Disabled: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state.Bounds = bounds
+			state.Radius = &radius
+			canvas := &uitest.MockCanvas{}
+			ButtonPainter{}.PaintButton(canvas, state)
+			if len(canvas.RoundRects) != 3 {
+				t.Fatalf("rounded rectangles = %d, want two shadow layers and one reflection", len(canvas.RoundRects))
+			}
+			for i, want := range []uitest.DrawRoundRectCall{
+				{Bounds: geometry.NewRect(3, 7, 80, 22), Color: widget.RGBA(0.4, 0.4, 0.4, 0.15), Radius: radius},
+				{Bounds: geometry.NewRect(3, 6, 80, 22), Color: widget.RGBA(0.4, 0.4, 0.4, 0.35), Radius: radius},
+			} {
+				if got := canvas.RoundRects[i]; got != want {
+					t.Fatalf("shadow layer %d = %v, want %v", i, got, want)
+				}
+			}
+		})
 	}
 }
 

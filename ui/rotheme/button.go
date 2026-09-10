@@ -145,6 +145,7 @@ func (ButtonPainter) PaintButton(canvas widget.Canvas, state button.PaintState) 
 	if state.Radius != nil {
 		radius = *state.Radius
 	}
+	drawButtonShadow(canvas, state.Bounds, radius)
 	drawButtonGradientColors(canvas, state.Bounds, top, bottom, radius)
 	drawButtonReflect(canvas, state.Bounds, radius)
 	canvas.StrokeRoundRect(state.Bounds, border, radius, 1)
@@ -190,6 +191,11 @@ func drawButtonGradientColors(canvas widget.Canvas, bounds geometry.Rect, top, b
 		defer canvas.PopClip()
 	}
 	DrawVerticalGradient(canvas, bounds, top, bottom)
+}
+
+func drawButtonShadow(canvas widget.Canvas, bounds geometry.Rect, radius float32) {
+	canvas.DrawRoundRect(bounds.TranslateXY(0, 2), widget.RGBA(0.4, 0.4, 0.4, 0.15), radius)
+	canvas.DrawRoundRect(bounds.TranslateXY(0, 1), widget.RGBA(0.4, 0.4, 0.4, 0.35), radius)
 }
 
 func drawButtonReflect(canvas widget.Canvas, bounds geometry.Rect, radius float32) {

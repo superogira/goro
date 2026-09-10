@@ -9,14 +9,24 @@ import (
 )
 
 type Manager struct {
-	app        client.UIApp
-	root       *overlayRoot
-	overlays   []widget.Widget
-	foreground []widget.Widget
+	app          client.UIApp
+	rootAttached bool
+	root         *overlayRoot
+	overlays     []widget.Widget
+	foreground   []widget.Widget
 }
 
 func NewManager() *Manager {
 	return &Manager{root: newOverlayRoot(nil)}
+}
+
+// HostApp exposes the attached UIApp so windows published before the app
+// existed can still route layout invalidation.
+func (m *Manager) HostApp() client.UIApp {
+	if m == nil {
+		return nil
+	}
+	return m.app
 }
 
 func (m *Manager) SetUIApp(app client.UIApp) {
@@ -25,6 +35,16 @@ func (m *Manager) SetUIApp(app client.UIApp) {
 	}
 	m.app = app
 	m.apply()
+	if app != nil && len(m.overlays) > 0 && m.rootAttached {
+		// Overlays published before the app existed were laid out through
+		// the manager only; the app's frame never mounted or stamped them.
+		// Ask the app for one layout pass so they get real screen origins.
+		if layoutApp, ok := app.(layoutInvalidatingUIApp); ok {
+			layoutApp.InvalidateLayout()
+		} else {
+			app.Invalidate()
+		}
+	}
 }
 
 func (m *Manager) AddOverlay(root widget.Widget) {
@@ -116,15 +136,21 @@ func (m *Manager) apply() {
 	if m.root == nil {
 		m.root = newOverlayRoot(m.overlays)
 	}
-	if m.root.children == nil {
-		// First attach: hand the root to the app once.
+	if !m.rootAttached {
+		// First attach: hand the root to the app once. Overlays may publish
+		// before any app exists (tests attach the app afterwards) — the flag
+		// is only set when the handover actually happened.
 		m.root.onActivate = m.raiseOverlay
 		m.root.children = append([]widget.Widget(nil), m.overlays...)
 		if m.app != nil {
+			m.rootAttached = true
 			m.app.SetUIRoot(m.root)
 			disableRootRepaintBoundary(m.root)
 			m.root.SetNeedsRedraw(true)
+			return
 		}
+		// Still unattached: remember the pre-arranged children so the
+		// in-place mutation below starts from them.
 		return
 	}
 	// Subsequent changes mutate children in place. Rebuilding the root via

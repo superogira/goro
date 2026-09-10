@@ -306,6 +306,16 @@ func (w *Window) SetContent(content widget.Widget) {
 	if overlay := w.positionedOverlay(); overlay != nil {
 		damage := overlay.setChild(content, windowWidgetContext(w.ctx))
 		w.setOpacity(1)
+		if w.ctx.UIApp == nil {
+			// The window may have been published before the host app was
+			// attached (tests do this); route the layout invalidation
+			// through the manager so it is not silently dropped.
+			if holder, ok := w.ctx.UIManager.(interface{ HostApp() client.UIApp }); ok {
+				if app := holder.HostApp(); app != nil {
+					w.ctx.UIApp = app
+				}
+			}
+		}
 		invalidateWindowLayout(w.ctx)
 		invalidateWindowRect(w.ctx, damage)
 		return

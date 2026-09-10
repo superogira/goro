@@ -236,7 +236,19 @@ func (m *LoginMode) prepareCharacterSelectFromSession(ctx client.Context) {
 
 func (m *LoginMode) autoSelectCharacter(ctx client.Context) bool {
 	slot := ctx.Config.Login.CharSlot
-	if !ctx.Config.Login.AutoLogin || slot < 0 || m.autoCharAttempted {
+	if !ctx.Config.Login.AutoLogin || slot < 0 {
+		return false
+	}
+	// One-shot per connection: a char-server reconnect after a dropped
+	// session delivers a fresh char list, and the auto-select must run
+	// again on it — otherwise the client sat on the select screen forever
+	// after any mid-handoff disconnect. A small attempt budget keeps a
+	// submit-disconnect loop from spinning.
+	if m.autoCharAttempted {
+		return false
+	}
+	m.autoCharAttempts++
+	if m.autoCharAttempts > 3 {
 		return false
 	}
 	m.autoCharAttempted = true
@@ -255,6 +267,9 @@ func (m *LoginMode) reconnectCharacterServer(ctx client.Context) {
 	if ctx.Network == nil || ctx.Session == nil || len(ctx.Session.CharServers) == 0 {
 		return
 	}
+	// The previous connection (and its auto-select attempt) died with the
+	// session; allow the auto-select to run again on the fresh char list.
+	m.autoCharAttempted = false
 	index := ctx.Session.CharServerIndex
 	if index < 0 || index >= len(ctx.Session.CharServers) {
 		index = 0

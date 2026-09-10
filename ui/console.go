@@ -87,7 +87,6 @@ type ChatConsole struct {
 	messageH                  int
 	messageW                  int
 	webConsoleSyncedActive    bool
-	webInputMode              bool
 	webConsoleSyncedKey       string
 }
 
@@ -122,17 +121,25 @@ func (c *ChatConsole) UpdatePresentation(ctx client.Context) {
 	for _, msg := range consoleWebDrainMessages() {
 		c.addMessageColor(msg.Color, "%s", msg.Text)
 	}
-	if consoleWebLogEnabled() && !c.active {
-		// Dormant web console: the page DOM shows the log, so the canvas
-		// window (and its per-message raster) stays closed. Tapping the
-		// DOM log raises a flag here — tablets have no Enter key.
-		consoleWebInstallTapHook()
-		if consoleWebConsumeTap() {
-			c.setActive(true)
-			return
+	if consoleWebLogEnabled() {
+		// The page owns the whole console on web: the dormant log is DOM,
+		// and the active input field is a DOM input inside the same panel,
+		// so the canvas window (and its per-message raster) never opens.
+		consoleWebInstallActionHook()
+		for _, action := range hudWebDrainActions("console:") {
+			c.handleConsoleWebAction(ctx, action)
 		}
-		if c.window.IsOpen() {
-			c.window.Close()
+		if !c.active {
+			// Tapping the visible log raises a flag here — tablets have no
+			// Enter key.
+			consoleWebInstallTapHook()
+			if consoleWebConsumeTap() {
+				c.setActive(true)
+			}
+			if c.window.IsOpen() {
+				c.window.Close()
+			}
+			return
 		}
 		return
 	}
@@ -149,13 +156,13 @@ func (c *ChatConsole) syncWebConsole() {
 	if !consoleWebLogEnabled() {
 		return
 	}
-	key := c.messagesKey()
+	key := c.messagesKey() + "|draft=" + c.input
 	if key == c.webConsoleSyncedKey && c.webConsoleSyncedActive == c.active {
 		return
 	}
 	c.webConsoleSyncedKey = key
 	c.webConsoleSyncedActive = c.active
-	consoleWebSync(c.active, c.visibleLines())
+	consoleWebSync(c.active, c.input, c.visibleLines())
 }
 
 // UpdateInput handles chat focus, typing, and pointer input after presentation
@@ -210,13 +217,38 @@ func (c *ChatConsole) UpdateInput(ctx client.Context) bool {
 }
 
 func (c *ChatConsole) Publish(ctx client.Context) {
-	if consoleWebLogEnabled() && !c.active {
-		// Dormant web console renders as page DOM; keep the canvas window
-		// closed so no path reopens it behind the HTML log.
+	if consoleWebLogEnabled() {
+		// Web console renders as page DOM (log + input); keep the canvas
+		// window closed so no path reopens it behind the HTML log.
 		return
 	}
 	c.ensureWindow(ctx)
 	c.window.Publish(ctx)
+}
+
+// handleConsoleWebAction services one drained "console:" action from the
+// page's DOM input field. The payloads mirror the canvas input's keyboard
+// handling; everything funnels into the same submit/command machinery.
+func (c *ChatConsole) handleConsoleWebAction(ctx client.Context, action string) {
+	forceResync := true
+	switch {
+	case action == "console:cancel":
+		c.setActive(false)
+	case strings.HasPrefix(action, "console:submit:"):
+		c.submitText(ctx, strings.TrimPrefix(action, "console:submit:"))
+	case strings.HasPrefix(action, "console:draft:"):
+		c.setInput(strings.TrimPrefix(action, "console:draft:"))
+	case action == "console:prev":
+		c.previousInput()
+	case action == "console:next":
+		c.nextInput()
+	default:
+		forceResync = false
+	}
+	if forceResync {
+		c.webConsoleSyncedKey = ""
+		c.webConsoleSyncedActive = !c.active
+	}
 }
 
 func (c *ChatConsole) Unpublish(ctx client.Context) {
@@ -237,15 +269,6 @@ func (c *ChatConsole) clickedOutside(ctx client.Context) bool {
 func (c *ChatConsole) ensureWindow(ctx client.Context) {
 	screenW, screenH := ctx.ScreenSize()
 	x, y, width, height := consoleBounds(screenW, screenH)
-	// On web the dormant DOM log owns the message list; the active canvas
-	// window shrinks to just the input field, aligned with the full
-	// console's bottom edge. The page keeps its log visible above it.
-	webInput := consoleWebLogEnabled() && c.active
-	if webInput {
-		inputH := consoleFieldH + 22
-		y += height - inputH
-		height = inputH
-	}
 	key := c.renderKey(width, height)
 	if c.window.width == 0 {
 		c.window = NewWindow(width, height)
@@ -257,12 +280,11 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 	if !c.window.IsOpen() {
 		content := c.widgetTree(width, height)
 		c.cacheKey = key
-		c.webInputMode = webInput
 		c.window.OpenAt(x, y, content)
 		return
 	}
-	if c.cacheKey != key || c.webInputMode != webInput {
-		if c.active && c.webInputMode == webInput {
+	if c.cacheKey != key {
+		if c.active {
 			// A tree swap while the player is typing unmounts the shared
 			// input field, and TextField.Unmount clears the focus of any
 			// focused field leaving the tree — closing the console and
@@ -276,7 +298,6 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 		}
 		content := c.widgetTree(width, height)
 		c.cacheKey = key
-		c.webInputMode = webInput
 		c.window.SetContent(content)
 	}
 }
@@ -1008,9 +1029,6 @@ func (c *ChatConsole) nextInput() {
 }
 
 func (c *ChatConsole) widgetTree(width, height int) widget.Widget {
-	if c.webInputMode {
-		return c.webInputTree(width, height)
-	}
 	c.renderedMessagesKey = c.messagesKey()
 	c.renderedMessagesKeyValid = true
 	c.pendingMessageRedraw = false
@@ -1057,31 +1075,6 @@ func (c *ChatConsole) widgetTree(width, height int) widget.Widget {
 		Height(float32(height)).
 		PaddingXY(8, 6).
 		Gap(4).
-		Background(widget.RGBA8(14, 18, 24, 188)).
-		BorderStyle(1, widget.RGBA8(180, 198, 218, 95)).
-		Rounded(WindowRadius).
-		CrossAlign(primitives.CrossAxisStretch)
-}
-
-// webInputTree is the active-mode console on web: just the input field.
-// The message list lives in the page's DOM log, which stays visible above
-// the field — one readable style everywhere, and incoming messages no
-// longer need canvas raster work while typing.
-func (c *ChatConsole) webInputTree(width, height int) widget.Widget {
-	c.renderedMessagesKey = c.messagesKey()
-	c.renderedMessagesKeyValid = true
-	c.pendingMessageRedraw = false
-	c.pendingMessageRedrawReady = false
-	contentWidth := maxInt(1, width-16)
-	c.messageW = maxInt(1, scrollbarSafeIntWidth(contentWidth)-4)
-	field := primitives.Box(c.inputWidget()).
-		Width(float32(contentWidth)).
-		Height(consoleFieldH).
-		CrossAlign(primitives.CrossAxisStretch)
-	return primitives.Box(field).
-		Width(float32(width)).
-		Height(float32(height)).
-		PaddingXY(8, 8).
 		Background(widget.RGBA8(14, 18, 24, 188)).
 		BorderStyle(1, widget.RGBA8(180, 198, 218, 95)).
 		Rounded(WindowRadius).

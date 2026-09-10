@@ -28,6 +28,7 @@ type LoginMode struct {
 	console             gameui.ChatConsole
 	autoAttempted       bool
 	autoCharAttempted   bool
+	autoCharAttempts    int
 	loginPending        bool
 	fade                loginFadeState
 	username            string

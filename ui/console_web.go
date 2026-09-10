@@ -26,11 +26,12 @@ func consoleWebLogEnabled() bool {
 	return js.Global().Get("goroConsoleSync").Type() == js.TypeFunction
 }
 
-// consoleWebSync pushes the full visible message list (newest last) and the
-// console's active flag to the page hook window.goroConsoleSync. The page
-// shows the log only while the console is dormant; the full-list resync
-// keeps DOM and canvas interchangeable on focus changes.
-func consoleWebSync(active bool, lines []ConsoleMessage) {
+// consoleWebSync pushes the visible message list (newest last), the
+// console's active flag, and the current draft text to the page hook
+// window.goroConsoleSync. The DOM panel owns both the log and the input
+// field on web; the draft keeps the DOM input and the game's history
+// navigation in step.
+func consoleWebSync(active bool, draft string, lines []ConsoleMessage) {
 	fn := js.Global().Get("goroConsoleSync")
 	if fn.Type() != js.TypeFunction {
 		return
@@ -42,7 +43,27 @@ func consoleWebSync(active bool, lines []ConsoleMessage) {
 			fmt.Sprintf("rgba(%d,%d,%d,%d)", line.Color.R, line.Color.G, line.Color.B, line.Color.A),
 		))
 	}
-	fn.Invoke(active, arr)
+	fn.Invoke(active, draft, arr)
+}
+
+var consoleActionHookInstalled bool
+
+// consoleWebInstallActionHook exposes window.goroConsoleAction: the page's
+// DOM input field reports typing, submissions, cancel, and history walks
+// through the shared action queue.
+func consoleWebInstallActionHook() {
+	if consoleActionHookInstalled {
+		return
+	}
+	consoleActionHookInstalled = true
+	js.Global().Set("goroConsoleAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "console:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 }
 
 // consoleTapPending marshals a DOM tap onto the game goroutine: the JS

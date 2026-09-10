@@ -7,6 +7,7 @@ import (
 
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/input"
@@ -367,6 +368,151 @@ func TestGuildNoticeResetRestoresSessionNotice(t *testing.T) {
 
 	if window.noticeDraft.subject != "Original title" || window.noticeDraft.notice != "Original contents" {
 		t.Fatalf("notice draft = %+v", window.noticeDraft)
+	}
+}
+
+func newGuildNoticeTest(t *testing.T, master bool) (*GuildWindow, Context, *Manager) {
+	t.Helper()
+	manager := NewManager()
+	ctx := Context{
+		Session: &session.Session{GuildID: 99, Guild: session.Guild{
+			ID: 99, IsMaster: master, MenuAccess: guildMenuAccessNotice,
+			NoticeSubject: "A title", Notice: "First line\nSecond line",
+		}},
+		Input: input.NewState(), UIManager: manager, ScreenW: 800, ScreenH: 600,
+	}
+	w := &GuildWindow{tab: guildWindowTabNotice}
+	w.OpenWindow(ctx)
+	drawGuildNoticeTest(manager)
+	return w, ctx, manager
+}
+
+func drawGuildNoticeTest(manager *Manager) {
+	ctx := widget.NewContext()
+	manager.root.Layout(ctx, geometry.Tight(geometry.Sz(800, 600)))
+	manager.root.Draw(ctx, &uitest.MockCanvas{})
+}
+
+func TestGuildNoticeUsesLargeMultilineEditor(t *testing.T) {
+	for _, master := range []bool{true, false} {
+		t.Run(map[bool]string{true: "master", false: "member"}[master], func(t *testing.T) {
+			w, ctx, manager := newGuildNoticeTest(t, master)
+			field := w.noticeBody
+			if field == nil || field.Text() != ctx.Session.Guild.Notice {
+				t.Fatal("notice contents did not use the shared multiline editor")
+			}
+			bounds := field.ScreenBounds()
+			bottom := float32(w.y + guildWindowHeight - 10)
+			if master {
+				bottom -= ROWindowFooterHeight
+			}
+			if bounds.Height() < 100 || bounds.Max.Y != bottom || bounds.Width() != guildWindowWidth-18 {
+				t.Fatalf("notice bounds = %v, want full-width multiline contents ending at %g", bounds, bottom)
+			}
+			field.SetFocused(true)
+			wc := widget.NewContext()
+			field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyEnd, 0, event.ModCtrl))
+			field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyEnter, 0, event.ModNone))
+			field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyUnknown, 'x', event.ModNone))
+			want := ctx.Session.Guild.Notice
+			if master {
+				want += "\nx"
+			}
+			if field.Text() != want || w.noticeDraft.notice != want {
+				t.Fatalf("notice text = %q, draft = %q, want %q", field.Text(), w.noticeDraft.notice, want)
+			}
+			if w.PopAction().hasAction() {
+				t.Fatal("editing sent the notice before Confirm")
+			}
+			if master {
+				w.confirmGuildNoticeDraft(ctx)
+				if action := w.PopAction(); !action.UpdateNotice || action.Notice != want {
+					t.Fatalf("confirmed notice = %+v", action)
+				}
+			}
+			drawGuildNoticeTest(manager)
+		})
+	}
+}
+
+func TestGuildNoticeEditorSurvivesRefreshAndResetsWithServerNotice(t *testing.T) {
+	w, ctx, manager := newGuildNoticeTest(t, true)
+	field := w.noticeBody
+	field.SetFocused(true)
+	field.Event(widget.NewContext(), event.NewKeyEvent(event.KeyPress, event.KeyUnknown, 'x', event.ModNone))
+	ctx.Session.Guild.Level++ // An unrelated guild update must not discard editing state.
+	w.Refresh(ctx)
+	drawGuildNoticeTest(manager)
+	if w.noticeBody != field || !field.IsFocused() || field.Text() != w.noticeDraft.notice {
+		t.Fatal("guild refresh replaced the active notice editor or its draft")
+	}
+	w.resetNoticeDraft(ctx)
+	w.Refresh(ctx)
+	if w.noticeBody == field || field.IsFocused() || w.noticeBody.Text() != ctx.Session.Guild.Notice {
+		t.Fatal("Reset did not replace the editor with the server notice and release old focus")
+	}
+	ctx.Session.Guild.Notice = "Updated\nserver notice"
+	w.Refresh(ctx)
+	if w.noticeBody.Text() != ctx.Session.Guild.Notice {
+		t.Fatal("new server notice did not update the editor")
+	}
+	ctx.Session.Guild.IsMaster = false
+	w.Refresh(ctx)
+	w.noticeBody.SetFocused(true)
+	w.noticeBody.Event(widget.NewContext(), event.NewKeyEvent(event.KeyPress, event.KeyUnknown, 'x', event.ModNone))
+	if w.noticeBody.Text() != ctx.Session.Guild.Notice {
+		t.Fatal("losing guild master permissions left the notice editable")
+	}
+	field = w.noticeBody
+	field.SetFocused(true)
+	w.tab = guildWindowTabInfo
+	w.Refresh(ctx)
+	if w.noticeBody != nil || field.IsFocused() || w.KeyboardShortcutsBlocked() {
+		t.Fatal("leaving the notice tab retained editor focus")
+	}
+}
+
+func TestGuildNoticeEditorLimitAndKeyboardRouting(t *testing.T) {
+	w, ctx, _ := newGuildNoticeTest(t, true)
+	field := w.noticeBody
+	field.SetFocused(true)
+	wc := widget.NewContext()
+	field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyA, 0, event.ModCtrl))
+	for range guildNoticeBodyN + 10 {
+		field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyUnknown, 'x', event.ModNone))
+	}
+	if got := len(field.Text()); got != guildNoticeBodyN {
+		t.Fatalf("notice body length = %d, want legacy limit %d", got, guildNoticeBodyN)
+	}
+	for _, key := range []input.Key{input.KeyEnter, input.KeyArrowUp, input.KeyArrowDown} {
+		ctx.Input.SetKey(key, true)
+		if !w.UpdateKeyboardInput(ctx) || !w.KeyboardShortcutsBlocked() {
+			t.Fatalf("notice editing key %v was allowed to reach map chat", key)
+		}
+		ctx.Input.SetKey(key, false)
+		ctx.Input.EndFrame()
+	}
+	ctx.Input.SetKey(input.KeyEscape, true)
+	if !w.UpdateKeyboardInput(ctx) || w.IsOpen() || field.IsFocused() || w.KeyboardShortcutsBlocked() {
+		t.Fatal("Escape did not close the guild window and release editor focus")
+	}
+}
+
+func TestGuildNoticeEditorRebindKeepsDraftInCurrentWindow(t *testing.T) {
+	w, ctx, _ := newGuildNoticeTest(t, true)
+	w.noticeBody.SetFocused(true)
+	w.noticeBody.Event(widget.NewContext(), event.NewKeyEvent(event.KeyPress, event.KeyUnknown, 'x', event.ModNone))
+	draft := w.noticeDraft.notice
+	// World transitions copy the guild window, then rebind its callbacks.
+	next := *w
+	next.Rebind(ctx)
+	if next.noticeBody == w.noticeBody || next.noticeBody.Text() != draft || w.noticeBody.IsFocused() {
+		t.Fatal("rebound window did not preserve the draft in a fresh editor")
+	}
+	next.noticeBody.SetFocused(true)
+	next.noticeBody.Event(widget.NewContext(), event.NewKeyEvent(event.KeyPress, event.KeyUnknown, 'y', event.ModNone))
+	if next.noticeDraft.notice != "y"+draft || w.noticeDraft.notice != draft {
+		t.Fatal("rebound editor still updates the old window's draft")
 	}
 }
 

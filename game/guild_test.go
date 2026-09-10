@@ -10,13 +10,76 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogpu/ui/event"
+	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/uitest"
+	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 	gameui "github.com/kivutar/goro/ui"
+	"github.com/kivutar/goro/ui/rotheme"
 	worldstate "github.com/kivutar/goro/world"
 )
+
+func TestGuildNoticeEditorEnterDoesNotActivateConsole(t *testing.T) {
+	mode := NewWorldMode()
+	ctx := client.Context{
+		Session: &session.Session{GuildID: 99, Guild: session.Guild{
+			ID: 99, IsMaster: true, MenuAccess: 0x80, Notice: "Hello",
+		}},
+		World: worldstate.New(), Input: input.NewState(), Network: network.NewClient(20080910, false), ScreenW: 800, ScreenH: 600,
+	}
+	t.Cleanup(func() { ctx.Network.Close() })
+	mode.ui.guildWindow.OpenWindow(ctx)
+	root := mode.ui.guildWindow.Widget()
+	wc := widget.NewContext()
+	root.Layout(wc, geometry.Tight(geometry.Sz(800, 600)))
+	root.Draw(wc, &uitest.MockCanvas{})
+	// Open the final tab through the positioned widget tree, as a click would.
+	tabs := root.Children()[0].Children()[1].Children()[0].Children()[0]
+	notice := tabs.Children()[5].(interface{ ScreenBounds() geometry.Rect })
+	p := notice.ScreenBounds().Center()
+	root.Event(wc, event.NewMouseEvent(event.MousePress, event.ButtonLeft, event.ButtonStateLeft, p, p, event.ModNone))
+	root.Event(wc, event.NewMouseEvent(event.MouseRelease, event.ButtonLeft, 0, p, p, event.ModNone))
+	root.Layout(wc, geometry.Tight(geometry.Sz(800, 600)))
+	root.Draw(wc, &uitest.MockCanvas{})
+	var field *rotheme.TextAreaWidget
+	var findEditor func(widget.Widget)
+	findEditor = func(w widget.Widget) {
+		if editor, ok := w.(*rotheme.TextAreaWidget); ok {
+			field = editor
+		}
+		for _, child := range w.Children() {
+			findEditor(child)
+		}
+	}
+	findEditor(mode.ui.guildWindow.Widget())
+	if field == nil {
+		t.Fatalf("Notice tab has no multiline editor: tab=%T bounds=%v root=%v", notice, notice.ScreenBounds(), root.(interface{ ScreenBounds() geometry.Rect }).ScreenBounds())
+	}
+	field.SetFocused(true)
+	field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyEnd, 0, event.ModCtrl))
+	field.Event(wc, event.NewKeyEvent(event.KeyPress, event.KeyEnter, 0, event.ModNone))
+	ctx.Input.SetKey(input.KeyEnter, true)
+	if _, err := mode.Update(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if mode.ui.console.Active() || field.Text() != "Hello\n" || !mode.ui.keyboardInputBlocked(ctx) {
+		t.Fatal("Enter in the guild notice did not stay in the multiline editor")
+	}
+	ctx.Input.EndFrame()
+	ctx.Input.SetKey(input.KeyEnter, false)
+	ctx.Input.SetKey(input.KeyEscape, true)
+	if _, err := mode.Update(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if mode.ui.guildWindow.IsOpen() || mode.ui.escapeMenu.IsOpen() || mode.ui.console.Active() || field.IsFocused() {
+		t.Fatal("Escape should close only the guild window and release editor focus")
+	}
+}
 
 func TestAcceptingGuildInvitationWaitsForBelonging(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")

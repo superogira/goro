@@ -112,7 +112,7 @@ func (w *InventoryBagWindow) Toggle(ctx Context) {
 	w.Publish(ctx)
 }
 
-func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow, itemInfo *ItemInfoWindow) bool {
+func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow, itemInfo *ItemInfoWindow, dropTargets ...InventoryDropTarget) bool {
 	if inventoryWebEnabled() {
 		hudWebInstallHooks()
 		for _, action := range hudWebDrainActions("inv:") {
@@ -180,7 +180,7 @@ func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage
 		w.hideTooltip()
 		return false
 	}
-	if w.UpdateDrag(ctx, shortcuts, storage, cart, trade, equipment) {
+	if w.UpdateDrag(ctx, shortcuts, storage, cart, trade, equipment, dropTargets...) {
 		return true
 	}
 	w.ClampScroll(ctx.Session)
@@ -200,7 +200,11 @@ func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage
 	return consumed
 }
 
-func (w *InventoryBagWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow) bool {
+type InventoryDropTarget interface {
+	AcceptInventoryDrop(Context, session.InventoryItem, int, int) bool
+}
+
+func (w *InventoryBagWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow, dropTargets ...InventoryDropTarget) bool {
 	if w.UpdateDropPrompt(ctx) {
 		return true
 	}
@@ -211,6 +215,11 @@ func (w *InventoryBagWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar, sto
 		item := w.dragItem
 		w.dragActive = false
 		w.dragItem = session.InventoryItem{}
+		for _, target := range dropTargets {
+			if target != nil && target.AcceptInventoryDrop(ctx, item, ctx.Input.MouseX, ctx.Input.MouseY) {
+				return true
+			}
+		}
 		if storage != nil && storage.AcceptInventoryDrop(ctx, item, ctx.Input.MouseX, ctx.Input.MouseY) {
 			return true
 		}
@@ -224,6 +233,9 @@ func (w *InventoryBagWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar, sto
 			return true
 		}
 		if shortcuts != nil && shortcuts.AcceptItemDrop(ctx, item, ctx.Input.MouseX, ctx.Input.MouseY) {
+			return true
+		}
+		if manager, ok := ctx.UIManager.(interface{ PointerBlocked(int, int) bool }); ok && manager.PointerBlocked(ctx.Input.MouseX, ctx.Input.MouseY) {
 			return true
 		}
 		if !w.pointInside(ctx.Input.MouseX, ctx.Input.MouseY) {

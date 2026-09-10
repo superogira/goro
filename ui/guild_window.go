@@ -63,6 +63,7 @@ type GuildWindow struct {
 	positionScrollY state.Signal[float32]
 	noticeDraft     guildNoticeDraft
 	noticeSource    string
+	noticeBody      *rotheme.TextAreaWidget
 	skillIcons      map[uint16]image.Image
 	skillMiss       map[uint16]struct{}
 	skillPending    map[uint16]int
@@ -179,11 +180,29 @@ func (w *GuildWindow) OpenWindow(ctx Context) {
 }
 
 func (w *GuildWindow) Close() {
+	w.clearNoticeBody()
 	w.dragActive = false
 	w.dragSkill = session.Skill{}
 	w.hideTooltip()
 	w.memberContext.Close()
 	w.Window.Close()
+}
+
+func (w *GuildWindow) KeyboardShortcutsBlocked() bool {
+	return w.IsOpen() && w.tab == guildWindowTabNotice && w.noticeBody != nil && w.noticeBody.IsFocused()
+}
+
+func (w *GuildWindow) UpdateKeyboardInput(ctx Context) bool {
+	if ctx.Input == nil || !w.KeyboardShortcutsBlocked() {
+		return false
+	}
+	if ctx.Input.JustPressed(input.KeyEscape) {
+		w.Close()
+		return true
+	}
+	// The editor already handled these keys during UI event dispatch; do not
+	// also activate map chat or navigate the console history.
+	return ctx.Input.JustPressed(input.KeyEnter) || ctx.Input.JustPressed(input.KeyArrowUp) || ctx.Input.JustPressed(input.KeyArrowDown)
 }
 
 func (w *GuildWindow) Update(ctx Context, shortcuts *ShortcutBar, actions GameActions) bool {
@@ -269,6 +288,9 @@ func (w *GuildWindow) SetEmblemOptions(ctx Context, options []GuildEmblemOption)
 
 func (w *GuildWindow) Rebind(ctx Context) {
 	w.EnsureWindow(guildWindowWidth, guildWindowHeight)
+	// A map change copies persistent windows into the next world mode. Rebuild
+	// the editor so its change callback belongs to this copy, not the old one.
+	w.clearNoticeBody()
 	w.memberContext.Rebind(ctx)
 	if !w.IsOpen() {
 		return
@@ -392,6 +414,9 @@ func guildWindowMenuRequestTab(tab guildWindowTab) (uint32, bool) {
 }
 
 func (w *GuildWindow) tabContent(ctx Context) widget.Widget {
+	if w.tab != guildWindowTabNotice {
+		w.clearNoticeBody()
+	}
 	switch w.tab {
 	case guildWindowTabInfo:
 		return w.infoTab(ctx)
@@ -1276,36 +1301,34 @@ func (w *GuildWindow) ensureGuildHistoryScrollSignal() state.Signal[float32] {
 
 func (w *GuildWindow) noticeTab(ctx Context) widget.Widget {
 	guild := guildSessionInfo(ctx.Session)
-	if !guild.IsMaster {
-		return primitives.Box(
-			rotheme.Text("Title"),
-			guildNoticeBox(guildText(guild.NoticeSubject), 28, 1),
-			rotheme.Text("Contents"),
-			guildNoticeBox(guildText(guild.Notice), 140, 8),
-		).
-			PaddingXY(9, 10).
-			Gap(5).
-			CrossAlign(primitives.CrossAxisStretch).
-			Background(rotheme.Default.Colors.WindowBody)
-	}
 	w.ensureNoticeDraft(ctx)
-	return primitives.Box(
-		rotheme.Text("Title"),
-		guildNoticeInput(
+	if w.noticeBody == nil {
+		maxBytes := guildNoticeBodyN
+		if !guild.IsMaster {
+			maxBytes = 0 // Display the full server notice, including decoded multibyte text.
+		}
+		w.noticeBody = rotheme.TextArea(w.noticeDraft.notice, maxBytes, func(value string) {
+			w.noticeDraft.notice = value
+		})
+		w.noticeBody.SetReadOnly(!guild.IsMaster)
+	}
+	var title widget.Widget
+	if guild.IsMaster {
+		title = guildNoticeInput(
 			w.noticeDraft.subject,
 			guildNoticeSubjectN,
 			func(value string) {
 				w.noticeDraft.subject = value
 			},
-		),
+		)
+	} else {
+		title = guildNoticeBox(guildText(guild.NoticeSubject), 28, 1)
+	}
+	return primitives.Box(
+		rotheme.Text("Title"),
+		title,
 		rotheme.Text("Contents"),
-		guildNoticeInput(
-			w.noticeDraft.notice,
-			guildNoticeBodyN,
-			func(value string) {
-				w.noticeDraft.notice = value
-			},
-		),
+		primitives.Expanded(w.noticeBody),
 	).
 		PaddingXY(9, 10).
 		Gap(5).
@@ -1351,11 +1374,22 @@ func (w *GuildWindow) ensureNoticeDraft(ctx Context) {
 }
 
 func (w *GuildWindow) resetNoticeDraft(ctx Context) {
+	w.clearNoticeBody()
 	guild := guildSessionInfo(ctx.Session)
 	w.noticeSource = guildNoticeDraftSource(guild)
 	w.noticeDraft = guildNoticeDraft{
 		subject: strings.TrimSpace(guild.NoticeSubject),
 		notice:  strings.TrimSpace(guild.Notice),
+	}
+}
+
+func (w *GuildWindow) clearNoticeBody() {
+	if w.noticeBody != nil {
+		if ctx := windowWidgetContext(w.ctx); ctx != nil {
+			ctx.ReleaseFocus(w.noticeBody)
+		}
+		w.noticeBody.SetFocused(false)
+		w.noticeBody = nil
 	}
 }
 
@@ -1375,7 +1409,7 @@ func (w *GuildWindow) confirmGuildNoticeDraft(ctx Context) {
 }
 
 func guildNoticeDraftSource(guild session.Guild) string {
-	return strings.TrimSpace(guild.NoticeSubject) + "\x00" + strings.TrimSpace(guild.Notice)
+	return fmt.Sprintf("%d:%t:%s\x00%s", guild.ID, guild.IsMaster, strings.TrimSpace(guild.NoticeSubject), strings.TrimSpace(guild.Notice))
 }
 
 func truncateRunes(text string, maxRunes int) string {

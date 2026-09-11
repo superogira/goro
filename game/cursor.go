@@ -1,6 +1,8 @@
 package game
 
 import (
+	"fmt"
+
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	"image"
@@ -60,6 +62,7 @@ var cursorActionInfos = map[int]cursorActionInfo{
 
 func (m *WorldMode) drawROCursor(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time) {
 	if ctx.Input == nil {
+		cursorWebHide()
 		return
 	}
 	render.SetCursorMode(render.CursorModeHidden)
@@ -125,6 +128,20 @@ func (s *roCursorState) draw(screen *render.Frame, ctx client.Context, action in
 		s.started = now
 	}
 	frame, ok := s.frame(action, cursorInfo(action), now)
+	if cursorWebEnabled() {
+		// DOM twin: same billboard, same anchor/hotspot and magnet math —
+		// only the destination changes from a canvas blit to a positioned
+		// element, keeping the cursor crisp at any resolution scale.
+		if ok {
+			cursorWebSync(frame.image, fmt.Sprintf("%p", frame.image),
+				float64(ctx.Input.MouseX)-frame.anchorX-magnetX,
+				float64(ctx.Input.MouseY)-frame.anchorY-magnetY)
+		} else {
+			cursorWebSync(s.fallbackTexture(), "fallback",
+				float64(ctx.Input.MouseX), float64(ctx.Input.MouseY))
+		}
+		return
+	}
 	if !ok {
 		drawFallbackROCursor(screen, s.fallbackTexture(), ctx.Input.MouseX, ctx.Input.MouseY)
 		return

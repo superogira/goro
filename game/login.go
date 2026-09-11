@@ -615,6 +615,7 @@ func (m *LoginMode) FrameSubmitted() {
 func (m *LoginMode) drawROCursor(screen *render.Frame, ctx client.Context, now time.Time) {
 	if ctx.Input == nil || ctx.Config.Login.DebugNoCursor {
 		// Profiling mode (?nocursor=1): leave the OS cursor in place.
+		cursorWebHide()
 		return
 	}
 	render.SetCursorMode(render.CursorModeHidden)

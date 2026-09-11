@@ -42,6 +42,7 @@ type Colors struct {
 	MutedText      widget.Color
 	InputBorder    widget.Color
 	InputFocus     widget.Color
+	SkillRequired  widget.Color
 }
 
 type Typography struct {
@@ -74,6 +75,7 @@ var Default = Theme{
 		MutedText:      fromRGBA(color.RGBA{R: 98, G: 112, B: 126, A: 255}),
 		InputBorder:    fromRGBA(color.RGBA{R: 138, G: 174, B: 214, A: 255}),
 		InputFocus:     fromRGBA(color.RGBA{R: 82, G: 138, B: 200, A: 255}),
+		SkillRequired:  fromRGBA(color.RGBA{R: 255, G: 192, B: 203, A: 255}),
 	},
 	Typography: Typography{
 		FontFamily: uiFontFamily,

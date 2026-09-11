@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/gogpu/ui/event"
@@ -11,6 +13,154 @@ import (
 	"github.com/kivutar/goro/session"
 	"github.com/kivutar/goro/ui/rotheme"
 )
+
+func TestSkillGridRequirements(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		job   int
+		skill uint16
+		want  map[uint16]int
+	}{
+		{"blessing", db.JobAcolyte, db.SkillALBlessing, map[uint16]int{
+			db.SkillALBlessing: 0, db.SkillALDp: 5,
+		}},
+		{"recursive", db.JobAcolyte, db.SkillALPneuma, map[uint16]int{
+			db.SkillALPneuma: 0, db.SkillALWarp: 4, db.SkillALTeleport: 2, db.SkillALRuwach: 1,
+		}},
+		{"shared prerequisites keep highest level", db.JobKnight, db.SkillKNBowlingbash, map[uint16]int{
+			db.SkillKNBowlingbash: 0, db.SkillSMBash: 10, db.SkillSMMagnum: 3,
+			db.SkillSMTwohand: 5, db.SkillSMSword: 1, db.SkillKNTwohandquicken: 10, db.SkillKNAutocounter: 5,
+		}},
+		{"job override", db.JobCrusader, db.SkillALDp, map[uint16]int{
+			db.SkillALDp: 0, db.SkillALCure: 1, db.SkillCRTrust: 5,
+		}},
+		{"no prerequisites", db.JobAcolyte, db.SkillALDp, map[uint16]int{
+			db.SkillALDp: 0,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := skillGridRequirements(tc.job, tc.skill); !maps.Equal(got, tc.want) {
+				t.Fatalf("requirements = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSkillGridHoverInvalidatesOnlyAffectedCells(t *testing.T) {
+	ctx := uitest.NewMockContext()
+	grid := newSkillGridWidget(skillGridConfig{
+		job: db.JobAcolyte,
+		entries: []skillGridEntry{
+			{position: 0, skill: session.Skill{ID: db.SkillALBlessing}},
+			{position: 1, skill: session.Skill{ID: db.SkillALDp}},
+			{position: 2, skill: session.Skill{ID: db.SkillALHeal}},
+		},
+	})
+	grid.Layout(ctx, geometry.Tight(geometry.Sz(skillGridViewW, skillGridViewH)))
+	for _, step := range []struct {
+		name      string
+		position  int
+		eventType event.MouseEventType
+		want      map[uint16]int
+		dirty     []int
+	}{
+		{"hover blessing", 0, event.MouseMove, map[uint16]int{db.SkillALBlessing: 0, db.SkillALDp: 5}, []int{0, 1}},
+		{"same skill", 0, event.MouseMove, map[uint16]int{db.SkillALBlessing: 0, db.SkillALDp: 5}, nil},
+		{"another skill", 2, event.MouseMove, map[uint16]int{db.SkillALHeal: 0}, []int{0, 1, 2}},
+		{"empty cell", 3, event.MouseMove, nil, []int{2}},
+		{"hover again", 0, event.MouseMove, map[uint16]int{db.SkillALBlessing: 0, db.SkillALDp: 5}, []int{0, 1}},
+		{"leave grid", 0, event.MouseLeave, nil, []int{0, 1}},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			ctx.InvalidatedRects = nil
+			point := skillGridSlotBounds(grid.cellBounds(step.position)).Center()
+			grid.Event(ctx, event.NewMouseEvent(step.eventType, event.ButtonNone, 0, point, point, 0))
+			if !maps.Equal(grid.requiredLevels, step.want) {
+				t.Fatalf("hover requirements = %v, want %v", grid.requiredLevels, step.want)
+			}
+			var wantRects []geometry.Rect
+			for _, position := range step.dirty {
+				wantRects = append(wantRects, grid.cellBounds(position))
+			}
+			if !slices.Equal(ctx.InvalidatedRects, wantRects) {
+				t.Fatalf("invalidated = %v, want %v", ctx.InvalidatedRects, wantRects)
+			}
+		})
+	}
+}
+
+func TestSkillGridHoverDrawsRequiredLevelEvenWhenAlreadyLearned(t *testing.T) {
+	for _, learnedLevel := range []int{0, 5, 10} {
+		skill := session.Skill{ID: db.SkillALDp, Level: learnedLevel}
+		grid := newSkillGridWidget(skillGridConfig{
+			job: db.JobAcolyte,
+			entries: []skillGridEntry{
+				{position: 0, skill: session.Skill{ID: db.SkillALBlessing}},
+				{position: 1, skill: skill, display: skill, canStage: true},
+			},
+		})
+		ctx := widget.NewContext()
+		grid.Layout(ctx, geometry.Tight(geometry.Sz(skillGridViewW, skillGridViewH)))
+		grid.setHover(ctx, 0, skillGridPartCell, true)
+		canvas := &uitest.MockCanvas{}
+		grid.Draw(ctx, canvas)
+		for _, position := range []int{0, 1} {
+			bounds := skillGridSlotBounds(grid.cellBounds(position))
+			if !slices.ContainsFunc(canvas.RoundRects, func(call uitest.DrawRoundRectCall) bool {
+				return call.Bounds == bounds && call.Color == rotheme.Default.Colors.SkillRequired
+			}) {
+				t.Fatalf("level %d: slot %d has no prerequisite highlight", learnedLevel, position)
+			}
+		}
+		for _, call := range canvas.RoundRects {
+			if call.Color == rotheme.Default.Colors.SkillRequired &&
+				call.Bounds != skillGridSlotBounds(grid.cellBounds(0)) &&
+				call.Bounds != skillGridSlotBounds(grid.cellBounds(1)) {
+				t.Fatalf("level %d: highlight extends beyond the icon squares: %v", learnedLevel, call.Bounds)
+			}
+		}
+		var badges []uitest.DrawStyledTextCall
+		for _, call := range canvas.StyledTexts {
+			if call.Style.Bold {
+				badges = append(badges, call)
+			}
+		}
+		if len(badges) != 1 || badges[0].Text != "5" || !grid.cellBounds(1).Contains(badges[0].Bounds.Center()) {
+			t.Fatalf("level %d: required-level badges = %+v, want 5 on Divine Protection only", learnedLevel, badges)
+		}
+		grid.setHover(ctx, -1, skillGridPartCell, false)
+		canvas.Reset()
+		grid.Draw(ctx, canvas)
+		for _, call := range canvas.RoundRects {
+			if call.Color == rotheme.Default.Colors.SkillRequired {
+				t.Fatalf("level %d: prerequisite highlight remains after leaving", learnedLevel)
+			}
+		}
+	}
+}
+
+func TestSkillGridMovingWithinSkillDoesNotAllocate(t *testing.T) {
+	grid := newSkillGridWidget(skillGridConfig{
+		job:     db.JobAcolyte,
+		entries: []skillGridEntry{{position: 0, skill: session.Skill{ID: db.SkillALBlessing}}},
+	})
+	ctx := widget.NewContext()
+	grid.setHover(ctx, 0, skillGridPartCell, true)
+	if allocs := testing.AllocsPerRun(100, func() {
+		grid.setHover(ctx, 0, skillGridPartCell, true)
+	}); allocs != 0 {
+		t.Fatalf("unchanged hover allocations = %g, want 0", allocs)
+	}
+}
+
+func TestSkillWindowGridUsesSelectedJobForRequirements(t *testing.T) {
+	ctx := Context{Session: &session.Session{Selected: session.Character{Job: db.JobCrusader}}}
+	window := &SkillWindow{tab: skillTabSecond, gridMode: true}
+	window.skillGridWidget(ctx, nil, nil)
+	if got := window.grid.cfg.job; got != db.JobCrusader {
+		t.Fatalf("grid job = %d, want Crusader", got)
+	}
+}
 
 func TestSkillGridKeepsFixedPositionsAndMinimumRows(t *testing.T) {
 	grid := newSkillGridWidget(skillGridConfig{entries: []skillGridEntry{

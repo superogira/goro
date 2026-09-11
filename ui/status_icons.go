@@ -236,8 +236,6 @@ func (w *statusIconsWidget) Event(_ widget.Context, _ event.Event) bool {
 }
 
 func (w *statusIconsWidget) drawStatusIcon(canvas widget.Canvas, id uint16, effect session.StatusEffect, x, y int) {
-	canvas.DrawRect(geometry.NewRect(float32(x-1), float32(y-1), statusIconSize+2, statusIconSize+2), Color(color.RGBA{R: 60, G: 74, B: 96, A: 170}))
-	canvas.DrawRect(geometry.NewRect(float32(x), float32(y), statusIconSize, statusIconSize), Color(color.RGBA{R: 236, G: 242, B: 250, A: 215}))
 	if icon := w.icons[id]; icon != nil {
 		canvas.DrawImage(icon, geometry.Pt(float32(x), float32(y)))
 	} else {

@@ -27,6 +27,7 @@ type skillGridEntry struct {
 
 type skillGridConfig struct {
 	entries       []skillGridEntry
+	job           int
 	onPress       func(session.Skill, int, int)
 	onStage       func(session.Skill)
 	selectedLevel func(session.Skill) int
@@ -49,6 +50,7 @@ type skillGridWidget struct {
 	entryByPosition map[int]int
 	hoveredPosition int
 	hoveredPart     skillGridPart
+	requiredLevels  map[uint16]int
 	rows            int
 }
 
@@ -92,16 +94,14 @@ func (w *skillGridWidget) Draw(_ widget.Context, canvas widget.Canvas) {
 }
 
 func (w *skillGridWidget) drawCell(canvas widget.Canvas, cell geometry.Rect, entry skillGridEntry, occupied, hovered bool) {
-	if hovered && occupied {
-		highlight := rotheme.Default.Colors.ButtonHover
-		highlight.A = 0.45
-		canvas.DrawRoundRect(cell.Inset(geometry.UniformInsets(1)), highlight, 4)
-	}
-
+	requiredLevel, highlighted := w.requiredLevels[entry.skill.ID]
 	slot := skillGridSlotBounds(cell)
 	slotColor := rotheme.Default.Colors.WindowBody
 	if occupied && entry.canStage {
 		slotColor = rotheme.Default.Colors.ButtonHover
+	}
+	if occupied && highlighted {
+		slotColor = rotheme.Default.Colors.SkillRequired
 	}
 	canvas.DrawRoundRect(slot, slotColor, 3)
 	outline := rotheme.Default.Colors.FooterLine
@@ -135,6 +135,11 @@ func (w *skillGridWidget) drawCell(canvas widget.Canvas, cell geometry.Rect, ent
 	}
 
 	w.drawLevel(canvas, cell, entry, textColor, hovered)
+	if requiredLevel > 0 {
+		badge := geometry.NewRect(slot.Max.X, slot.Max.Y-14, 16, 14)
+		rotheme.DrawText(canvas, fmt.Sprint(requiredLevel), badge,
+			rotheme.Default.Typography.TextSize, rotheme.Default.Colors.Text, true, widget.TextAlignCenter)
+	}
 }
 
 func (w *skillGridWidget) drawLevel(canvas widget.Canvas, cell geometry.Rect, entry skillGridEntry, color widget.Color, hovered bool) {
@@ -246,15 +251,42 @@ func (w *skillGridWidget) setHover(ctx widget.Context, position int, part skillG
 		return
 	}
 	old := w.hoveredPosition
+	oldLevels := w.requiredLevels
 	w.hoveredPosition = position
 	w.hoveredPart = part
+	if old != position {
+		w.requiredLevels = nil
+		if entry, ok := w.entryAtPosition(position); ok {
+			w.requiredLevels = skillGridRequirements(w.cfg.job, entry.skill.ID)
+		}
+	}
 	w.SetNeedsRedraw(true)
-	if old >= 0 {
-		ctx.InvalidateRect(w.cellBounds(old))
+	for _, entry := range w.cfg.entries {
+		oldLevel, wasHighlighted := oldLevels[entry.skill.ID]
+		level, highlighted := w.requiredLevels[entry.skill.ID]
+		if entry.position == old || entry.position == position || wasHighlighted != highlighted || oldLevel != level {
+			ctx.InvalidateRect(w.cellBounds(entry.position))
+		}
 	}
-	if position >= 0 {
-		ctx.InvalidateRect(w.cellBounds(position))
+}
+
+// Include the hovered skill at level zero, so it is highlighted without a badge.
+// Visiting each skill once also handles shared prerequisites and cycles safely.
+func skillGridRequirements(job int, skillID uint16) map[uint16]int {
+	levels := map[uint16]int{skillID: 0}
+	var visit func(uint16)
+	visit = func(id uint16) {
+		for _, requirement := range db.SkillRequirementsForJob(job, id) {
+			level, visited := levels[requirement.SkillID]
+			levels[requirement.SkillID] = max(level, requirement.Level)
+			if !visited {
+				visit(requirement.SkillID)
+			}
+		}
 	}
+	visit(skillID)
+	levels[skillID] = 0
+	return levels
 }
 
 func skillGridHitPart(entry skillGridEntry, cell geometry.Rect, point geometry.Point) skillGridPart {

@@ -35,6 +35,7 @@ type Manager struct {
 	Archives   []*GRF
 
 	deferredWebPack *deferredWebPackState
+	webMapPacks     *webMapPackState
 
 	accessoryNames           map[int]string
 	accessoryNamesLoaded     bool

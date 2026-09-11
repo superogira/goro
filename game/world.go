@@ -571,6 +571,9 @@ func (m *WorldMode) Enter(ctx client.Context) {
 		return
 	}
 
+	// One pack download replaces the per-file round trips for everything
+	// this map references; missing packs fall through to loose streaming.
+	ctx.Resources.EnsureWebMapPack(strings.TrimSuffix(strings.TrimSuffix(ctx.World.MapName, ".gat"), ".rsw"))
 	gat, _, err := loadGAT(ctx.Resources, ctx.World.MapName)
 	if err != nil {
 		return

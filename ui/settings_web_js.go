@@ -27,6 +27,7 @@ func (w *SettingsWindow) webSync(ctx client.Context) {
 	obj.Set("fullscreen", settingsRuntimeFullscreen(ctx))
 	obj.Set("vsync", settingsRuntimeVSync(ctx))
 	obj.Set("fps", settingsRuntimeFPS(ctx))
+	obj.Set("scale", settingsResolutionScale(ctx))
 	obj.Set("bgm", settingsVolumeBGM(ctx))
 	obj.Set("sfx", settingsVolumeSFX(ctx))
 	obj.Set("noShift", settingsNoShift(ctx))
@@ -57,6 +58,13 @@ func (w *SettingsWindow) handleSettingsWebAction(ctx client.Context, action stri
 	case strings.HasPrefix(action, "set:fps:"):
 		if ctx.Runtime != nil {
 			ctx.Runtime.SetFPS(action[len("set:fps:"):] == "1")
+		}
+	case strings.HasPrefix(action, "set:scale:"):
+		if v, err := strconv.ParseFloat(strings.TrimPrefix(action, "set:scale:"), 64); err == nil && ctx.Runtime != nil {
+			// Live on web: the next PrepareFrame resizes the canvas backing
+			// store, no restart needed.
+			ctx.Runtime.SetResolutionScale(v)
+			w.saveSettings(ctx)
 		}
 	case strings.HasPrefix(action, "set:bgm:"):
 		if v, err := strconv.ParseFloat(strings.TrimPrefix(action, "set:bgm:"), 64); err == nil && ctx.Audio != nil {

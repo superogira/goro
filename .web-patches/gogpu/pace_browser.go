@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"syscall/js"
 	"time"
+
+	"github.com/gogpu/gogpu/internal/platform"
 )
 
 // Browser frame pacing: wait for the compositor's requestAnimationFrame
@@ -85,4 +87,11 @@ func paceBrowserFrame() {
 		}
 		time.Sleep(pacePollInterval)
 	}
+}
+
+// SetBrowserResolutionScale sets the canvas backing-store scale factor
+// (0 < scale <= 1). Takes effect on the next PrepareFrame — no surface
+// teardown needed, the canvas resize path already handles backing changes.
+func SetBrowserResolutionScale(scale float64) {
+	platform.SetResolutionScale(scale)
 }

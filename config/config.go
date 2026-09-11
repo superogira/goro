@@ -83,6 +83,7 @@ type RenderConfig struct {
 	ForceSoftware      bool
 	VSync              bool
 	FPS                bool
+	ResolutionScale    float64
 	NoUI               bool
 	AsyncUI            bool
 	UIProfile          bool
@@ -139,9 +140,10 @@ func LoadConfig(args []string) (Config, error) {
 }
 
 type UserSettings struct {
-	Fullscreen  bool
-	VSync       bool
-	FPS         bool
+	Fullscreen       bool
+	VSync            bool
+	FPS              bool
+	ResolutionScale  float64
 	BGMVolume   float64
 	SFXVolume   float64
 	NoShift     bool
@@ -196,13 +198,17 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 	if settings.SFXVolume < 0 || settings.SFXVolume > 1 {
 		return "", fmt.Errorf("sfx volume must be between 0 and 1")
 	}
+	if settings.ResolutionScale != 0 && (settings.ResolutionScale < 0.1 || settings.ResolutionScale > 1) {
+		return "", fmt.Errorf("resolution scale must be between 0.1 and 1")
+	}
 	values := map[string]map[string]string{
 		"window": {
 			"fullscreen": formatINIValueBool(settings.Fullscreen),
 		},
 		"render": {
-			"vsync": formatINIValueBool(settings.VSync),
-			"fps":   formatINIValueBool(settings.FPS),
+			"vsync":            formatINIValueBool(settings.VSync),
+			"fps":              formatINIValueBool(settings.FPS),
+			"resolution_scale": formatINIValueFloat(settings.ResolutionScale),
 		},
 		"audio": {
 			"bgm_volume": formatINIValueFloat(settings.BGMVolume),
@@ -245,6 +251,7 @@ func defaultConfig() Config {
 			GraphicsAPI:        "vulkan",
 			AsyncUI:            defaultAsyncUI(),
 			VSync:              true,
+			ResolutionScale:    1,
 			BenchWarmupSeconds: 0,
 		},
 		Fog: FogConfig{
@@ -318,6 +325,7 @@ func applyCLI(cfg *Config, args []string) error {
 	fs.StringVar(&cfg.Render.PowerPreference, "power-preference", cfg.Render.PowerPreference, "GPU power preference: low, high")
 	fs.BoolVar(&cfg.Render.ForceSoftware, "gpu-software", cfg.Render.ForceSoftware, "request the software GPU adapter")
 	fs.BoolVar(&cfg.Render.VSync, "vsync", cfg.Render.VSync, "enable vsync")
+	fs.Float64Var(&cfg.Render.ResolutionScale, "resolution-scale", cfg.Render.ResolutionScale, "canvas backing-store scale from 0.1 to 1 (web)")
 	fs.BoolVar(&cfg.Render.FPS, "fps", cfg.Render.FPS, "show measured FPS counter")
 	fs.BoolVar(&cfg.Render.NoUI, "no-ui", cfg.Render.NoUI, "disable UI rendering for benchmarking")
 	fs.BoolVar(&cfg.Render.AsyncUI, "async-ui", cfg.Render.AsyncUI, "rasterize UI off the draw thread")
@@ -425,6 +433,8 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Render.VSync)
 	case "render.fps":
 		return setBool(value, &cfg.Render.FPS)
+	case "render.resolutionscale":
+		return setFloat(value, &cfg.Render.ResolutionScale)
 	case "render.noui":
 		return setBool(value, &cfg.Render.NoUI)
 	case "render.asyncui":

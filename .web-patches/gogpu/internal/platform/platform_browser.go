@@ -4,13 +4,38 @@ package platform
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"sync/atomic"
 	"syscall/js"
 	"time"
 
 	"github.com/gogpu/gogpu/internal/platform/eventqueue"
 	"github.com/gogpu/gpucontext"
 )
+
+// resolutionScaleBits holds the IEEE-754 bits of the canvas backing-store
+// scale (0 < scale <= 1); zero means the default 1.0.
+var resolutionScaleBits atomic.Uint32
+
+// SetResolutionScale sets the canvas backing-store scale. The CSS size of
+// the canvas stays at 100% while the backing store — and with it the swap
+// chain — shrinks by the factor, so the browser upscales the frame for
+// free and GPU fill cost drops quadratically at the price of sharpness.
+func SetResolutionScale(scale float64) {
+	if !(scale > 0) || scale > 1 {
+		scale = 1
+	}
+	resolutionScaleBits.Store(math.Float32bits(float32(scale)))
+}
+
+func currentResolutionScale() float64 {
+	scale := float64(math.Float32frombits(resolutionScaleBits.Load()))
+	if !(scale > 0) || scale > 1 {
+		return 1
+	}
+	return scale
+}
 
 // browserPlatform implements PlatformManager for browser/WASM.
 // The browser manages its own event loop — we integrate via addEventListener
@@ -748,10 +773,17 @@ func (w *browserWindow) ScaleFactor() float64 {
 // PrepareFrame updates canvas backing store to match devicePixelRatio.
 func (w *browserWindow) PrepareFrame() PrepareFrameResult {
 	dpr := w.ScaleFactor()
+	rs := currentResolutionScale()
 	clientW := w.canvas.Get("clientWidth").Int()
 	clientH := w.canvas.Get("clientHeight").Int()
-	physW := int(float64(clientW) * dpr)
-	physH := int(float64(clientH) * dpr)
+	physW := int(float64(clientW) * dpr * rs)
+	physH := int(float64(clientH) * dpr * rs)
+	if physW < 1 {
+		physW = 1
+	}
+	if physH < 1 {
+		physH = 1
+	}
 
 	// Update canvas backing store if needed.
 	curW := w.canvas.Get("width").Int()

@@ -56,6 +56,8 @@ type RuntimeSettings interface {
 	SetVSync(bool)
 	FPS() bool
 	SetFPS(bool)
+	ResolutionScale() float64
+	SetResolutionScale(float64)
 }
 
 func (c Context) ScreenSize() (int, int) {

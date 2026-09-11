@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"github.com/gogpu/ui/core/checkbox"
 	"github.com/gogpu/ui/core/slider"
 	"github.com/gogpu/ui/primitives"
@@ -128,6 +130,17 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 			}),
 		),
 
+		primitives.HBox(
+			rotheme.Text("Resolution"),
+			resolutionScaleButtons(ctx, func(scale float64) {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetResolutionScale(scale)
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}),
+		).Gap(6),
+
 		rotheme.Label("Sound"),
 
 		primitives.HBox(
@@ -244,16 +257,17 @@ func (w *SettingsWindow) refresh(ctx client.Context) {
 
 func (w *SettingsWindow) saveSettings(ctx client.Context) {
 	settings := config.UserSettings{
-		Fullscreen:  settingsRuntimeFullscreen(ctx),
-		VSync:       settingsRuntimeVSync(ctx),
-		FPS:         settingsRuntimeFPS(ctx),
-		BGMVolume:   settingsVolumeBGM(ctx),
-		SFXVolume:   settingsVolumeSFX(ctx),
-		NoShift:     settingsNoShift(ctx),
-		NoCtrl:      settingsNoCtrl(ctx),
-		LessEffects: settingsLessEffects(ctx),
-		SnapTargets: settingsSnapTargets(ctx),
-		SnapItems:   settingsSnapItems(ctx),
+		Fullscreen:      settingsRuntimeFullscreen(ctx),
+		VSync:           settingsRuntimeVSync(ctx),
+		FPS:             settingsRuntimeFPS(ctx),
+		ResolutionScale: settingsResolutionScale(ctx),
+		BGMVolume:       settingsVolumeBGM(ctx),
+		SFXVolume:       settingsVolumeSFX(ctx),
+		NoShift:         settingsNoShift(ctx),
+		NoCtrl:          settingsNoCtrl(ctx),
+		LessEffects:     settingsLessEffects(ctx),
+		SnapTargets:     settingsSnapTargets(ctx),
+		SnapItems:       settingsSnapItems(ctx),
 	}
 	path, err := config.SaveUserSettings(settings)
 	if err != nil {
@@ -296,6 +310,46 @@ func settingsRuntimeFPS(ctx client.Context) bool {
 		return ctx.Runtime.FPS()
 	}
 	return ctx.Config.Render.FPS
+}
+
+// settingsResolutionScale returns the live canvas backing-store scale,
+// falling back to the config value before the runtime exists.
+func settingsResolutionScale(ctx client.Context) float64 {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.ResolutionScale()
+	}
+	if s := ctx.Config.Render.ResolutionScale; s > 0 && s <= 1 {
+		return s
+	}
+	return 1
+}
+
+// resolutionScaleOptions are the selectable render scales, in percent.
+var resolutionScaleOptions = []int{100, 90, 80, 70, 60, 50}
+
+// resolutionScaleButtons builds the scale picker: the active percent uses
+// the highlighted button style so the current level reads at a glance.
+func resolutionScaleButtons(ctx client.Context, onPick func(float64)) widget.Widget {
+	current := settingsResolutionScale(ctx)
+	buttons := make([]widget.Widget, 0, len(resolutionScaleOptions))
+	for _, percent := range resolutionScaleOptions {
+		scale := float64(percent) / 100
+		label := fmt.Sprintf("%d%%", percent)
+		if absFloat(scale-current) < 0.001 {
+			label = "[" + label + "]"
+		}
+		buttons = append(buttons, rotheme.Button(label, func() {
+			onPick(scale)
+		}))
+	}
+	return primitives.HBox(buttons...).Gap(4)
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func settingsNoShift(ctx client.Context) bool {

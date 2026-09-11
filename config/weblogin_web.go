@@ -73,4 +73,17 @@ func applyWebLoginQuery(cfg *Config) {
 	case "high", "performance", "perf":
 		cfg.Render.PowerPreference = "high"
 	}
+	// scale= sets the render resolution scale: a fraction (scale=0.6) or a
+	// percent (scale=60). Below 1.0 the canvas backing store shrinks and the
+	// browser stretches it back — the GPU cost drops quadratically.
+	if value := strings.TrimSpace(query.Get("scale")); value != "" {
+		if v, err := strconv.ParseFloat(value, 64); err == nil {
+			if v > 1 {
+				v /= 100
+			}
+			if v >= 0.1 && v <= 1 {
+				cfg.Render.ResolutionScale = v
+			}
+		}
+	}
 }

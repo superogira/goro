@@ -53,7 +53,7 @@ func New(cfg config.Config) (*Game, error) {
 		world:    world.New(),
 		network:  network.NewClient(cfg.Packet.ClientDate, cfg.Network.Trace),
 		audio:    gameaudio.NewBGM(resource, cfg.Audio.BGM, cfg.Audio.BGMVolume, cfg.Audio.SFXVolume, cfg.Audio.Disabled),
-		runtime:  newRuntimeSettings(cfg.Window.Fullscreen, cfg.Render.VSync, cfg.Render.FPS),
+		runtime:  newRuntimeSettings(cfg.Window.Fullscreen, cfg.Render.VSync, cfg.Render.FPS, cfg.Render.ResolutionScale),
 		ui:       gameui.NewManager(),
 		started:  time.Now(),
 		screenW:  cfg.Window.Width,

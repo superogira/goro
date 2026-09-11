@@ -48,14 +48,7 @@ func (w *SettingsWindow) OpenWindow(ctx client.Context) {
 
 func (w *SettingsWindow) Update(ctx client.Context) bool {
 	if settingsWebEnabled() {
-		w.ctx = ctx
-		for _, action := range hudWebDrainActions("set:") {
-			w.handleSettingsWebAction(ctx, action)
-		}
-		if key := w.settingsWebKey(ctx); key != w.webSyncKey {
-			w.webSyncKey = key
-			w.webSync(ctx)
-		}
+		w.UpdateWeb(ctx)
 		return false
 	}
 	w.EnsureWindow(settingsWindowW, settingsWindowH)
@@ -66,6 +59,26 @@ func (w *SettingsWindow) Update(ctx client.Context) bool {
 	consumed := w.Window.Update(ctx)
 	w.Publish(ctx)
 	return consumed
+}
+
+// UpdateWeb services DOM settings actions and state sync. It must run from
+// the head of the world update, before map-fade and disconnect-dialog
+// early-returns: while those states persist, the window chain never reaches
+// Update, a queued "set:scale:" from the DOM sits unapplied, and the native
+// select keeps the picked value — the canvas then renders at the old scale
+// while the settings claim the new one.
+func (w *SettingsWindow) UpdateWeb(ctx client.Context) {
+	if !settingsWebEnabled() {
+		return
+	}
+	w.ctx = ctx
+	for _, action := range hudWebDrainActions("set:") {
+		w.handleSettingsWebAction(ctx, action)
+	}
+	if key := w.settingsWebKey(ctx); key != w.webSyncKey {
+		w.webSyncKey = key
+		w.webSync(ctx)
+	}
 }
 
 func (w *SettingsWindow) Rebind(ctx client.Context) {

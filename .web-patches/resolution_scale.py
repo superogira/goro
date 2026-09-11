@@ -31,7 +31,10 @@ sub1(
         }).join('') + '</select></div>';""",
 )
 
-# 3) wire the select: pointerdown must not drag the window, change applies live
+# 3) wire the select: pointerdown must not drag the window, change applies
+# live. 'input' mirrors 'change' — some mobile browsers deliver the select's
+# final value via input first, and a lost change left the canvas rendering at
+# the old scale while the user believed the new percent had applied.
 sub1(
     """      set.querySelectorAll('input[type=range]').forEach(function (el) {
         el.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
@@ -49,9 +52,9 @@ sub1(
       });
       set.querySelectorAll('select').forEach(function (el) {
         el.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
-        el.addEventListener('change', function () {
-          setAct(el.getAttribute('data-k') + ':' + el.value);
-        });
+        var send = function () { setAct(el.getAttribute('data-k') + ':' + el.value); };
+        el.addEventListener('change', send);
+        el.addEventListener('input', send);
       });""",
 )
 

@@ -669,6 +669,11 @@ func (m *WorldMode) playMapBGM(ctx client.Context, rswName string) {
 
 func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	now := time.Now()
+	// DOM settings actions must land before any early-return below (map
+	// fade, disconnect dialog): a queued resolution change that skips them
+	// leaves the canvas rendering at the old scale while the settings
+	// picker keeps showing the picked value.
+	m.ui.settingsWindow.UpdateWeb(ctx)
 	// Fold a finished wav-pack download into the archive list on this
 	// goroutine; no-op until StartDeferredWebPack's fetch lands.
 	if ctx.Resources != nil {

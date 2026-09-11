@@ -272,6 +272,7 @@ type runner struct {
 	vsyncWarned     bool
 	uiDrawnOnce     bool
 	uiScale         float64
+	badgeLabel      string
 	uiCanvas        *ggcanvas.Canvas
 	uiLogicalWidth  int
 	uiLogicalHeight int
@@ -2317,7 +2318,18 @@ func (r *runner) drawVersionBadge(screen *Frame, width, height int, deviceScale 
 		return nil
 	}
 	if webVersionBadgeReady() {
-		SetWebVersionBadge(label) // DOM badge; pushed once, label is constant
+		// Append the live render truth — canvas backing size and resolution
+		// scale — so a session that renders softer than its settings claim
+		// (lost settings action, storage that failed to persist, odd dpr)
+		// is diagnosable from a screenshot of the badge alone.
+		backingW := int(float64(width)*deviceScale + 0.5)
+		backingH := int(float64(height)*deviceScale + 0.5)
+		label = fmt.Sprintf("%s · %dx%d · %d%%", label, backingW, backingH, int(gogpu.BrowserResolutionScale()*100+0.5))
+		if label == r.badgeLabel {
+			return nil
+		}
+		r.badgeLabel = label
+		SetWebVersionBadge(label)
 		return nil
 	}
 	provider := r.app.GPUContextProvider()

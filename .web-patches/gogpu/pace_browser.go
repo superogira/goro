@@ -95,3 +95,9 @@ func paceBrowserFrame() {
 func SetBrowserResolutionScale(scale float64) {
 	platform.SetResolutionScale(scale)
 }
+
+// BrowserResolutionScale returns the current canvas backing-store scale
+// (1 when unset). Lets callers report the effective render resolution.
+func BrowserResolutionScale() float64 {
+	return platform.ResolutionScale()
+}

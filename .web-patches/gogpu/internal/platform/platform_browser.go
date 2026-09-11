@@ -37,6 +37,12 @@ func currentResolutionScale() float64 {
 	return scale
 }
 
+// ResolutionScale exposes the current canvas backing-store scale so UI can
+// report the effective render resolution next to the canvas size.
+func ResolutionScale() float64 {
+	return currentResolutionScale()
+}
+
 // browserPlatform implements PlatformManager for browser/WASM.
 // The browser manages its own event loop — we integrate via addEventListener
 // callbacks and requestAnimationFrame for rendering.

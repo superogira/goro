@@ -9,3 +9,7 @@ func SetBrowserVSync(enabled bool) {}
 // SetBrowserResolutionScale only affects the browser canvas; native
 // surfaces follow the OS window size.
 func SetBrowserResolutionScale(scale float64) {}
+
+// BrowserResolutionScale has no native equivalent; native windows render at
+// the OS surface size, reported as full scale.
+func BrowserResolutionScale() float64 { return 1 }

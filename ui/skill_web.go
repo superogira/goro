@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,15 @@ type skillWebTab struct {
 	Icon  string // tab number as text, kept for markup symmetry
 }
 
+// skillWebReq is one transitive prerequisite of a skill: the required
+// skill and the level it must reach. The page highlights these cells and
+// badges the level when the owning skill is hovered.
+type skillWebReq struct {
+	ID    uint16
+	Level int
+	Name  string
+}
+
 type skillWebRow struct {
 	ID          uint16
 	Name        string
@@ -32,6 +42,7 @@ type skillWebRow struct {
 	Selectable  bool
 	Learned     bool
 	Tip         []string
+	Req         []skillWebReq
 }
 
 type skillWebCell struct {
@@ -44,6 +55,7 @@ type skillWebCell struct {
 	Selectable bool
 	Learned    bool
 	Tip        []string
+	Req        []skillWebReq
 }
 
 type skillWebState struct {
@@ -90,6 +102,7 @@ func (w *SkillWindow) buildSkillWebState(ctx Context) skillWebState {
 
 func (w *SkillWindow) buildSkillWebRows(ctx Context) []skillWebRow {
 	skills := w.activeSkills()
+	job := selectedJob(ctx.Session)
 	rows := make([]skillWebRow, 0, len(skills))
 	for _, skill := range skills {
 		display := w.skillWithPending(skill)
@@ -107,7 +120,8 @@ func (w *SkillWindow) buildSkillWebRows(ctx Context) []skillWebRow {
 			Pending:    w.pendingFor(skill.ID),
 			Selectable: isSelectable,
 			Learned:    display.Level > 0,
-			Tip:        skillWebTipLines(ctx, skill),
+			Tip:        skillWebTipWithReq(ctx, skill, skillWebRequirements(ctx, job, skill.ID)),
+			Req:        skillWebRequirements(ctx, job, skill.ID),
 		})
 	}
 	return rows
@@ -115,7 +129,8 @@ func (w *SkillWindow) buildSkillWebRows(ctx Context) []skillWebRow {
 
 func (w *SkillWindow) buildSkillWebCells(ctx Context) []skillWebCell {
 	skills := w.gridSkills(ctx)
-	positions := skillGridPositions(ctx.Resources, selectedJob(ctx.Session), w.tab, skills)
+	job := selectedJob(ctx.Session)
+	positions := skillGridPositions(ctx.Resources, job, w.tab, skills)
 	cells := make([]skillWebCell, 0, len(skills))
 	for _, skill := range skills {
 		display := w.skillWithPending(skill)
@@ -130,10 +145,31 @@ func (w *SkillWindow) buildSkillWebCells(ctx Context) []skillWebCell {
 			CanStage:   w.canStageSkill(ctx.Session, skill),
 			Selectable: isSelectable,
 			Learned:    display.Level > 0,
-			Tip:        skillWebTipLines(ctx, skill),
+			Tip:        skillWebTipWithReq(ctx, skill, skillWebRequirements(ctx, job, skill.ID)),
+			Req:        skillWebRequirements(ctx, job, skill.ID),
 		})
 	}
 	return cells
+}
+
+// skillWebRequirements mirrors the canvas grid's hover behaviour: the
+// transitive prerequisite closure (excluding the skill itself), with
+// display names for the tooltip line.
+func skillWebRequirements(ctx Context, job int, skillID uint16) []skillWebReq {
+	levels := skillGridRequirements(job, skillID)
+	reqs := make([]skillWebReq, 0, len(levels))
+	for id, level := range levels {
+		if id == skillID || level <= 0 {
+			continue
+		}
+		reqs = append(reqs, skillWebReq{
+			ID:    id,
+			Level: level,
+			Name:  skillDisplayName(ctx.Resources, session.Skill{ID: id}),
+		})
+	}
+	sort.Slice(reqs, func(i, j int) bool { return reqs[i].ID < reqs[j].ID })
+	return reqs
 }
 
 func skillLevelText(display session.Skill, selected int, selectable bool) string {
@@ -145,4 +181,18 @@ func skillLevelText(display session.Skill, selected int, selectable bool) string
 
 func skillWebTipLines(ctx Context, skill session.Skill) []string {
 	return strings.Split(skillTooltipText(ctx, skill), "\n")
+}
+
+// skillWebTipWithReq appends the prerequisite summary to a skill's tooltip
+// so the hovered skill states what it needs, complementing the highlight.
+func skillWebTipWithReq(ctx Context, skill session.Skill, reqs []skillWebReq) []string {
+	lines := skillWebTipLines(ctx, skill)
+	if len(reqs) == 0 {
+		return lines
+	}
+	parts := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		parts = append(parts, fmt.Sprintf("%s Lv.%d", req.Name, req.Level))
+	}
+	return append(lines, "Requires: "+strings.Join(parts, ", "))
 }

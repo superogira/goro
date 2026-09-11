@@ -59,6 +59,7 @@ func (w *SkillWindow) webSync(ctx Context) {
 		entry.Set("selectable", row.Selectable)
 		entry.Set("learned", row.Learned)
 		entry.Set("tip", tipArray(row.Tip))
+		entry.Set("req", reqArray(row.Req))
 		rows.SetIndex(i, entry)
 	}
 	obj.Set("rows", rows)
@@ -74,10 +75,24 @@ func (w *SkillWindow) webSync(ctx Context) {
 		entry.Set("selectable", cell.Selectable)
 		entry.Set("learned", cell.Learned)
 		entry.Set("tip", tipArray(cell.Tip))
+		entry.Set("req", reqArray(cell.Req))
 		cells.SetIndex(i, entry)
 	}
 	obj.Set("cells", cells)
 	fn.Invoke(obj)
+}
+
+// reqArray marshals the prerequisite list for the page's hover highlight.
+func reqArray(reqs []skillWebReq) js.Value {
+	arr := js.Global().Get("Array").New(len(reqs))
+	for i, req := range reqs {
+		entry := js.Global().Get("Object").New()
+		entry.Set("id", req.ID)
+		entry.Set("level", req.Level)
+		entry.Set("name", req.Name)
+		arr.SetIndex(i, entry)
+	}
+	return arr
 }
 
 // webSkillIcon resolves the shared "skill:<id>" cache key to a data URL.

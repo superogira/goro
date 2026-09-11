@@ -12,6 +12,7 @@ import (
 
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/session"
 	"github.com/kivutar/goro/world"
@@ -166,8 +167,43 @@ func (s *roCursorState) frameAt(action int, info cursorActionInfo, start, now ti
 	}
 	actionDef := s.view.act.Actions[action]
 	delay := float64(actionDef.DelayMS) * info.delayMult
-	motion := spriteMotionIndexWithDelay(actionDef, start, now, true, delay)
+	motion := spriteMotionIndexWithOptions(actionDef, start, now, true, delay, cursorMotionLoop(actionDef), 0)
 	return cursorFrameBillboard(s.view, action, motion, info.drawX, info.drawY)
+}
+
+// cursorMotionLoop returns how many motions form the action's real
+// animation cycle: the motions up to the first primary-layer repeat.
+// Cursor act files pad actions with repeated copies of one frame and then
+// append unrelated small-arrow variants (action 0 motions 6-10 are
+// almost-black mini arrows); cycling the full list morphs the default
+// cursor through them. Capping at the first repeat leaves genuine cycles
+// intact (warp spins 11→12→13→14, pick walks 20→21→22) while padded
+// actions settle on their single authored frame.
+func cursorMotionLoop(action res.ACTAction) int {
+	if len(action.Animations) == 0 {
+		return 1
+	}
+	seen := make(map[int]struct{}, len(action.Animations))
+	for i, anim := range action.Animations {
+		key := cursorMotionPrimaryLayer(anim)
+		if key < 0 {
+			key = -(i + 1) // layerless motions count as distinct
+		}
+		if _, dup := seen[key]; dup {
+			return maxInt(i, 1)
+		}
+		seen[key] = struct{}{}
+	}
+	return len(action.Animations)
+}
+
+func cursorMotionPrimaryLayer(anim res.ACTAnimation) int {
+	for _, layer := range anim.Layers {
+		if layer.Index >= 0 {
+			return int(layer.Index)
+		}
+	}
+	return -1
 }
 
 func (m *WorldMode) cursorDesiredAction(ctx client.Context, projection sceneProjection, now time.Time) int {

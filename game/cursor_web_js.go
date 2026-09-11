@@ -5,6 +5,7 @@ package game
 import (
 	"bytes"
 	"encoding/base64"
+	"image"
 	"image/png"
 	"sync"
 	"syscall/js"
@@ -58,8 +59,18 @@ func cursorWebImageURL(img *render.Image) string {
 	if img == nil {
 		return ""
 	}
+	src := img.RGBA()
+	if src == nil {
+		return ""
+	}
+	// The frame buffers hold straight alpha, but *image.RGBA is
+	// premultiplied by convention — png.Encode would un-premultiply the
+	// bytes and crush colors (the cursor's white body came out near-black,
+	// its blues shifted). A byte-identical NRGBA copy encodes as-is.
+	n := image.NewNRGBA(src.Bounds())
+	copy(n.Pix, src.Pix)
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img.RGBA()); err != nil {
+	if err := png.Encode(&buf, n); err != nil {
 		return ""
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())

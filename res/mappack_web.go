@@ -8,12 +8,15 @@ import (
 )
 
 const (
-	webMapPackDir   = "data/map_pack/"
+	// webMapPackDir is relative to the page: map_pack sits beside data/,
+	// not inside it — keeping generated packs out of the loose tree the
+	// boot-pack builder walks.
+	webMapPackDir   = "map_pack/"
 	webMapPackKeep  = 3
 	webMapPackLimit = 60 * time.Second
 )
 
-// EnsureWebMapPack loads data/map_pack/<mapBase>.grf before the map's
+// EnsureWebMapPack loads map_pack/<mapBase>.grf before the map's
 // files are read, so every resource the map references resolves from one
 // download instead of per-file HTTP round trips. A missing, failed, or
 // partial pack is not an error: reads fall through to the loose files

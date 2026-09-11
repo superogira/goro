@@ -6,7 +6,7 @@
 // 32-frame water animation — stages those files under their data/ paths,
 // and packs them with res.PackGRF into <out>/<name>.grf.
 //
-// At runtime the client downloads data/map_pack/<name>.grf before reading
+// At runtime the client downloads map_pack/<name>.grf before reading
 // the map (res.Manager.EnsureWebMapPack); anything the pack misses falls
 // back to loose-file streaming, so partial or absent packs are harmless.
 //
@@ -41,7 +41,7 @@ type mapPackResult struct {
 
 func main() {
 	dataDir := flag.String("data", "data", "source data directory holding the loose files")
-	outDir := flag.String("out", "", "output directory (default <data>/map_pack)")
+	outDir := flag.String("out", "", "output directory (default map_pack/ beside -data)")
 	mapsFlag := flag.String("maps", "", "comma-separated map names (default: every .gat in -data)")
 	workers := flag.Int("workers", runtime.NumCPU(), "parallel pack builders")
 	force := flag.Bool("force", false, "rebuild packs that already exist")
@@ -50,7 +50,7 @@ func main() {
 
 	out := *outDir
 	if out == "" {
-		out = filepath.Join(*dataDir, "map_pack")
+		out = filepath.Join(filepath.Dir(filepath.Clean(*dataDir)), "map_pack")
 	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		fatal(err)

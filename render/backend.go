@@ -770,6 +770,9 @@ func (r *runner) applyRuntimeSettings() {
 		r.fpsDisplay = 0
 		r.frameMSDisplay = 0
 		r.fpsText = ""
+		if webFPSReady() {
+			SetWebFPS("")
+		}
 	}
 	if vsync := provider.RuntimeVSync(); vsync != r.vsync {
 		r.vsync = vsync
@@ -2231,11 +2234,17 @@ func (r *runner) updateFPSCounter(now time.Time) {
 	r.fpsFrames = 0
 	r.fpsStarted = now
 	r.fpsText = fmt.Sprintf("FPS %.1f  %.2f ms", r.fpsDisplay, r.frameMSDisplay)
+	if webFPSReady() {
+		SetWebFPS(r.fpsText)
+	}
 }
 
 func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {
 	if !r.renderCfg.FPS || r.fpsText == "" || screen == nil {
 		return nil
+	}
+	if webFPSReady() {
+		return nil // the DOM meter replaces the canvas overlay on web
 	}
 	provider := r.app.GPUContextProvider()
 	if provider == nil {

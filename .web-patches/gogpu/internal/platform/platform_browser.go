@@ -761,8 +761,19 @@ func (w *browserWindow) PhysicalSize() (width, height int) {
 	return w.canvas.Get("width").Int(), w.canvas.Get("height").Int()
 }
 
-// ScaleFactor returns window.devicePixelRatio (e.g. 2.0 on Retina displays).
+// ScaleFactor returns window.devicePixelRatio (e.g. 2.0 on Retina
+// displays), multiplied by the resolution scale when one is set. Context
+// logical sizes derive from backing / ScaleFactor, so folding the scale in
+// here keeps the game's logical size at CSS pixels — mouse coordinates and
+// UI layout stay 1:1 with the page — while the backing store (and GPU
+// fill cost) shrink by the factor.
 func (w *browserWindow) ScaleFactor() float64 {
+	return rawDevicePixelRatio() * currentResolutionScale()
+}
+
+// rawDevicePixelRatio reads window.devicePixelRatio without the
+// resolution scale folded in.
+func rawDevicePixelRatio() float64 {
 	dpr := js.Global().Get("devicePixelRatio")
 	if dpr.IsUndefined() || dpr.IsNull() {
 		return 1.0
@@ -771,8 +782,11 @@ func (w *browserWindow) ScaleFactor() float64 {
 }
 
 // PrepareFrame updates canvas backing store to match devicePixelRatio.
+// Note the raw devicePixelRatio read, not ScaleFactor(): the latter folds
+// the resolution scale in for logical-size derivation, which would apply
+// the scale twice here.
 func (w *browserWindow) PrepareFrame() PrepareFrameResult {
-	dpr := w.ScaleFactor()
+	dpr := rawDevicePixelRatio()
 	rs := currentResolutionScale()
 	clientW := w.canvas.Get("clientWidth").Int()
 	clientH := w.canvas.Get("clientHeight").Int()

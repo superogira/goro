@@ -2316,6 +2316,10 @@ func (r *runner) drawVersionBadge(screen *Frame, width, height int, deviceScale 
 	if label == "" {
 		return nil
 	}
+	if webVersionBadgeReady() {
+		SetWebVersionBadge(label) // DOM badge; pushed once, label is constant
+		return nil
+	}
 	provider := r.app.GPUContextProvider()
 	if provider == nil {
 		return nil

@@ -16,9 +16,9 @@ import (
 	"github.com/gogpu/gg"
 	"github.com/gogpu/gg/integration/ggcanvas"
 	"github.com/gogpu/gogpu"
-	gputypes "github.com/gogpu/gputypes"
 	gogputypes "github.com/gogpu/gogpu/gpu/types"
 	"github.com/gogpu/gpucontext"
+	gputypes "github.com/gogpu/gputypes"
 	uiapp "github.com/gogpu/ui/app"
 	"github.com/gogpu/ui/geometry"
 	uirender "github.com/gogpu/ui/render"
@@ -237,51 +237,52 @@ type uiProfileStats struct {
 }
 
 type runner struct {
-	app             *gogpu.App
-	ui              *uiapp.App
-	uiWindow        *uiWindowProvider
-	uiImage         *Image
-	uiOverlayCanvas *ggcanvas.Canvas
-	uiTextCache     map[string]cachedOverlayImage
-	uiBubbleCache   map[string]cachedOverlayImage
-	game            Game
-	screen          *Frame
-	gpu             *gpuRenderer
-	width           int
-	height          int
-	duration        time.Duration
-	warmup          time.Duration
-	renderCfg       config.RenderConfig
-	started         time.Time
-	measureStarted  time.Time
-	lastLog         time.Time
-	lastFrame       int64
-	frames          int64
-	measuredFrames  int64
-	fpsStarted      time.Time
-	fpsFrames       int64
-	fpsDisplay      float64
-	frameMSDisplay  float64
-	fpsText         string
-	uiOverlayScale  float64
-	quit            func()
-	cpuProfile      *os.File
-	fullscreen      bool
-	vsync           bool
-	fps             bool
-	vsyncWarned     bool
-	uiDrawnOnce     bool
-	uiScale         float64
-	badgeLabel      string
-	uiCanvas        *ggcanvas.Canvas
-	uiLogicalWidth  int
-	uiLogicalHeight int
-	uiAsync         *asyncUIRasterizer
-	uiAsyncBusy     bool
-	uiAsyncDraining bool
-	uiPendingLists  []uiDrawList
-	uiGeneration    uint64
-	uiDrag          uiDragLayer
+	app                  *gogpu.App
+	ui                   *uiapp.App
+	uiWindow             *uiWindowProvider
+	uiImage              *Image
+	uiOverlayCanvas      *ggcanvas.Canvas
+	uiTextCache          map[string]cachedOverlayImage
+	uiBubbleCache        map[string]cachedOverlayImage
+	game                 Game
+	screen               *Frame
+	gpu                  *gpuRenderer
+	width                int
+	height               int
+	duration             time.Duration
+	warmup               time.Duration
+	renderCfg            config.RenderConfig
+	started              time.Time
+	measureStarted       time.Time
+	lastLog              time.Time
+	lastFrame            int64
+	frames               int64
+	measuredFrames       int64
+	fpsStarted           time.Time
+	fpsFrames            int64
+	fpsDisplay           float64
+	frameMSDisplay       float64
+	fpsText              string
+	quit                 func()
+	cpuProfile           *os.File
+	fullscreen           bool
+	vsync                bool
+	fps                  bool
+	vsyncWarned          bool
+	uiDrawnOnce          bool
+	uiScale              float64
+	badgeLabel           string
+	uiOverlayScale       float64 // cache-invalidation trigger; see drawUIOverlay
+	uiOverlayCanvasScale float64 // scale the overlay canvas was actually built with
+	uiCanvas             *ggcanvas.Canvas
+	uiLogicalWidth       int
+	uiLogicalHeight      int
+	uiAsync              *asyncUIRasterizer
+	uiAsyncBusy          bool
+	uiAsyncDraining      bool
+	uiPendingLists       []uiDrawList
+	uiGeneration         uint64
+	uiDrag               uiDragLayer
 
 	lastUpdateDuration  time.Duration
 	lastGameUpdateDur   time.Duration
@@ -1328,12 +1329,12 @@ func (r *runner) drawUIPublishedImage(screen *Frame, width, height int) error {
 	if r.uiDrawnOnce && r.uiImage != nil {
 		var opts DrawImageOptions
 		if b := r.uiImage.Bounds(); b.Dx() > 0 && b.Dy() > 0 {
-		opts.GeoM.Scale(float64(width)/float64(b.Dx()), float64(height)/float64(b.Dy()))
+			opts.GeoM.Scale(float64(width)/float64(b.Dx()), float64(height)/float64(b.Dy()))
+		}
+		// UI raster is text — linear for fractional device scales (see drawCachedOverlayImage).
+		opts.Filter = FilterLinear
+		screen.DrawImage(r.uiImage, &opts)
 	}
-	// UI raster is text — linear for fractional device scales (see drawCachedOverlayImage).
-	opts.Filter = FilterLinear
-	screen.DrawImage(r.uiImage, &opts)
-}
 	r.drawUIDragLayer(screen)
 	return nil
 }
@@ -1680,6 +1681,11 @@ func (r *runner) drawUIOverlay(screen *Frame, deviceScale float64) error {
 		deviceScale = 1
 	}
 	if r.uiOverlayScale != deviceScale {
+		// Note: this field is only the cache-invalidation trigger. The
+		// overlay canvas's actual scale is tracked separately — see
+		// ensureOverlayCanvas — because updating it here first would make
+		// the canvas's own scale-change check compare equal and skip the
+		// retarget, leaving it rendering at the previous scale forever.
 		r.uiOverlayScale = deviceScale
 		r.uiTextCache = nil
 		r.uiBubbleCache = nil
@@ -2132,6 +2138,25 @@ func (r *runner) ensureOverlayCanvas(provider gpucontext.DeviceProvider, width, 
 	if height < 1 {
 		height = 1
 	}
+	// uiOverlayCanvasScale tracks the scale the scratch canvas was actually
+	// built with — distinct from uiOverlayScale, which drawUIOverlay updates
+	// before rendering so caches invalidate. Comparing against the canvas's
+	// own scale (not uiOverlayScale) is what makes the retarget below fire;
+	// before this field existed the retarget was dead code and a canvas that
+	// first drew at one scale kept rendering labels at that scale forever.
+	if r.uiOverlayCanvas != nil && r.uiOverlayCanvasScale != deviceScale {
+		// Drop and rebuild. Text rasterized at the old scale bakes that
+		// scale into state carried by the canvas's gg context, so a canvas
+		// that drew labels at 0.5 keeps rendering them half-res at 1.0 —
+		// labels stay soft after a resolution change for the rest of the
+		// session (reproduced: hover a label at 50%, switch to 100%). The
+		// scratch canvas is synchronous (unlike the async uiCanvas), so
+		// dropping it here is safe.
+		r.uiOverlayCanvas.Close()
+		r.uiOverlayCanvas = nil
+		r.uiTextCache = nil
+		r.uiBubbleCache = nil
+	}
 	if r.uiOverlayCanvas == nil {
 		canvas, err := ggcanvas.NewWithScale(provider, width, height, deviceScale)
 		if err != nil {
@@ -2139,6 +2164,7 @@ func (r *runner) ensureOverlayCanvas(provider gpucontext.DeviceProvider, width, 
 		}
 		r.uiOverlayCanvas = canvas
 		r.uiOverlayScale = deviceScale
+		r.uiOverlayCanvasScale = deviceScale
 		return canvas, nil
 	}
 	canvasW, canvasH := r.uiOverlayCanvas.Size()
@@ -2146,12 +2172,6 @@ func (r *runner) ensureOverlayCanvas(provider gpucontext.DeviceProvider, width, 
 		if err := r.uiOverlayCanvas.Resize(width, height); err != nil {
 			return nil, fmt.Errorf("resize ui overlay canvas: %w", err)
 		}
-	}
-	if r.uiOverlayScale != deviceScale {
-		r.uiOverlayCanvas.SetDeviceScale(deviceScale)
-		r.uiOverlayScale = deviceScale
-		r.uiTextCache = nil
-		r.uiBubbleCache = nil
 	}
 	return r.uiOverlayCanvas, nil
 }

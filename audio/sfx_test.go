@@ -79,3 +79,46 @@ func testWAV(channels, bitsPerSample uint16, sampleRate uint32, data []byte) []b
 	}
 	return wav
 }
+
+func TestSFXPCMCacheLRU(t *testing.T) {
+	b := &BGM{}
+	pcm6MB := make([]byte, 6<<20)
+	// Fill past the 12 MiB limit: A, B fit; C evicts A (least recently used).
+	b.storeSFXPCM("a", "src/a", pcm6MB)
+	b.storeSFXPCM("b", "src/b", pcm6MB)
+	if _, _, ok := b.cachedSFXPCM("a"); !ok {
+		t.Fatal("entry a missing before eviction pressure")
+	}
+	// Touching "a" made "b" the least recently used entry, so storing "c"
+	// past the limit evicts "b" — that is the ambient-loop protection this
+	// cache exists for: recently played sounds stay hot.
+	b.storeSFXPCM("c", "src/c", pcm6MB)
+	if _, _, ok := b.cachedSFXPCM("b"); ok {
+		t.Fatal("entry b should have been evicted (least recently used)")
+	}
+	if _, _, ok := b.cachedSFXPCM("a"); !ok {
+		t.Fatal("entry a should survive: it was used more recently than b")
+	}
+	if _, _, ok := b.cachedSFXPCM("c"); !ok {
+		t.Fatal("entry c should survive: it was just stored")
+	}
+	b.sfxCacheMu.Lock()
+	bytes := b.sfxCacheBytes
+	b.sfxCacheMu.Unlock()
+	if bytes != 12<<20 {
+		t.Fatalf("cache byte accounting: got %d want %d", bytes, 12<<20)
+	}
+	// Same-key store replaces without double counting.
+	small := make([]byte, 1024)
+	b.storeSFXPCM("c", "src/c2", small)
+	b.sfxCacheMu.Lock()
+	bytes = b.sfxCacheBytes
+	src := b.sfxCache["c"].source
+	b.sfxCacheMu.Unlock()
+	if bytes != (6<<20)+1024 {
+		t.Fatalf("replace should rebook bytes: got %d", bytes)
+	}
+	if src != "src/c2" {
+		t.Fatalf("replace should update resolved source: got %s", src)
+	}
+}

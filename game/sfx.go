@@ -106,6 +106,23 @@ func (m *WorldMode) playScheduledSound(ctx client.Context, sound scheduledSound,
 	m.playSFXFirstVolume(ctx, volume, sound.paths...)
 }
 
+// prefetchMapSoundFiles warms the resource cache for the RSW's looping
+// ambient sounds (birds, insects, wind) when the map loads. They retrigger
+// every cycle for as long as the player stands nearby; without prefetch the
+// first trigger pays a synchronous fetch mid-frame on top of the decode.
+func prefetchMapSoundFiles(manager *res.Manager, rsw *res.RSW) {
+	if manager == nil || rsw == nil {
+		return
+	}
+	for _, sound := range rsw.Sounds {
+		file := strings.TrimSpace(sound.File)
+		if file == "" || sound.Volume <= 0 {
+			continue
+		}
+		manager.Prefetch(gameaudio.SFXPathCandidates(file))
+	}
+}
+
 func (m *WorldMode) processMapSounds(ctx client.Context, now time.Time) {
 	if ctx.World == nil || ctx.World.RSW == nil || ctx.World.GND == nil || len(ctx.World.RSW.Sounds) == 0 {
 		return
@@ -198,8 +215,7 @@ func actorWithinSoundRange(ctx client.Context, actor worldstate.Actor, now time.
 	return math.Hypot(actorX-playerX, actorY-playerY) <= soundRangeCells
 }
 
-func (m *WorldMode) playSFXFirstVolume(ctx client.Context, volume float64, paths ...string) {
-	if ctx.Audio == nil {
+func (m *WorldMode) playSFXFirstVolume(ctx client.Context, volume float64, paths ...string) {	if ctx.Audio == nil {
 		return
 	}
 	var lastErr error

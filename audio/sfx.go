@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ebitengine/oto/v3"
 	"github.com/kivutar/goro/res"
 )
 
@@ -36,6 +37,62 @@ func (b *BGM) PlaySFX(path string) (string, error) {
 	return b.PlaySFXVolume(path, 1)
 }
 
+// sfxCacheLimit caps the decoded-PCM cache. Ambient wavs run a few hundred
+// kilobytes each; 12 MiB keeps a map's worth of loops hot without growing
+// unbounded across every sound the session ever played.
+const sfxCacheLimit = 12 << 20
+
+type sfxCacheEntry struct {
+	pcm    []byte
+	source string
+	used   int64
+}
+
+// cachedSFXPCM returns the context-rate PCM for a previously decoded source
+// path, refreshing its LRU stamp.
+func (b *BGM) cachedSFXPCM(path string) ([]byte, string, bool) {
+	b.sfxCacheMu.Lock()
+	defer b.sfxCacheMu.Unlock()
+	entry, ok := b.sfxCache[path]
+	if !ok {
+		return nil, "", false
+	}
+	b.sfxCacheTick++
+	entry.used = b.sfxCacheTick
+	return entry.pcm, entry.source, true
+}
+
+// storeSFXPCM caches decoded PCM, evicting least-recently-used entries when
+// the cache would exceed sfxCacheLimit.
+func (b *BGM) storeSFXPCM(path, source string, pcm []byte) {
+	b.sfxCacheMu.Lock()
+	defer b.sfxCacheMu.Unlock()
+	if b.sfxCache == nil {
+		b.sfxCache = make(map[string]*sfxCacheEntry)
+	}
+	if old, exists := b.sfxCache[path]; exists {
+		b.sfxCacheBytes -= len(old.pcm)
+	}
+	b.sfxCacheBytes += len(pcm)
+	b.sfxCacheTick++
+	b.sfxCache[path] = &sfxCacheEntry{pcm: pcm, source: source, used: b.sfxCacheTick}
+	for b.sfxCacheBytes > sfxCacheLimit {
+		var oldestKey string
+		var oldest int64
+		first := true
+		for key, entry := range b.sfxCache {
+			if first || entry.used < oldest {
+				oldestKey, oldest, first = key, entry.used, false
+			}
+		}
+		if first {
+			break
+		}
+		b.sfxCacheBytes -= len(b.sfxCache[oldestKey].pcm)
+		delete(b.sfxCache, oldestKey)
+	}
+}
+
 func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	if b == nil || b.disabled || b.sfxVolume <= 0 || volume <= 0 {
 		return "", nil
@@ -44,13 +101,21 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	if path == "" {
 		return "", nil
 	}
+	context := b.ensureContext(defaultSampleRate)
+	if context == nil {
+		return "", fmt.Errorf("audio context unavailable")
+	}
+	// Map ambient sounds retrigger every RSW cycle; re-reading and re-decoding
+	// the wav on the game goroutine each time is a visible stutter on slower
+	// devices. The decoded PCM is cached per source, so steady-state plays
+	// cost a map lookup and a player creation.
+	if pcm, source, ok := b.cachedSFXPCM(path); ok {
+		b.startSFXPlayer(context, pcm, volume)
+		return source, nil
+	}
 	data, source, err := readSFXFile(b.resources, path)
 	if err != nil {
 		return "", err
-	}
-	context := b.ensureContext(defaultSampleRate)
-	if context == nil {
-		return source, fmt.Errorf("audio context unavailable")
 	}
 	pcm, sourceRate, err := decodeWAVToPCM16Stereo(data)
 	if err != nil {
@@ -62,12 +127,17 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 			return source, fmt.Errorf("resample sfx %s: %w", source, err)
 		}
 	}
+	b.storeSFXPCM(path, source, pcm)
+	b.startSFXPlayer(context, pcm, volume)
+	return source, nil
+}
+
+func (b *BGM) startSFXPlayer(context *oto.Context, pcm []byte, volume float64) {
 	player := context.NewPlayer(bytes.NewReader(pcm))
 	player.SetVolume(b.sfxVolume * clampVolume(volume))
 	b.trimSFXPlayers()
 	b.sfxPlayers = append(b.sfxPlayers, player)
 	player.Play()
-	return source, nil
 }
 
 func (b *BGM) trimSFXPlayers() {

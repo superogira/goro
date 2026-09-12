@@ -10,6 +10,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ebitengine/oto/v3"
 	mp3codec "github.com/godexture/codec-mp3"
@@ -37,6 +38,14 @@ type BGM struct {
 	sfxVolume  float64
 	sfxPlayers []*oto.Player
 	disabled   bool
+
+	// sfxCache holds decoded, context-rate PCM per source path so repeated
+	// plays (map ambient sounds retrigger every RSW cycle) skip the
+	// read+decode+resample work on the game goroutine. See PlaySFXVolume.
+	sfxCacheMu    sync.Mutex
+	sfxCache      map[string]*sfxCacheEntry
+	sfxCacheBytes int
+	sfxCacheTick  int64
 }
 
 func NewBGM(resources *res.Manager, enabled bool, bgmVolume, sfxVolume float64, disabled bool) *BGM {

@@ -113,3 +113,36 @@ func TestOverlayLabelScaleSwitchRegression(t *testing.T) {
 		t.Errorf("label at 1.0 reused the 0.5 raster: image height %d not > %d", c100.image.Bounds().Dy(), c50.image.Bounds().Dy())
 	}
 }
+
+func BenchmarkOverlayLabelCacheHit(b *testing.B) {
+	r := &runner{}
+	label := UIActorLabelCommand{
+		Labels:     []string{"tester (Swordman)"},
+		Size:       12,
+		Foreground: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+	}
+	if _, err := r.cachedActorLabelImage(stubProvider{}, label, 1.0); err != nil {
+		b.Skip(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := r.cachedActorLabelImage(stubProvider{}, label, 1.0); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkOverlayLabelRaster(b *testing.B) {
+	label := UIActorLabelCommand{
+		Labels:     []string{"tester (Swordman)"},
+		Size:       12,
+		Foreground: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := &runner{}
+		if _, err := r.cachedActorLabelImage(stubProvider{}, label, 1.0); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

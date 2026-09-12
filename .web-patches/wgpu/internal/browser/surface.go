@@ -85,6 +85,15 @@ func NewSurface(gpu js.Value, canvas js.Value) (*Surface, error) {
 //
 // Matches Rust wgpu SurfaceInterface::configure for WebSurface.
 func (s *Surface) Configure(config js.Value, width, height uint32, format string) {
+	// A reconfigure means the canvas backing store changed size (resolution
+	// scale, window resize, DPI move). Some WebGPU implementations keep
+	// presenting at the previously configured size after a bare resize —
+	// the frame then gets stretched to the new backing store and every
+	// pixel, text included, looks soft. Unconfiguring first forces the
+	// context to rebuild its surface at the new size from scratch.
+	if s.configured {
+		s.Unconfigure()
+	}
 	// Set canvas dimensions (Rust wgpu does this in configure too).
 	s.canvas.Set("width", width)
 	s.canvas.Set("height", height)

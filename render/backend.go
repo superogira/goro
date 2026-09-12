@@ -1328,11 +1328,12 @@ func (r *runner) drawUIPublishedImage(screen *Frame, width, height int) error {
 	if r.uiDrawnOnce && r.uiImage != nil {
 		var opts DrawImageOptions
 		if b := r.uiImage.Bounds(); b.Dx() > 0 && b.Dy() > 0 {
-			opts.GeoM.Scale(float64(width)/float64(b.Dx()), float64(height)/float64(b.Dy()))
-		}
-		opts.Filter = FilterNearest
-		screen.DrawImage(r.uiImage, &opts)
+		opts.GeoM.Scale(float64(width)/float64(b.Dx()), float64(height)/float64(b.Dy()))
 	}
+	// UI raster is text — linear for fractional device scales (see drawCachedOverlayImage).
+	opts.Filter = FilterLinear
+	screen.DrawImage(r.uiImage, &opts)
+}
 	r.drawUIDragLayer(screen)
 	return nil
 }
@@ -1581,7 +1582,8 @@ func (r *runner) drawUIDragLayer(screen *Frame) {
 	var opts DrawImageOptions
 	opts.GeoM.Scale(float64(drawRect.Width())/float64(bounds.Dx()), float64(drawRect.Height())/float64(bounds.Dy()))
 	opts.GeoM.Translate(float64(drawRect.Min.X), float64(drawRect.Min.Y))
-	opts.Filter = FilterNearest
+	// UI raster is text — linear for fractional device scales (see drawCachedOverlayImage).
+	opts.Filter = FilterLinear
 	screen.DrawImage(r.uiDrag.image, &opts)
 }
 
@@ -1762,7 +1764,12 @@ func drawCachedOverlayImage(screen *Frame, cached cachedOverlayImage, x, y float
 		opts.GeoM.Scale(float64(cached.width)/float64(b.Dx()), float64(cached.height)/float64(b.Dy()))
 	}
 	opts.GeoM.Translate(x, y)
-	opts.Filter = FilterNearest
+	// These rasters are text, not pixel art. On fractional device scales
+	// (Windows 120% = 1.2) the device-pixel destination lands between texel
+	// centers; nearest then picks the wrong texel per pixel and glyph edges
+	// break up unevenly, while linear blends them — identical to nearest on
+	// integer scales where samples land on texel centers anyway.
+	opts.Filter = FilterLinear
 	screen.DrawImage(cached.image, &opts)
 }
 
@@ -1787,7 +1794,8 @@ func drawActorLabelOverlay(screen *Frame, cached cachedOverlayImage, label UIAct
 		textOpts.GeoM.Scale(float64(cached.width)/float64(bounds.Dx()), float64(cached.height)/float64(bounds.Dy()))
 	}
 	textOpts.GeoM.Translate(blockLeft+float64(emblemWidth), blockTop)
-	textOpts.Filter = FilterNearest
+	// Text raster — linear for fractional device scales (see drawCachedOverlayImage).
+	textOpts.Filter = FilterLinear
 	screen.DrawImage(cached.image, &textOpts)
 
 	if label.Emblem == nil {

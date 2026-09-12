@@ -26,6 +26,7 @@ type Session struct {
 	PendingGuildName     string
 	SnapTargets          bool
 	SnapItems            bool
+	SnapRadius           float64
 	AttackRange          int
 	CharServers          []CharServer
 	CharServerIndex      int

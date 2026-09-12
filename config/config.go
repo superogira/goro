@@ -108,6 +108,7 @@ type GameplayConfig struct {
 	LessEffects bool
 	SnapTargets bool
 	SnapItems   bool
+	SnapRadius  float64
 	ForceUserAI bool
 }
 
@@ -151,6 +152,7 @@ type UserSettings struct {
 	LessEffects bool
 	SnapTargets bool
 	SnapItems   bool
+	SnapRadius  float64
 }
 
 func UserConfigPath() (string, error) {
@@ -220,6 +222,7 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 			"less_effects": formatINIValueBool(settings.LessEffects),
 			"snap":         formatINIValueBool(settings.SnapTargets),
 			"itemsnap":     formatINIValueBool(settings.SnapItems),
+			"snap_radius":  formatINIValueFloat(settings.SnapRadius),
 		},
 	}
 	// Native builds write the user goro.ini; web builds store the same ini
@@ -258,7 +261,8 @@ func defaultConfig() Config {
 			Enabled: true,
 		},
 		Gameplay: GameplayConfig{
-			NoCtrl: true,
+			NoCtrl:    true,
+			SnapRadius: 1,
 		},
 		Log: glog.LogConfig{
 			Level: "info",
@@ -343,6 +347,7 @@ func applyCLI(cfg *Config, args []string) error {
 	fs.BoolVar(&cfg.Gameplay.SnapTargets, "snap", cfg.Gameplay.SnapTargets, "magnetize attack and enemy skill cursors to targets")
 	fs.BoolVar(&cfg.Gameplay.SnapItems, "itemsnap", cfg.Gameplay.SnapItems, "magnetize pickup cursor to floor items")
 	fs.BoolVar(&cfg.Gameplay.SnapItems, "item-snap", cfg.Gameplay.SnapItems, "magnetize pickup cursor to floor items")
+	fs.Float64Var(&cfg.Gameplay.SnapRadius, "snap-radius", cfg.Gameplay.SnapRadius, "multiplier enlarging click/touch pick and snap areas for actors and floor items (0.5-3)")
 	fs.BoolVar(&cfg.Gameplay.ForceUserAI, "force-user-ai", cfg.Gameplay.ForceUserAI, "start companion AI in USER_AI/USER_AI_M custom mode")
 	fs.StringVar(&cfg.Script.Path, "script", cfg.Script.Path, "Lua script to run while in game")
 	fs.StringVar(&cfg.Log.Level, "log-level", cfg.Log.Level, "minimum log level: debug, info, warn, error, fatal")
@@ -465,6 +470,8 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Gameplay.SnapTargets)
 	case "gameplay.itemsnap", "gameplay.snapitems", "gameplay.itemsnapping":
 		return setBool(value, &cfg.Gameplay.SnapItems)
+	case "gameplay.snapradius", "gameplay.snap_radius":
+		return setFloat(value, &cfg.Gameplay.SnapRadius)
 	case "gameplay.forceuserai":
 		return setBool(value, &cfg.Gameplay.ForceUserAI)
 	case ".script", "script.path":

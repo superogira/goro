@@ -64,6 +64,7 @@ func New(cfg config.Config) (*Game, error) {
 	g.session.LessEffects = cfg.Gameplay.LessEffects
 	g.session.SnapTargets = cfg.Gameplay.SnapTargets
 	g.session.SnapItems = cfg.Gameplay.SnapItems
+	g.session.SnapRadius = cfg.Gameplay.SnapRadius
 	if cfg.Gameplay.ForceUserAI {
 		g.session.HomunculusCustomAI = true
 		g.session.MercenaryCustomAI = true

@@ -16,11 +16,12 @@ func (m *EscapeMenu) optionWebKey(ctx client.Context) string {
 // change that skips the action handler (boot override, future callers)
 // never re-syncs the picker, leaving it showing a stale percent.
 func (w *SettingsWindow) settingsWebKey(ctx client.Context) string {
-	return fmt.Sprintf("%t|%t|%t|%t|%.2f|%.2f|%.2f|%t|%t|%t|%t|%t",
+	return fmt.Sprintf("%t|%t|%t|%t|%.2f|%.2f|%.2f|%.2f|%t|%t|%t|%t|%t",
 		w.webOpen,
 		settingsRuntimeFullscreen(ctx), settingsRuntimeVSync(ctx), settingsRuntimeFPS(ctx),
 		settingsResolutionScale(ctx),
 		settingsVolumeBGM(ctx), settingsVolumeSFX(ctx),
+		settingsSnapRadius(ctx),
 		settingsNoShift(ctx), settingsNoCtrl(ctx), settingsLessEffects(ctx),
 		settingsSnapTargets(ctx), settingsSnapItems(ctx))
 }

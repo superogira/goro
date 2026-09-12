@@ -256,6 +256,24 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 				w.refresh(ctx)
 			}),
 		),
+
+		primitives.HBox(
+			rotheme.Text("Snap Radius"),
+			primitives.Expanded(
+				rotheme.Slider(
+					slider.Min(0.5),
+					slider.Max(3),
+					slider.Value(float32(settingsSnapRadius(ctx))),
+					slider.OnChange(func(v float32) {
+						if ctx.Session != nil {
+							ctx.Session.SnapRadius = float64(v)
+						}
+						w.saveSettings(ctx)
+						w.refresh(ctx)
+					}),
+				),
+			),
+		).Gap(8),
 	).
 		Padding(14).
 		Gap(8)
@@ -281,6 +299,7 @@ func (w *SettingsWindow) saveSettings(ctx client.Context) {
 		LessEffects:     settingsLessEffects(ctx),
 		SnapTargets:     settingsSnapTargets(ctx),
 		SnapItems:       settingsSnapItems(ctx),
+		SnapRadius:      settingsSnapRadius(ctx),
 	}
 	path, err := config.SaveUserSettings(settings)
 	if err != nil {
@@ -398,4 +417,16 @@ func settingsSnapItems(ctx client.Context) bool {
 		return ctx.Session.SnapItems
 	}
 	return ctx.Config.Gameplay.SnapItems
+}
+
+// settingsSnapRadius returns the live pick/snap area multiplier, defaulting
+// to 1 before the session exists.
+func settingsSnapRadius(ctx client.Context) float64 {
+	if ctx.Session != nil && ctx.Session.SnapRadius > 0 {
+		return ctx.Session.SnapRadius
+	}
+	if v := ctx.Config.Gameplay.SnapRadius; v > 0 {
+		return v
+	}
+	return 1
 }

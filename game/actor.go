@@ -810,7 +810,7 @@ func (m *WorldMode) drawHoveredLocalPlayerNameLabel(screen *render.Frame, ctx cl
 		if !entry.isPlayer {
 			continue
 		}
-		if !pointInActorPickBounds(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), entry.screenX, entry.screenY, entry.scale) {
+		if !pointInActorPickBounds(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), entry.screenX, entry.screenY, entry.scale*inputPickMultiplier(ctx)) {
 			return
 		}
 		labelY := actorNameLabelY(entry.screenY, entry.scale)

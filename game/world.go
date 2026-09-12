@@ -1723,7 +1723,7 @@ func clickedAttackTarget(ctx client.Context, projection sceneProjection, mouseX,
 		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
 		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
 		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale) {
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
 			continue
 		}
 		dx := float64(point.x) - float64(mouseX)
@@ -1754,7 +1754,7 @@ func clickedSkillTarget(ctx client.Context, projection sceneProjection, skill se
 		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
 		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
 		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale) {
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
 			continue
 		}
 		dx := float64(point.x) - float64(mouseX)
@@ -1785,7 +1785,7 @@ func clickedPlayerTarget(ctx client.Context, projection sceneProjection, mouseX,
 		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
 		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
 		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale) {
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
 			continue
 		}
 		dx := float64(point.x) - float64(mouseX)

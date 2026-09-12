@@ -473,7 +473,7 @@ func clickedGroundItem(ctx client.Context, projection sceneProjection, mouseX, m
 		z := floorItemRenderHeight(ctx.World, item, now)
 		point := projection.Project(cellCenter(x), cellCenter(y), z)
 		scale := actorBillboardScreenScale(projection, cellCenter(x), cellCenter(y), z) * 0.42
-		if !pointInGroundItemPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale) {
+		if !pointInGroundItemPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
 			continue
 		}
 		dx := float64(point.x) - float64(mouseX)

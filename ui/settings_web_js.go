@@ -35,6 +35,7 @@ func (w *SettingsWindow) webSync(ctx client.Context) {
 	obj.Set("lessEffects", settingsLessEffects(ctx))
 	obj.Set("snapTargets", settingsSnapTargets(ctx))
 	obj.Set("snapItems", settingsSnapItems(ctx))
+	obj.Set("snapRadius", settingsSnapRadius(ctx))
 	fn.Invoke(obj)
 }
 
@@ -93,6 +94,13 @@ func (w *SettingsWindow) handleSettingsWebAction(ctx client.Context, action stri
 	case strings.HasPrefix(action, "set:snap:"):
 		if ctx.Session != nil {
 			ctx.Session.SnapTargets = action[len("set:snap:"):] == "1"
+		}
+	case strings.HasPrefix(action, "set:snapradius:"):
+		if v, err := strconv.ParseFloat(strings.TrimPrefix(action, "set:snapradius:"), 64); err == nil {
+			if ctx.Session != nil {
+				ctx.Session.SnapRadius = v
+			}
+			w.saveSettings(ctx)
 		}
 	case strings.HasPrefix(action, "set:itemsnap:"):
 		if ctx.Session != nil {

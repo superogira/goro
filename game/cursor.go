@@ -33,6 +33,26 @@ const (
 
 const cursorSnapTriggerScale = 0.5
 
+// inputPickMultiplier returns the player's pick/snap area enlargement. Touch
+// input has no pixel precision, so the gameplay settings expose a multiplier
+// that grows both the pick bounds (which target a click finds) and the cursor
+// snap distance (which decides click-vs-walk) for actors and floor items.
+func inputPickMultiplier(ctx client.Context) float64 {
+	multiplier := 0.0
+	if ctx.Session != nil && ctx.Session.SnapRadius > 0 {
+		multiplier = ctx.Session.SnapRadius
+	} else {
+		multiplier = ctx.Config.Gameplay.SnapRadius
+	}
+	if multiplier < 0.5 {
+		return 0.5
+	}
+	if multiplier > 3 {
+		return 3
+	}
+	return multiplier
+}
+
 type cursorActionInfo struct {
 	drawX     float64
 	drawY     float64
@@ -248,7 +268,7 @@ func (m *WorldMode) cursorMagnetOffset(ctx client.Context, projection sceneProje
 			return 0, 0
 		}
 		targetX, targetY, scale, ok := cursorGroundItemMagnetTarget(ctx, projection, item, now)
-		if !ok || !pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, groundItemCursorSnapRadius(scale)) {
+		if !ok || !pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, groundItemCursorSnapRadius(scale)*inputPickMultiplier(ctx)) {
 			return 0, 0
 		}
 		return float64(ctx.Input.MouseX) - targetX, float64(ctx.Input.MouseY) - targetY
@@ -291,7 +311,7 @@ func (m *WorldMode) pendingTargetCursorSkill() (session.Skill, bool) {
 
 func (m *WorldMode) cursorActorMagnetOffset(ctx client.Context, projection sceneProjection, actor world.Actor, now time.Time) (float64, float64) {
 	targetX, targetY, scale, ok := m.cursorActorMagnetTarget(ctx, projection, actor, now)
-	if !ok || !pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, actorCursorSnapRadius(scale)) {
+	if !ok || !pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, actorCursorSnapRadius(scale)*inputPickMultiplier(ctx)) {
 		return 0, 0
 	}
 	return float64(ctx.Input.MouseX) - targetX, float64(ctx.Input.MouseY) - targetY
@@ -302,7 +322,7 @@ func (m *WorldMode) cursorActorSnapEligible(ctx client.Context, projection scene
 		return false
 	}
 	targetX, targetY, scale, ok := m.cursorActorMagnetTarget(ctx, projection, actor, now)
-	return ok && pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, actorCursorSnapRadius(scale))
+	return ok && pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, actorCursorSnapRadius(scale)*inputPickMultiplier(ctx))
 }
 
 func (m *WorldMode) cursorActorMagnetTarget(ctx client.Context, projection sceneProjection, actor world.Actor, now time.Time) (float64, float64, float64, bool) {
@@ -325,7 +345,7 @@ func cursorGroundItemSnapEligible(ctx client.Context, projection sceneProjection
 		return false
 	}
 	targetX, targetY, scale, ok := cursorGroundItemMagnetTarget(ctx, projection, item, now)
-	return ok && pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, groundItemCursorSnapRadius(scale))
+	return ok && pointInCursorSnapDistance(float64(ctx.Input.MouseX), float64(ctx.Input.MouseY), targetX, targetY, groundItemCursorSnapRadius(scale)*inputPickMultiplier(ctx))
 }
 
 func cursorGroundItemMagnetTarget(ctx client.Context, projection sceneProjection, item world.FloorItem, now time.Time) (float64, float64, float64, bool) {
@@ -448,7 +468,7 @@ func hoveredCursorActor(ctx client.Context, projection sceneProjection, mouseX, 
 		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
 		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
 		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale) {
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
 			continue
 		}
 		dx := float64(point.x) - float64(mouseX)

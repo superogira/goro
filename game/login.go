@@ -68,6 +68,7 @@ type LoginMode struct {
 	cursor              roCursorState
 	quitConfirm         gameui.ConfirmModal
 	disconnectDialog    gameui.ConfirmModal
+	mapError            string
 }
 
 type loginPhase int
@@ -130,7 +131,7 @@ func (m *LoginMode) Name() string {
 	return "login"
 }
 
-func (m *LoginMode) Enter(ctx client.Context) {
+func (m *LoginMode) Enter(ctx client.Context) Mode {
 	m.clearLoginWindows(ctx)
 	if m.username == "" {
 		m.username = ctx.Config.Login.Username
@@ -157,7 +158,7 @@ func (m *LoginMode) Enter(ctx client.Context) {
 		m.showCharacterSelectWindow(ctx)
 		m.reconnectCharacterServer(ctx)
 	}
-	if m.phase == loginPhaseAccount && len(ctx.Resources.ClientInfo.Connections) == 0 {
+	if m.phase == loginPhaseAccount && len(loginConnections(ctx)) == 0 {
 		m.status = "no login servers discovered"
 	}
 	if m.fade.phase == loginFadeIn && m.fade.started.IsZero() {
@@ -165,6 +166,11 @@ func (m *LoginMode) Enter(ctx client.Context) {
 		// here. Begin fading in only once the destination is ready to draw.
 		m.fade.started = time.Now()
 	}
+	if m.mapError != "" {
+		m.disconnectDialog.OpenAlert(ctx, "Map unavailable", m.mapError, func() { m.updateAccountWindow(ctx) })
+		m.mapError = ""
+	}
+	return nil
 }
 
 func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
@@ -173,7 +179,7 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		return m.nextWorldMode(ctx), nil
 	}
 
-	conns := ctx.Resources.ClientInfo.Connections
+	conns := loginConnections(ctx)
 	fading := m.fade.phase != loginFadeNone
 	if !fading {
 		if m.updateQuitConfirm(ctx) {
@@ -984,6 +990,9 @@ func (m *LoginMode) playConfirmSFX(ctx client.Context) {
 }
 
 func loadLoginBackgroundImage(manager *res.Manager, name string) (*render.Image, string, bool) {
+	if manager == nil {
+		return nil, "", false
+	}
 	for _, candidate := range loginInterfaceCandidates(name) {
 		img, source, err := res.LoadImageExact(manager, []string{candidate})
 		if err == nil {

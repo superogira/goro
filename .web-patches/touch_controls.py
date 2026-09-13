@@ -15,7 +15,7 @@ sub1(
     <button class="toggle" title="Show/hide controls">&#187;</button>
   </div>""",
     """    <button data-fs title="Fullscreen">&#x26F6;</button>
-    <button id="goro-touch-toggle" title="Touch controls">&#127918;</button>
+    <button id="goro-touch-toggle" title="Touch controls">&#128073;</button>
     <button class="toggle" title="Show/hide controls">&#187;</button>
   </div>
   <div id="goro-touchpad">
@@ -59,7 +59,13 @@ sub1(
   }""",
 )
 
-# 3) the touch-control script after the cam toggle wiring
+# 3) the touch toggle hides with the rest of the control cluster
+sub1(
+    "cam.querySelectorAll('button[data-c], button[data-fs]').forEach(function (b) { b.style.display = camHidden ? 'none' : 'block'; });",
+    "cam.querySelectorAll('button[data-c], button[data-fs], #goro-touch-toggle').forEach(function (b) { b.style.display = camHidden ? 'none' : 'block'; });",
+)
+
+# 4) the touch-control script after the cam toggle wiring
 CAM_ANCHOR = """    cam.querySelector('.toggle').addEventListener('pointerdown', function (ev) {
       ev.preventDefault();
       camHidden = !camHidden;

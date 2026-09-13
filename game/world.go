@@ -53,6 +53,7 @@ type WorldMode struct {
 	cursorFallback    *render.Image
 	cursorAction      int
 	cursorStarted     time.Time
+	touch             touchControls
 	damageNumberView  *spriteView
 	damageNumberMiss  bool
 	damageNumbers     map[string]*spriteBillboard
@@ -679,6 +680,11 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// leaves the canvas rendering at the old scale while the settings
 	// picker keeps showing the picked value.
 	m.ui.settingsWindow.UpdateWeb(ctx)
+	// Touch overlay actions land with settings priority: a stick held across
+	// a map fade must keep steering once the new map is in, and the action
+	// button must work during prewarm. Steering itself is throttled inside.
+	m.drainTouchActions(ctx)
+	m.updateTouchControls(ctx, now)
 	// Fold a finished wav-pack download into the archive list on this
 	// goroutine; no-op until StartDeferredWebPack's fetch lands.
 	if ctx.Resources != nil {

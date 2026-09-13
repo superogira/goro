@@ -20,7 +20,12 @@ sub1(
   </div>
   <div id="goro-touchpad">
     <button id="goro-touch-action" title="Pick nearest item / attack nearest monster (drag to move)"></button>
+    <button id="goro-tslots-toggle" title="Skill / item slots">&#8943;</button>
+    <button class="tslot" data-h="0" title="Skill / item slot (F1) &#8212; drag a skill or item here"></button>
+    <button class="tslot" data-h="1" title="Skill / item slot (F2) &#8212; drag a skill or item here"></button>
+    <button class="tslot" data-h="2" title="Skill / item slot (F3) &#8212; drag a skill or item here"></button>
   </div>
+  <div id="goro-ministats"></div>
   <div id="goro-stick"><div id="goro-stick-base"></div><div id="goro-stick-thumb"></div></div>""",
 )
 

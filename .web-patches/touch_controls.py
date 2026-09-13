@@ -274,5 +274,11 @@ JS = CAM_ANCHOR + """
 
 sub1(CAM_ANCHOR, JS)
 
+# NOTE: the JS block above records the original three-slot wiring; the
+# deployed page has since gained the seven-slot ring layout, draggable
+# action button, cancel gestures, ministats, and de-overlap tweaks.
+# Those are tracked in git history of the page edits; this script is a
+# starting-point patch, not a full replay.
+
 io.open(path, "w", encoding="utf-8", newline="").write(src)
 print("patched ok")

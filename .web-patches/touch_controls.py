@@ -18,7 +18,7 @@ sub1(
     <button id="goro-touch-toggle" title="Touch controls">&#127918;</button>
     <button class="toggle" title="Show/hide controls">&#187;</button>
   </div>
-  <div id="goro-touchpad" style="display:none">
+  <div id="goro-touchpad">
     <button id="goro-touch-action" title="Pick nearest item / attack nearest monster">&#127919;</button>
   </div>
   <div id="goro-stick"><div id="goro-stick-base"></div><div id="goro-stick-thumb"></div></div>""",

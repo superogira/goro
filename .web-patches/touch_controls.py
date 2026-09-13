@@ -19,7 +19,7 @@ sub1(
     <button class="toggle" title="Show/hide controls">&#187;</button>
   </div>
   <div id="goro-touchpad">
-    <button id="goro-touch-action" title="Pick nearest item / attack nearest monster">&#127919;</button>
+    <button id="goro-touch-action" title="Pick nearest item / attack nearest monster (drag to move)"></button>
   </div>
   <div id="goro-stick"><div id="goro-stick-base"></div><div id="goro-stick-thumb"></div></div>""",
 )
@@ -30,10 +30,11 @@ sub1(
     """  #goro-cam .toggle { font-size: 13px; }
   #goro-cam #goro-touch-toggle.on { background: #10ef21; color: #143c00; }
   #goro-touchpad {
-    position: fixed; right: 60px; bottom: 96px; z-index: 17; display: none;
+    position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 17; display: none;
   }
   #goro-touchpad.on { display: block; }
   #goro-touch-action {
+    position: fixed; right: 60px; bottom: 96px;
     width: 74px; height: 74px; border-radius: 50%;
     border: 2px solid rgba(80, 70, 50, .55); background: rgba(232, 223, 200, .92);
     color: #2a2622; font: 30px/1 Sarabun, system-ui, sans-serif;
@@ -41,6 +42,10 @@ sub1(
     -webkit-user-select: none; user-select: none;
   }
   #goro-touch-action:active { background: #d8cba8; transform: scale(.94); }
+  #goro-touch-action::after {
+    content: ''; display: block; width: 14px; height: 14px; margin: 0 auto;
+    border-radius: 50%; background: rgba(80, 70, 50, .35);
+  }
   #goro-stick { position: fixed; left: 0; top: 0; z-index: 18; pointer-events: none; display: none; }
   #goro-stick-base {
     position: absolute; width: 108px; height: 108px; border-radius: 50%;
@@ -115,10 +120,67 @@ JS = CAM_ANCHOR + """
       });
       try { if (localStorage.getItem('goroTouchPad') === '1') applyToggle(true); } catch (e) {}
 
+      // The action button doubles as its own move handle: a press that
+      // moves past ACTION_DRAG_PX relocates the button (position saved),
+      // a press released in place fires the action.
+      var ACTION_DRAG_PX = 12;
+      var btnDrag = null;
+      function clampBtn(x, y) {
+        var r = actionBtn.getBoundingClientRect();
+        x = Math.min(Math.max(8, x), window.innerWidth - r.width - 8);
+        y = Math.min(Math.max(8, y), window.innerHeight - r.height - 8);
+        return [x, y];
+      }
+      function saveBtnPos(x, y) {
+        try { localStorage.setItem('goroTouchPadPos', Math.round(x) + ',' + Math.round(y)); } catch (e) {}
+      }
+      (function restoreBtnPos() {
+        try {
+          var saved = localStorage.getItem('goroTouchPadPos');
+          if (!saved) return;
+          var parts = saved.split(',');
+          var x = +parts[0], y = +parts[1];
+          if (!isFinite(x) || !isFinite(y)) return;
+          var clamped = clampBtn(x, y);
+          actionBtn.style.left = clamped[0] + 'px';
+          actionBtn.style.top = clamped[1] + 'px';
+          actionBtn.style.right = 'auto';
+          actionBtn.style.bottom = 'auto';
+        } catch (e) {}
+      })();
       actionBtn.addEventListener('pointerdown', function (ev) {
         ev.preventDefault(); ev.stopPropagation();
-        if (window.goroTouchAction) window.goroTouchAction('action');
+        try { actionBtn.setPointerCapture(ev.pointerId); } catch (e) {}
+        var r = actionBtn.getBoundingClientRect();
+        btnDrag = { id: ev.pointerId, ox: ev.clientX, oy: ev.clientY,
+                    left: r.left, top: r.top, moved: false };
       });
+      actionBtn.addEventListener('pointermove', function (ev) {
+        if (!btnDrag || ev.pointerId !== btnDrag.id) return;
+        ev.preventDefault(); ev.stopPropagation();
+        var dx = ev.clientX - btnDrag.ox, dy = ev.clientY - btnDrag.oy;
+        if (!btnDrag.moved && Math.hypot(dx, dy) < ACTION_DRAG_PX) return;
+        btnDrag.moved = true;
+        var clamped = clampBtn(btnDrag.left + dx, btnDrag.top + dy);
+        actionBtn.style.left = clamped[0] + 'px';
+        actionBtn.style.top = clamped[1] + 'px';
+        actionBtn.style.right = 'auto';
+        actionBtn.style.bottom = 'auto';
+      });
+      function onBtnUp(ev) {
+        if (!btnDrag || ev.pointerId !== btnDrag.id) return;
+        ev.preventDefault(); ev.stopPropagation();
+        var wasMoved = btnDrag.moved;
+        btnDrag = null;
+        if (wasMoved) {
+          var r = actionBtn.getBoundingClientRect();
+          saveBtnPos(r.left, r.top);
+          return;
+        }
+        if (window.goroTouchAction) window.goroTouchAction('action');
+      }
+      actionBtn.addEventListener('pointerup', onBtnUp);
+      actionBtn.addEventListener('pointercancel', onBtnUp);
       actionBtn.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
 
       function synthesizeTap(x, y, type) {

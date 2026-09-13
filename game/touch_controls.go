@@ -62,11 +62,20 @@ func (m *WorldMode) applyTouchStick(vec string) {
 	if !ok {
 		return
 	}
+	wasActive := m.touch.active
 	m.touch.stickX, m.touch.stickY = x, y
 	m.touch.stickSeen = time.Now()
 	m.touch.active = x != 0 || y != 0
 	if !m.touch.active {
 		m.touch.lastWalk = time.Time{}
+		return
+	}
+	if !wasActive {
+		// Grabbing the stick breaks off whatever the action button (or a
+		// click) started: the player is steering, so chasing a monster or
+		// walking to a floor item must stop.
+		m.cancelAttackIntent()
+		m.pendingPickup = pickupIntent{}
 	}
 }
 

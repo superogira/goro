@@ -1262,6 +1262,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		}
 		if targetX, targetY, ok := clickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); ok && m.walkReady(now) {
 			glog.Debugf("click walk target mouse=%d,%d player=%d,%d target=%d,%d", ctx.Input.MouseX, ctx.Input.MouseY, playerX, playerY, targetX, targetY)
+			// Walking somewhere else is also the cancel gesture for an
+			// in-flight action: the attack intent clears above, and a
+			// pending floor-item pickup must stop chasing its item.
+			m.pendingPickup = pickupIntent{}
 			m.cancelAttackIntent()
 			if shouldUseTurnOnlyGroundClick(ctx) {
 				m.requestChangeDirection(ctx, targetX, targetY, "click")

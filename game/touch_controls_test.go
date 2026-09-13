@@ -44,3 +44,25 @@ func TestTouchActionRangeScalesWithSnapRadius(t *testing.T) {
 		}
 	}
 }
+
+func TestTouchStickGrabCancelsPendingActions(t *testing.T) {
+	m := &WorldMode{}
+	m.pendingPickup = pickupIntent{itemID: 5}
+	m.pendingAttack = attackIntent{targetID: 9}
+	m.applyTouchStick("0.80,0.00")
+	if m.touch.active != true {
+		t.Fatal("stick vector should activate steering")
+	}
+	if m.pendingPickup.itemID != 0 {
+		t.Fatal("grabbing the stick should cancel a pending pickup")
+	}
+	if m.pendingAttack.targetID != 0 {
+		t.Fatal("grabbing the stick should cancel a pending attack")
+	}
+	// A vector refresh while already active must not thrash anything.
+	m.applyTouchStick("0.90,0.00")
+	m.applyTouchStick("0,0")
+	if m.touch.active {
+		t.Fatal("release vector should deactivate steering")
+	}
+}

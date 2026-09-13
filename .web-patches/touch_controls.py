@@ -24,6 +24,10 @@ sub1(
     <button class="tslot" data-h="0" title="Skill / item slot (F1) &#8212; drag a skill or item here"></button>
     <button class="tslot" data-h="1" title="Skill / item slot (F2) &#8212; drag a skill or item here"></button>
     <button class="tslot" data-h="2" title="Skill / item slot (F3) &#8212; drag a skill or item here"></button>
+    <button class="tslot" data-h="3" title="Skill / item slot (F4) &#8212; drag a skill or item here"></button>
+    <button class="tslot" data-h="4" title="Skill / item slot (F5) &#8212; drag a skill or item here"></button>
+    <button class="tslot" data-h="5" title="Skill / item slot (F6) &#8212; drag a skill or item here"></button>
+    <button class="tslot" data-h="6" title="Skill / item slot (F7) &#8212; drag a skill or item here"></button>
   </div>
   <div id="goro-ministats"></div>
   <div id="goro-stick"><div id="goro-stick-base"></div><div id="goro-stick-thumb"></div></div>""",

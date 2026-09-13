@@ -31,7 +31,13 @@ const (
 	cursorActionNoWalk  = 13
 )
 
-const cursorSnapTriggerScale = 0.5
+// cursorSnapTriggerScale sizes the snap/magnet circle relative to the pick
+// bounds. At 1.0 the circle circumscribes the whole pick box, so the pick
+// cursor and magnet engage everywhere a click would land — enabling snap can
+// only make targeting feel bigger, never shrink it to the box's inner half
+// (which is what the previous 0.5 did: hovering a floor item showed the walk
+// cursor everywhere except within a few pixels of its center).
+const cursorSnapTriggerScale = 1.0
 
 // inputPickMultiplier returns the player's pick/snap area enlargement. Touch
 // input has no pixel precision, so the gameplay settings expose a multiplier

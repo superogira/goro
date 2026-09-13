@@ -1,6 +1,7 @@
 package game
 
 import (
+	"math"
 	"testing"
 
 	"github.com/kivutar/goro/client"
@@ -52,5 +53,24 @@ func TestPickBoundsGrowWithMultiplier(t *testing.T) {
 	}
 	if !pointInActorPickBounds(actorX, 100, 100, 100, 1*2) {
 		t.Fatal("60px offset should hit the doubled actor pick box")
+	}
+}
+
+// The snap/magnet circle must cover the whole pick box: every point a click
+// registers in (see world.go's click dispatch, which uses the pick bounds
+// directly) must also show the pick cursor and magnet, or enabling snap
+// shrinks the usable click area instead of enlarging it.
+func TestSnapCircleCoversPickBox(t *testing.T) {
+	for _, scale := range []float64{0.42, 1, 2.5} {
+		actorRadius := actorCursorSnapRadius(scale)
+		actorReach := math.Hypot(44*scale, float64(humanoidBillboardAnchorY+20)/2*scale)
+		if actorRadius+1e-9 < actorReach {
+			t.Fatalf("actor snap radius %.2f < pick box corner reach %.2f at scale %.2f", actorRadius, actorReach, scale)
+		}
+		itemRadius := groundItemCursorSnapRadius(scale)
+		itemReach := math.Hypot(18*scale, 20*scale)
+		if itemRadius+1e-9 < itemReach {
+			t.Fatalf("item snap radius %.2f < pick box corner reach %.2f at scale %.2f", itemRadius, itemReach, scale)
+		}
 	}
 }

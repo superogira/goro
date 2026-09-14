@@ -26,6 +26,7 @@ type LoginMode struct {
 	phase               loginPhase
 	status              string
 	packets             []string
+	keepID              bool
 	console             gameui.ChatConsole
 	autoAttempted       bool
 	autoCharAttempted   bool
@@ -133,8 +134,17 @@ func (m *LoginMode) Name() string {
 
 func (m *LoginMode) Enter(ctx client.Context) Mode {
 	m.clearLoginWindows(ctx)
+	m.keepID = ctx.Config.Login.KeepID
+	savedUsername := ctx.Config.Login.SavedUsername
+	if ctx.Session != nil {
+		m.keepID = ctx.Session.KeepLoginID
+		savedUsername = ctx.Session.SavedUsername
+	}
 	if m.username == "" {
 		m.username = ctx.Config.Login.Username
+		if m.username == "" && m.keepID {
+			m.username = savedUsername
+		}
 	}
 	if m.password == "" {
 		m.password = ctx.Config.Login.Password

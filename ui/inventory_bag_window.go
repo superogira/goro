@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"github.com/kivutar/goro/glog"
 	"fmt"
+	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	"image"
 	"sort"
@@ -66,7 +66,7 @@ type InventoryBagWindow struct {
 	tab           int
 	scrollY       state.Signal[float32]
 	snapshot      string
-	itemInfo      *ItemInfoWindow
+	itemInfo      *ItemWindows
 	lastClickItem uint16
 	lastClickAt   time.Time
 	dragItem      session.InventoryItem
@@ -77,8 +77,6 @@ type InventoryBagWindow struct {
 	tooltip       tooltipState
 	icons         map[inventoryBagIconKey]image.Image
 	iconMiss      map[inventoryBagIconKey]struct{}
-	webOpen      bool
-	webSyncedKey string
 }
 
 type inventoryBagIconKey struct {
@@ -87,15 +85,6 @@ type inventoryBagIconKey struct {
 }
 
 func (w *InventoryBagWindow) Toggle(ctx Context) {
-	if inventoryWebEnabled() {
-		w.webOpen = !w.webOpen
-		if w.webOpen {
-			w.selectFirstNonEmptyTab(ctx.Session)
-		}
-		w.webSyncedKey = ""
-		w.webSync(ctx)
-		return
-	}
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	if w.IsOpen() {
 		w.hideTooltip()
@@ -112,69 +101,7 @@ func (w *InventoryBagWindow) Toggle(ctx Context) {
 	w.Publish(ctx)
 }
 
-func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow, itemInfo *ItemInfoWindow, dropTargets ...InventoryDropTarget) bool {
-	if inventoryWebEnabled() {
-		hudWebInstallHooks()
-		for _, action := range hudWebDrainActions("inv:") {
-			switch {
-			case action == "inv:close":
-				w.webOpen = false
-			case action == "inv:tab":
-				// handled below via tab index payload
-			case strings.HasPrefix(action, "inv:tab:"):
-				if t, err := strconv.Atoi(strings.TrimPrefix(action, "inv:tab:")); err == nil {
-					w.tab = t
-				}
-			case strings.HasPrefix(action, "inv:use:"):
-				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:use:")); err == nil {
-					for _, item := range w.tabItems(ctx.Session) {
-						if int(item.Index) == idx {
-							_ = UseInventoryItem(ctx, item)
-							break
-						}
-					}
-				}
-			case strings.HasPrefix(action, "inv:info:"):
-				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:info:")); err == nil {
-					for _, item := range w.tabItems(ctx.Session) {
-						if int(item.Index) == idx {
-							itemInfoWebShow(ctx, item)
-							break
-						}
-					}
-				}
-			case strings.HasPrefix(action, "inv:equip:"):
-				if idx, err := strconv.Atoi(strings.TrimPrefix(action, "inv:equip:")); err == nil {
-					for _, item := range w.tabItems(ctx.Session) {
-						if int(item.Index) == idx {
-							equipInventoryItem(ctx, item)
-							break
-						}
-					}
-				}
-			case strings.HasPrefix(action, "inv:drop:"):
-				// "inv:drop:<index>:<amount>" — the page's amount dialog
-				// resolves stackables; single items arrive with amount 1.
-				parts := strings.Split(strings.TrimPrefix(action, "inv:drop:"), ":")
-				if len(parts) < 2 {
-					continue
-				}
-				idx, err1 := strconv.Atoi(parts[0])
-				amount, err2 := strconv.ParseUint(parts[1], 10, 16)
-				if err1 != nil || err2 != nil {
-					continue
-				}
-				for _, item := range w.tabItems(ctx.Session) {
-					if int(item.Index) == idx {
-						w.sendDrop(ctx, item, uint16(amount))
-						break
-					}
-				}
-			}
-		}
-		w.webSync(ctx)
-		return false
-	}
+func (w *InventoryBagWindow) Update(ctx Context, shortcuts *ShortcutBar, storage *StorageWindow, cart *CartWindow, trade *TradeWindow, equipment *EquipmentWindow, itemInfo *ItemWindows, dropTargets ...InventoryDropTarget) bool {
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	if !w.IsOpen() || ctx.Input == nil {
 		w.hideTooltip()
@@ -302,7 +229,7 @@ func (w *InventoryBagWindow) DrawDragGhost(screen *render.Frame, ctx Context, as
 	assets.DrawInventoryItemIcon(screen, ctx.Resources, w.dragItem, ctx.Input.MouseX-inventoryIconSize/2, ctx.Input.MouseY-inventoryIconSize/2)
 }
 
-func (w *InventoryBagWindow) Rebind(ctx Context, itemInfo *ItemInfoWindow) {
+func (w *InventoryBagWindow) Rebind(ctx Context, itemInfo *ItemWindows) {
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	if !w.IsOpen() {
 		return
@@ -314,7 +241,7 @@ func (w *InventoryBagWindow) PendingCardIndex() uint16 {
 	return w.pendingCard
 }
 
-func (w *InventoryBagWindow) widgetTree(ctx Context, itemInfo *ItemInfoWindow) widget.Widget {
+func (w *InventoryBagWindow) widgetTree(ctx Context, itemInfo *ItemWindows) widget.Widget {
 	items := w.tabItems(ctx.Session)
 	grid := newInventoryGridWidget(inventoryGridConfig{
 		items:     items,
@@ -385,7 +312,7 @@ func (w *InventoryBagWindow) tabColumn(ctx Context) widget.Widget {
 		Gap(-inventoryBagTabOver)
 }
 
-func (w *InventoryBagWindow) refresh(ctx Context, itemInfo *ItemInfoWindow) {
+func (w *InventoryBagWindow) refresh(ctx Context, itemInfo *ItemWindows) {
 	w.hideTooltip()
 	w.ClampScroll(ctx.Session)
 	w.snapshot = w.inventorySnapshot(ctx.Session)
@@ -442,32 +369,6 @@ func (w *InventoryBagWindow) pointInside(x, y int) bool {
 func (w *InventoryBagWindow) AcceptStorageDrop(ctx Context, item session.InventoryItem, mx, my int) bool {
 	w.EnsureWindow(inventoryBagWidth, inventoryBagHeight)
 	return w.IsOpen() && w.pointInside(mx, my)
-}
-
-// webSync pushes the DOM inventory state when its snapshot changes.
-func (w *InventoryBagWindow) webSync(ctx Context) {
-	if !inventoryWebEnabled() {
-		return
-	}
-	key := fmt.Sprintf("%t|%s", w.webOpen, w.inventorySnapshot(ctx.Session))
-	if key == w.webSyncedKey {
-		return
-	}
-	w.webSyncedKey = key
-	items := w.tabItems(ctx.Session)
-	icons := make([]string, len(items))
-	names := make([]string, len(items))
-	weights := make([]int, len(items))
-	for i, item := range items {
-		icons[i] = hotbarWebIcon(fmt.Sprintf("item:%d:%t", item.ItemID, item.Identified), w.itemIconImage(ctx.Resources, item))
-		if name, ok := ctx.Resources.ItemDisplayName(int(item.ItemID), item.Identified); ok {
-			names[i] = name
-		} else {
-			names[i] = fmt.Sprintf("item %d", item.ItemID)
-		}
-		weights[i] = int(ctx.Session.Inventory.Weight)
-	}
-	inventoryWebSync(w.webOpen, w.tab, items, icons, names, weights)
 }
 
 func inventoryBagDefaultPosition(ctx Context) (int, int) {

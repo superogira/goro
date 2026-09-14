@@ -272,6 +272,9 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 	key := c.renderKey(width, height)
 	if c.window.width == 0 {
 		c.window = NewWindow(width, height)
+		// The console is HUD chrome, not a closeable window: Escape must
+		// pass through it on the way to the escape menu.
+		c.window.CloseOnEsc = false
 		c.window.titleHeight = 0
 		c.window.SetFullRedraw(true)
 	}

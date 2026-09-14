@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"path/filepath"
-	"strings"
 
 	"github.com/ebitengine/oto/v3"
 	"github.com/kivutar/goro/res"
@@ -300,55 +298,4 @@ func readSFXFile(manager *res.Manager, path string) ([]byte, string, error) {
 		}
 	}
 	return nil, "", fmt.Errorf("sfx not found: %s", path)
-}
-
-func normalizeSFXPath(path string) string {
-	path = strings.TrimSpace(path)
-	path = strings.Trim(path, "\"")
-	path = strings.ReplaceAll(path, "/", "\\")
-	path = strings.TrimPrefix(path, ".\\")
-	path = strings.TrimPrefix(path, "data\\")
-	if path == "" {
-		return ""
-	}
-	if filepath.Ext(path) == "" {
-		path += ".wav"
-	}
-	return path
-}
-
-func sfxPathCandidates(path string) []string {
-	normalized := normalizeSFXPath(path)
-	if normalized == "" {
-		return nil
-	}
-	slash := strings.ReplaceAll(normalized, "\\", "/")
-	lower := strings.ToLower(normalized)
-	// Lead with data\wav\ — the canonical kRO location and where the web pack
-	// stores sounds — so lookups hit the archive before any HTTP probe.
-	var candidates []string
-	if strings.HasPrefix(lower, "wav\\") {
-		candidates = append(candidates,
-			"data\\"+normalized,
-			"data/"+slash,
-			normalized,
-			slash,
-		)
-	} else {
-		candidates = append(candidates,
-			"data\\wav\\"+normalized,
-			"data/wav/"+slash,
-			normalized,
-			slash,
-			"wav\\"+normalized,
-			"wav/"+slash,
-		)
-	}
-	return uniqueStrings(candidates)
-}
-
-// SFXPathCandidates exposes the wav location candidates for a sound name so
-// other packages can prefetch exactly the files playback will read.
-func SFXPathCandidates(path string) []string {
-	return sfxPathCandidates(path)
 }

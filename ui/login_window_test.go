@@ -22,7 +22,7 @@ func TestLoginWindowInitialFocusAndTabNavigation(t *testing.T) {
 	manager := NewManager()
 	manager.SetUIApp(bridge)
 	ctx := client.Context{ScreenW: 800, ScreenH: 600, UIApp: bridge, UIManager: manager}
-	window := NewLoginWindow(ctx, "", "", LoginWindowCallbacks{})
+	window := NewLoginWindow(ctx, "", "", false, LoginWindowCallbacks{})
 	window.Publish(ctx)
 	app.Frame()
 	app.Window().DrawTo(&uitest.MockCanvas{})
@@ -70,8 +70,10 @@ func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 		t.Fatal("login window content tree is incomplete")
 	}
 	rows := windowChildren[1].Children()[0].Children()
-	if len(rows) != 2 {
-		t.Fatalf("login form rows = %d, want Account and Password", len(rows))
+	// The fork adds a third row: the Keep-ID checkbox under the password
+	// (upstream has only Account and Password).
+	if len(rows) != 3 {
+		t.Fatalf("login form rows = %d, want Account, Password, and Keep", len(rows))
 	}
 
 	for i, want := range []string{"Account", "Password"} {

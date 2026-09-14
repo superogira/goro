@@ -537,15 +537,25 @@ func (w *Widget) Unmount() {
 	}
 	// Bindings are cleaned up automatically by WidgetBase.CleanupBindings().
 	// A focused field can leave the tree without anyone calling
-	// SetFocused(false) (window closed, screen switched) — drop it from the
+	// SetFocused(false) (window closed, screen switched). Drop it from the
 	// keyboard registry there, or the OS keyboard stays up with no field to
-	// receive the typing.
-	if w.IsFocused() {
-		w.SetFocused(false)
-	} else {
+	// receive the typing. The focused flag itself stays untouched: a window
+	// refresh unmounts and remounts the SAME field instance, and clearing
+	// focus here would blur a conversation that is still open (an incoming
+	// whisper message must never steal typing focus).
+	if _, tracked := kbFocusedFields[w]; tracked {
 		delete(kbFocusedFields, w)
 		if kbLastFocusedField == w {
 			kbLastFocusedField = nil
+			for k := range kbFocusedFields {
+				kbLastFocusedField = k
+				break
+			}
+		}
+		if len(kbFocusedFields) == 0 {
+			applyTextInputKeyboard(false, "", "", geometry.Rect{})
+		} else if kbLastFocusedField != nil {
+			kbLastFocusedField.notifyKeyboard(true)
 		}
 	}
 }

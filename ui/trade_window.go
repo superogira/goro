@@ -70,12 +70,13 @@ func (w *TradeWindow) Open(ctx Context, partnerName string) {
 	w.Publish(ctx)
 }
 
-func (w *TradeWindow) Update(ctx Context, itemInfo *ItemInfoWindow) bool {
+func (w *TradeWindow) Update(ctx Context, itemInfo *ItemWindows) bool {
 	w.EnsureWindow(tradeWindowW, tradeWindowH)
 	if !w.IsOpen() || ctx.Input == nil {
 		return false
 	}
 	w.ctx = ctx
+	w.OnEscClose(func() { w.cancel(ctx) })
 	consumed := w.Window.Update(ctx)
 	w.Publish(ctx)
 	return consumed

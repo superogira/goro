@@ -3,6 +3,7 @@ package game
 import (
 	"fmt"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/glog"
 	"image"
 	"image/color"
@@ -189,6 +190,9 @@ func itemPickupAckAddsItem(ack network.ItemPickupAck) bool {
 }
 
 func (m *WorldMode) requestPickup(ctx client.Context, item worldstate.FloorItem, source string) bool {
+	if ctx.PlayerHasEffectState(db.EffectStateHide) {
+		return false
+	}
 	if playerIsDead(ctx) {
 		return false
 	}

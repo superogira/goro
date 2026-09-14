@@ -136,6 +136,11 @@ func TitleButton(kind rotheme.IconButtonKind, onClick func()) WindowOption {
 	}
 }
 
+// OnEscClose sets the callback invoked when Escape closes the window.
+func (w *Window) OnEscClose(fn func()) {
+	w.onEscClose = fn
+}
+
 func OnClose(onClose func()) WindowOption {
 	return func(cfg *windowConfig) {
 		cfg.onClose = onClose
@@ -244,7 +249,11 @@ type Window struct {
 	background   *widget.Color
 	fullRedraw   bool
 	CloseOnEsc   bool
-	ctx          client.Context
+	// onEscClose mirrors the Win(OnClose(...)) callback for the Escape
+	// path: closing via ESC must run the same cleanup (cancel packets,
+	// window-specific teardown) as the title-bar X.
+	onEscClose func()
+	ctx        client.Context
 }
 
 func (w *Window) EnsureWindow(width, height int) bool {
@@ -257,6 +266,10 @@ func (w *Window) EnsureWindow(width, height int) bool {
 
 func (w *Window) Close() {
 	w.cancelDragLayer(w.ctx)
+	// Blur anything inside the closing tree (chat inputs keep a local
+	// focused flag that outlives the unmount); an Escape-close must hand
+	// the keyboard back, not leave a dangling focused field.
+	releaseWindowFocus(w.ctx, w.content)
 	w.setOpacity(1)
 	w.open = false
 	w.dragging = false
@@ -437,17 +450,38 @@ func (w *Window) Update(ctx client.Context) bool {
 		w.endDragLayer(ctx)
 		return true
 	}
-	if w.CloseOnEsc && ctx.Input.JustPressed(input.KeyEscape) {
-		w.Close()
+	if ctx.Input.JustPressed(input.KeyEscape) {
+		if !w.CloseOnEsc {
+			return false
+		}
+		// Only the topmost closeOnEsc overlay in the manager's stack may
+		// consume Escape; lower windows (trade under a shop, a settings
+		// window under a modal) pass it through (upstream).
+		if manager, ok := ctx.UIManager.(interface{ TopEscapeOverlay() widget.Widget }); ok {
+			if top := manager.TopEscapeOverlay(); top != nil && w.placed != top {
+				return false
+			}
+		}
+		if w.onEscClose != nil {
+			w.onEscClose()
+		} else {
+			w.Close()
+		}
 		return true
 	}
 	inside := pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, w.x, w.y, w.width, w.height)
+	// Stacking check: an overlapped window must not consume a press aimed at
+	// the window above it — only the topmost overlay at the point is inside.
+	if manager, ok := ctx.UIManager.(interface{ OverlayAt(int, int) widget.Widget }); ok && w.published != nil {
+		inside = manager.OverlayAt(ctx.Input.MouseX, ctx.Input.MouseY) == w.published
+	}
 	if !ctx.Input.MouseJustPressed(input.MouseButtonLeft) {
 		return inside
 	}
 	if !inside {
 		return false
 	}
+	w.Raise(ctx)
 	if pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, w.x, w.y, w.width, w.titleHeight) {
 		if w.titleButtonHit(ctx.Input.MouseX, ctx.Input.MouseY) {
 			return true
@@ -462,15 +496,57 @@ func (w *Window) Update(ctx client.Context) bool {
 	return true
 }
 
+// topEscapeOverlay returns the topmost closeOnEsc overlay from the
+// manager. Windows check this before consuming Escape: only the top one
+// may act; lower windows yield.
+func topEscapeOverlay(ctx client.Context) widget.Widget {
+	if manager, ok := ctx.UIManager.(interface{ TopEscapeOverlay() widget.Widget }); ok {
+		return manager.TopEscapeOverlay()
+	}
+	return nil
+}
+
 func (w *Window) ensurePosition(ctx client.Context) {
 	if w.positioned {
 		return
 	}
 	screenW, screenH := ctx.ScreenSize()
-	w.x = maxInt(windowScreenMargin, (screenW-w.width)/2)
-	w.y = maxInt(windowScreenMargin, (screenH-w.height)/2)
+	w.placeNew(ctx, (screenW-w.width)/2, (screenH-w.height)/2)
+}
+
+// placeNew keeps a new window on screen and offsets coincident title bars so
+// opening another instance leaves the previous instance accessible.
+func (w *Window) placeNew(ctx client.Context, x, y int) {
+	screenW, screenH := ctx.ScreenSize()
+	maxX := maxInt(windowScreenMargin, screenW-w.width-windowScreenMargin)
+	maxY := maxInt(windowScreenMargin, screenH-w.height-windowScreenMargin)
+	x = clampWindowInt(x, windowScreenMargin, maxX)
+	y = clampWindowInt(y, windowScreenMargin, maxY)
+	if manager, ok := ctx.UIManager.(*Manager); ok {
+		for attempts := 0; attempts < len(manager.overlays); attempts++ {
+			occupied := false
+			for _, root := range manager.overlays {
+				other, ok := root.(*positionedOverlay)
+				if ok && root != w.placed && other.raiseOnPress && other.x == x && other.y == y {
+					occupied = true
+					break
+				}
+			}
+			if !occupied {
+				break
+			}
+			x += ROWindowTitleHeight
+			y += ROWindowTitleHeight
+			if x > maxX {
+				x = windowScreenMargin
+			}
+			if y > maxY {
+				y = windowScreenMargin
+			}
+		}
+	}
 	w.positioned = true
-	w.placed = nil
+	w.setPosition(ctx, x, y)
 }
 
 func (w *Window) setOpacity(opacity float32) {
@@ -510,6 +586,9 @@ func (w *Window) Widget() widget.Widget {
 		}
 	} else if overlay, ok := w.placed.(*positionedOverlay); ok {
 		overlay.setFrame(w.x, w.y, w.width, w.height)
+	}
+	if overlay := w.positionedOverlay(); overlay != nil {
+		overlay.closeOnEsc = w.CloseOnEsc
 	}
 	return w.placed
 }
@@ -791,6 +870,7 @@ type positionedOverlay struct {
 	hasDamage     bool
 	hidden        bool
 	raiseOnPress  bool
+	closeOnEsc    bool
 }
 
 func (w *positionedOverlay) setFrame(x, y, width, height int) geometry.Rect {
@@ -948,4 +1028,19 @@ func clampWindowInt(value, low, high int) int {
 		return high
 	}
 	return value
+}
+
+func releaseWindowFocus(ctx client.Context, root widget.Widget) {
+	if root == nil {
+		return
+	}
+	if focus, ok := root.(interface{ SetFocused(bool) }); ok {
+		if wc := windowWidgetContext(ctx); wc != nil {
+			wc.ReleaseFocus(root)
+		}
+		focus.SetFocused(false)
+	}
+	for _, child := range root.Children() {
+		releaseWindowFocus(ctx, child)
+	}
 }

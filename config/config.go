@@ -46,6 +46,10 @@ type LoginConfig struct {
 	Password  string
 	AutoLogin bool
 	CharSlot  int
+	KeepID    bool
+	// SavedUsername remembers the account name between sessions when
+	// KeepID is set (upstream).
+	SavedUsername string
 	// Debug-only switches for title-screen profiling (?nobg=1 / ?nowin=1):
 	// draw the screen without the background art or without any window.
 	DebugNoBackground bool
@@ -228,6 +232,24 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 	// Native builds write the user goro.ini; web builds store the same ini
 	// text in localStorage, where it survives page reloads.
 	return writeUserSettings(values)
+}
+
+// SaveLoginID remembers only the ID, independently of explicit login
+// credentials. It shares the settings store, so on web this lands in
+// localStorage next to the gameplay settings.
+func SaveLoginID(username string, keep bool) (string, error) {
+	if !keep {
+		username = ""
+	}
+	if strings.ContainsAny(username, "\r\n\x00") {
+		return "", fmt.Errorf("login ID must be a single line without NUL characters")
+	}
+	return writeUserSettings(map[string]map[string]string{
+		"login": {
+			"keep_id":        formatINIValueBool(keep),
+			"saved_username": `"` + username + `"`,
+		},
+	})
 }
 
 func defaultConfig() Config {
@@ -414,6 +436,10 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Login.AutoLogin)
 	case "login.charslot":
 		return setInt(value, &cfg.Login.CharSlot)
+	case "login.keepid":
+		return setBool(value, &cfg.Login.KeepID)
+	case "login.savedusername":
+		cfg.Login.SavedUsername = value
 	case "audio.bgm":
 		return setBool(value, &cfg.Audio.BGM)
 	case "audio.noaudio":
@@ -517,7 +543,7 @@ func validateConfig(cfg *Config) error {
 }
 
 func upsertINIValues(src string, values map[string]map[string]string) string {
-	sectionOrder := []string{"window", "render", "audio", "gameplay"}
+	sectionOrder := []string{"window", "render", "audio", "gameplay", "login"}
 	seenSections := make(map[string]bool)
 	written := make(map[string]map[string]bool)
 	for section := range values {
@@ -575,7 +601,7 @@ func upsertINIValues(src string, values map[string]map[string]string) string {
 	}
 	flushMissing(currentSection)
 	for _, section := range sectionOrder {
-		if seenSections[section] {
+		if _, ok := values[section]; !ok || seenSections[section] {
 			continue
 		}
 		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
@@ -588,7 +614,7 @@ func upsertINIValues(src string, values map[string]map[string]string) string {
 }
 
 func sortedINIKeys(values map[string]string) []string {
-	preferred := []string{"fullscreen", "vsync", "fps", "bgm_volume", "sfx_volume", "no_shift", "no_ctrl"}
+	preferred := []string{"fullscreen", "vsync", "fps", "bgm_volume", "sfx_volume", "no_shift", "no_ctrl", "keep_id", "saved_username"}
 	keys := make([]string, 0, len(values))
 	seen := make(map[string]bool, len(values))
 	for _, key := range preferred {

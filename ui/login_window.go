@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/gogpu/ui/core/checkbox"
 	"github.com/gogpu/ui/core/textfield"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
@@ -19,12 +20,14 @@ type LoginWindowCallbacks struct {
 type LoginWindow struct {
 	Username string
 	Password string
+	KeepID   bool
 
 	Window
 	layout            loginWindowLayout
 	callbacks         LoginWindowCallbacks
 	user              *textfield.Widget
 	password          *textfield.Widget
+	keep              *checkbox.Widget
 	advanceToPassword bool
 }
 
@@ -36,11 +39,12 @@ const (
 	loginWindowFieldH        = 22
 )
 
-func NewLoginWindow(ctx client.Context, username, password string, callbacks LoginWindowCallbacks) *LoginWindow {
+func NewLoginWindow(ctx client.Context, username, password string, keepID bool, callbacks LoginWindowCallbacks) *LoginWindow {
 	layout := loginWindowLayoutForContext(ctx)
 	w := &LoginWindow{
 		Username:  username,
 		Password:  password,
+		KeepID:    keepID,
 		layout:    layout,
 		callbacks: callbacks,
 	}
@@ -150,6 +154,7 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 		}
 	}
 	userFocused, passwordFocused := w.fieldFocus()
+	keepFocused := w.keep != nil && w.keep.IsFocused()
 	username, passwordValue := w.fieldValues()
 	user := rotheme.TextField(
 		username,
@@ -180,6 +185,12 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 	password.SetFocused(passwordFocused)
 	w.user = user
 	w.password = password
+	w.keep = rotheme.Checkbox(
+		checkbox.LabelOpt("Keep"),
+		checkbox.Checked(w.KeepID),
+		checkbox.OnToggle(func(keep bool) { w.KeepID = keep }),
+	)
+	w.keep.SetFocused(keepFocused)
 	labelW := float32(loginWindowFieldLeft - 36)
 	fieldW := float32(w.layout.W - loginWindowFieldLeft - loginWindowFieldRightPad)
 	fieldH := float32(loginWindowFieldH)
@@ -215,6 +226,13 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 						Height(fieldH),
 					primitives.Box(password).
 						Width(fieldW).
+						Height(fieldH),
+				).
+					CrossAlign(primitives.CrossAxisCenter).
+					Gap(12),
+				primitives.HBox(
+					primitives.Box().Width(labelW),
+					primitives.Box(w.keep).
 						Height(fieldH),
 				).
 					CrossAlign(primitives.CrossAxisCenter).

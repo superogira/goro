@@ -256,7 +256,7 @@ func (m *WorldMode) drawActorCart3D(screen *render.Frame, ctx client.Context, pr
 
 func (m *WorldMode) drawActorCartShadow3D(screen *render.Frame, ctx client.Context, projection sceneProjection, entry sceneActorDrawEntry, cameraYaw float64, now time.Time) bool {
 	actor := entry.actor
-	if !entry.castShadow || entry.hidden || m.shadowView == nil || m.shadowViewMiss || !res.HasPlayerJobToken(int(actor.Job)) {
+	if !entry.castShadow || entry.stealth == stealthHidden || m.shadowView == nil || m.shadowViewMiss || !res.HasPlayerJobToken(int(actor.Job)) {
 		return false
 	}
 	if hasCart, _ := actorCartState(actor); !hasCart {

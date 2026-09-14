@@ -115,6 +115,10 @@ func (w *CharacterWindow) Update(ctx client.Context) bool {
 	if w == nil || ctx.Session == nil {
 		return false
 	}
+	if w.width == 0 {
+		w.width, w.height = characterWindowWidth, characterWindowHeight
+		w.x, w.y = characterWindowX, characterWindowY
+	}
 	if hudWebEnabled() {
 		hudWebInstallHooks()
 		if !w.open && !w.dismissed {

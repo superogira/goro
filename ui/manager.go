@@ -132,6 +132,15 @@ func (m *Manager) RaiseOverlay(root widget.Widget) {
 	m.raiseOverlay(root)
 }
 
+func (m *Manager) TopEscapeOverlay() widget.Widget {
+	for i := len(m.overlays) - 1; i >= 0; i-- {
+		if window, ok := m.overlays[i].(*positionedOverlay); ok && window.closeOnEsc {
+			return m.overlays[i]
+		}
+	}
+	return nil
+}
+
 func (m *Manager) apply() {
 	if m.root == nil {
 		m.root = newOverlayRoot(m.overlays)
@@ -157,6 +166,15 @@ func (m *Manager) apply() {
 	// SetUIRoot/SetRoot forces a full repaint AND wipes the shared image
 	// cache, turning every window open/close into a screen-wide raster
 	// stall (very visible as a hitch on the web build).
+	//
+	// A window refresh unpublishes and re-adds its root in the same call:
+	// unmounting the old tree clears focus when the focused widget (a chat
+	// input mid-typing) lives inside it. Capture it first and re-request it
+	// afterwards when the refreshed tree still contains the same widget.
+	var focused widget.Widget
+	if ctx := windowWidgetContext(client.Context{UIApp: m.app}); ctx != nil {
+		focused = ctx.FocusedWidget()
+	}
 	oldChildren := make([]widget.Widget, len(m.root.children))
 	copy(oldChildren, m.root.children)
 	wasChild := func(target widget.Widget) bool {
@@ -216,6 +234,31 @@ func (m *Manager) apply() {
 			layoutApp.InvalidateLayout()
 		}
 	}
+
+	if focused != nil && overlayContainsWidget(m.root, focused) {
+		if ctx := windowWidgetContext(client.Context{UIApp: m.app}); ctx != nil {
+			ctx.RequestFocus(focused)
+		}
+	}
+}
+
+// overlayContainsWidget reports whether target is part of root's subtree. The
+// positionedOverlay branch descends through the child field rather than
+// Children(): a freshly published overlay still has damage pending, and
+// Children() hides the subtree until the next draw.
+func overlayContainsWidget(root, target widget.Widget) bool {
+	if root == target {
+		return true
+	}
+	if overlay, ok := root.(*positionedOverlay); ok {
+		return overlay.child != nil && overlayContainsWidget(overlay.child, target)
+	}
+	for _, child := range root.Children() {
+		if overlayContainsWidget(child, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func overlayBounds(w widget.Widget) geometry.Rect {

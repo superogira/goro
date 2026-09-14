@@ -280,7 +280,7 @@ func (m *WorldMode) drawSceneActorFalcons(screen *render.Frame, ctx client.Conte
 		}
 		activeOwners[entry.actor.ID] = struct{}{}
 		alpha := 1.0
-		if entry.hidden {
+		if entry.stealth == stealthHidden {
 			alpha = 0.35
 		}
 		alpha *= m.actorVisualAlpha(entry.actor.ID, now)

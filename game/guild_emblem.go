@@ -228,7 +228,7 @@ func (m *WorldMode) drawSiegeGuildEmblems(screen *render.Frame, ctx client.Conte
 
 func siegeActorShowsGuildEmblem(entry sceneActorDrawEntry) bool {
 	const hiddenEffectMask = db.EffectStateHide | db.EffectStateCloak | db.EffectStateInvisible | db.EffectStateChasewalk
-	return !entry.hidden && entry.actor.EffectState&hiddenEffectMask == 0 && entry.actor.GuildID != 0 && entry.actor.EmblemVersion != 0
+	return entry.stealth != stealthHidden && entry.actor.EffectState&hiddenEffectMask == 0 && entry.actor.GuildID != 0 && entry.actor.EmblemVersion != 0
 }
 
 func (m *WorldMode) siegeGuildEmblemAnchor(ctx client.Context, projection sceneProjection, now time.Time, entry sceneActorDrawEntry) (float64, float64) {

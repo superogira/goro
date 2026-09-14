@@ -59,7 +59,7 @@ type MailWindow struct {
 	readBodyField                         *rotheme.TextAreaWidget
 	readWindow                            Window
 	ctx                                   Context
-	itemInfo                              *ItemInfoWindow
+	itemInfo                              *ItemWindows
 	inbox                                 []network.MailEntry
 	message                               *network.MailMessage
 	page                                  int
@@ -110,7 +110,7 @@ func (w *MailWindow) requestClose() {
 	w.actions = append(w.actions, MailAction{Kind: MailActionClose})
 }
 
-func (w *MailWindow) Update(ctx Context, itemInfo *ItemInfoWindow) bool {
+func (w *MailWindow) Update(ctx Context, itemInfo *ItemWindows) bool {
 	w.ctx, w.itemInfo = ctx, itemInfo
 	if w.UpdateModal(ctx) {
 		return true

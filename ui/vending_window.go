@@ -157,7 +157,7 @@ func (w *VendingWindow) ApplySoldItem(ctx Context, sold network.VendingSoldItem)
 	w.refresh(ctx)
 }
 
-func (w *VendingWindow) Update(ctx Context, itemInfo *ItemInfoWindow) bool {
+func (w *VendingWindow) Update(ctx Context, itemInfo *ItemWindows) bool {
 	if ctx.Input == nil || w.mode == vendingModeNone {
 		return false
 	}
@@ -166,6 +166,21 @@ func (w *VendingWindow) Update(ctx Context, itemInfo *ItemInfoWindow) bool {
 	}
 	if w.rightWindow.Update(ctx) {
 		w.rightWindow.Publish(ctx)
+	}
+	// Escape on the vending windows closes the store: the setup sends a
+	// cancel, the own store sends a close (upstream). Both must yield
+	// first when another window is above — the embedded windows route
+	// through the manager's TopEscapeOverlay.
+	if w.mode != vendingModeNone && ctx.Input.JustPressed(input.KeyEscape) {
+		if top := topEscapeOverlay(ctx); top != nil && top != w.leftWindow.published && top != w.rightWindow.published {
+			return false
+		}
+		if w.mode == vendingModeSetup {
+			w.cancel(ctx)
+		} else {
+			w.closeOwnStore(ctx)
+		}
+		return true
 	}
 	if w.handlePointer(ctx, itemInfo) {
 		return true
@@ -514,7 +529,7 @@ func (w *VendingWindow) syncPriceInput() {
 	w.priceField = nil
 }
 
-func (w *VendingWindow) handlePointer(ctx Context, itemInfo *ItemInfoWindow) bool {
+func (w *VendingWindow) handlePointer(ctx Context, itemInfo *ItemWindows) bool {
 	if ctx.Input == nil {
 		return false
 	}

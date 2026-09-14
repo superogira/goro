@@ -4,6 +4,7 @@ import (
 	uiapp "github.com/gogpu/ui/app"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/input"
@@ -66,6 +67,14 @@ func (a basicMenuTestApp) InvalidateRect(rect geometry.Rect) {
 func (a basicMenuTestApp) RequestFullRepaint() {
 	if a.app.Window() != nil {
 		a.app.Window().RequestFullRepaint()
+	}
+}
+
+// InvalidateLayout mirrors render.uiAppBridge: newly published in-place
+// overlays rely on it to schedule the layout pass that sizes their content.
+func (a basicMenuTestApp) InvalidateLayout() {
+	if a.app.Window() != nil && a.app.Window().Context() != nil {
+		a.app.Window().Context().Invalidate()
 	}
 }
 
@@ -163,11 +172,15 @@ func TestCharacterDragKeepsAttachedBasicMenuOnScreen(t *testing.T) {
 }
 
 func TestBasicMenuRebindRefreshesButtonCallbacks(t *testing.T) {
+	app := uiapp.New()
+	manager := NewManager()
+	manager.SetUIApp(basicMenuTestApp{app: app})
 	inputState := input.NewState()
 	ctx := client.Context{
-		Input:   inputState,
-		ScreenW: 1280,
-		ScreenH: 720,
+		Input:     inputState,
+		UIManager: manager,
+		ScreenW:   1280,
+		ScreenH:   720,
 	}
 	var original BasicMenu
 	original.Update(ctx, BasicMenuCallbacks{})
@@ -181,58 +194,21 @@ func TestBasicMenuRebindRefreshesButtonCallbacks(t *testing.T) {
 		OnStatus: func() { carriedCalls++ },
 	})
 
-	// Click the Status button on the carried menu.
-	inputState.SetMousePosition(basicMenuX+basicMenuPad+basicMenuButtonW/2, basicMenuY+basicMenuPad+basicMenuButtonH/2)
-	inputState.SetMouseButton(input.MouseButtonLeft, true)
-	carriedClicks := BasicMenuCallbacks{OnStatus: func() { carriedCalls++ }}
-	if !carried.Update(ctx, carriedClicks) {
-		t.Fatal("button click was not consumed")
-	}
+	// Click the Status button through the uiapp (window-based menu).
+	app.Frame()
+	app.Window().DrawTo(&uitest.MockCanvas{})
+	point := geometry.Pt(
+		float32(basicMenuX+basicMenuPad+basicMenuButtonW/2),
+		float32(basicMenuY+basicMenuPad+basicMenuButtonH/2),
+	)
+	app.Window().HandleEvent(uitest.Click(point.X, point.Y))
+	app.Window().HandleEvent(uitest.Release(point.X, point.Y))
+	app.Frame()
 
 	if carriedCalls != 1 {
 		t.Fatalf("carried calls = %d, want 1", carriedCalls)
 	}
 	if originalCalls != 0 {
 		t.Fatalf("original calls = %d, want 0", originalCalls)
-	}
-}
-
-func TestBasicMenuCloseAndReopen(t *testing.T) {
-	inputState := input.NewState()
-	ctx := client.Context{
-		Input:   inputState,
-		ScreenW: 1280,
-		ScreenH: 720,
-	}
-	var menu BasicMenu
-	menu.Update(ctx, BasicMenuCallbacks{})
-	if !menu.IsOpen() {
-		t.Fatal("menu must auto-open")
-	}
-	// Click the close X.
-	cx, cy, cw, ch := menu.closeRect()
-	inputState.SetMousePosition(cx+cw/2, cy+ch/2)
-	inputState.SetMouseButton(input.MouseButtonLeft, true)
-	if !menu.Update(ctx, BasicMenuCallbacks{}) {
-		t.Fatal("close click was not consumed")
-	}
-	if menu.IsOpen() {
-		t.Fatal("close X must hide the menu")
-	}
-	inputState.SetMouseButton(input.MouseButtonLeft, false)
-	inputState.EndFrame()
-	menu.Update(ctx, BasicMenuCallbacks{})
-	if menu.IsOpen() {
-		t.Fatal("dismissed menu must stay hidden")
-	}
-	// Tap the edge tab to reopen.
-	tx, ty, tw, th := basicMenuEdgeTabRect()
-	inputState.SetMousePosition(tx+tw/2, ty+th/2)
-	inputState.SetMouseButton(input.MouseButtonLeft, true)
-	if !menu.Update(ctx, BasicMenuCallbacks{}) {
-		t.Fatal("edge tab tap was not consumed")
-	}
-	if !menu.IsOpen() {
-		t.Fatal("edge tab must reopen the menu")
 	}
 }

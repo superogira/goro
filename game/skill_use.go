@@ -241,6 +241,9 @@ const skillChangeCart = 154
 const skillGroundTextMaxBytes = 79
 
 func (c skillController) Use(ctx client.Context, skill session.Skill, source string) error {
+	if err := checkStealthSkill(ctx, skill.ID, 0); err != nil {
+		return err
+	}
 	if playerIsDead(ctx) {
 		return fmt.Errorf("player is dead")
 	}
@@ -289,6 +292,9 @@ func (c skillController) Use(ctx client.Context, skill session.Skill, source str
 }
 
 func (c skillController) SendToID(ctx client.Context, skill session.Skill, target uint32, source string) error {
+	if err := checkStealthSkill(ctx, skill.ID, target); err != nil {
+		return err
+	}
 	if playerIsDead(ctx) {
 		return fmt.Errorf("player is dead")
 	}
@@ -320,6 +326,9 @@ func (c skillController) SendToID(ctx client.Context, skill session.Skill, targe
 }
 
 func (c skillController) SendToGround(ctx client.Context, skill session.Skill, x, y int, source string) error {
+	if err := checkStealthSkill(ctx, skill.ID, 0); err != nil {
+		return err
+	}
 	if playerIsDead(ctx) {
 		return fmt.Errorf("player is dead")
 	}

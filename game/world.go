@@ -808,6 +808,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		if m.cancelPetCaptureFromInput(ctx) {
 			return nil, nil
 		}
+		// DOM item description/artwork panels sit above every game window
+		// on the web build: Escape closes their topmost panel first, before
+		// the escape menu can open. No-op on native.
+		if gameui.UpdateItemInfoWebWindows(ctx) {
+			return nil, nil
+		}
 		if m.openEscapeMenuFromInput(ctx) {
 			return nil, nil
 		}
@@ -998,6 +1004,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	if m.ui.settingsWindow.Update(ctx) {
+		return nil, nil
+	}
+	// DOM item description/artwork panels sit above every game window in
+	// the web build: their Escape (close topmost panel) must run before the
+	// escape menu can consume the key. No-op on native.
+	if gameui.UpdateItemInfoWebWindows(ctx) {
 		return nil, nil
 	}
 	if !dead && m.ui.escapeMenu.Update(ctx) {

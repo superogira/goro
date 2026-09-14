@@ -13,7 +13,6 @@ import (
 	"sync"
 	"syscall/js"
 
-	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 )
@@ -336,73 +335,6 @@ func inventoryWebSync(open bool, tab int, items []session.InventoryItem, icons [
 		arr.SetIndex(i, entry)
 	}
 	obj.Set("items", arr)
-	fn.Invoke(obj)
-}
-
-// itemInfoWebShow opens the DOM item-info panel for one item: title with
-// refine, description lines, and card slots. Shared by the inventory and
-// equipment windows.
-func itemInfoWebShow(ctx Context, item session.InventoryItem) {
-	fn := js.Global().Get("goroItemInfoSync")
-	if fn.Type() != js.TypeFunction {
-		return
-	}
-	title := inventoryItemDisplayName(ctx.Resources, item)
-	if item.Refine > 0 {
-		title = fmt.Sprintf("+%d %s", item.Refine, title)
-	}
-	desc, _ := ctx.Resources.ItemDescription(int(item.ItemID), item.Identified)
-	obj := js.Global().Get("Object").New()
-	obj.Set("title", title)
-	obj.Set("descHTML", itemInfoWebDescHTML(strings.Join(desc, "\n")))
-	cards := js.Global().Get("Array").New(0)
-	for _, cardID := range item.Cards {
-		if cardID == 0 {
-			continue
-		}
-		if name, ok := ctx.Resources.ItemDisplayName(int(cardID), true); ok {
-			cards.Call("push", name)
-		}
-	}
-	obj.Set("cards", cards)
-	// Card slots footer, equipment only: filled frames show equipped
-	// cards, dashed frames mark open slots. Items with no slots — and
-	// non-gear entirely — send no slots array, so the page renders no
-	// footer at all (matching the classic client).
-	slotCount, _ := ctx.Resources.ItemSlotCount(int(item.ItemID))
-	if item.Type == db.ItemTypeWeapon || item.Type == db.ItemTypeArmor || item.Type == db.ItemTypeShadowGear {
-		slots := js.Global().Get("Array").New(slotCount)
-		for i := 0; i < slotCount; i++ {
-			entry := js.Global().Get("Object").New()
-			cardID := uint16(0)
-			if i < len(item.Cards) {
-				cardID = item.Cards[i]
-				if cardID == 0x00ff || cardID == 0x00fe || cardID == 0xff00 {
-					cardID = 0
-				}
-			}
-			if cardID != 0 {
-				entry.Set("state", "card")
-				if name, ok := ctx.Resources.ItemDisplayName(int(cardID), true); ok {
-					entry.Set("name", name)
-				}
-				if cardRes, ok := ctx.Resources.ItemResourceName(int(cardID), true); ok {
-					entry.Set("icon", collectionWebIcon(ctx, cardRes, cardID, true))
-				}
-			} else {
-				entry.Set("state", "empty")
-			}
-			slots.SetIndex(i, entry)
-		}
-		obj.Set("slots", slots)
-	}
-	// The illustration (collection art, the big picture the canvas window
-	// showed at 75x100) rides along as a cached data URL.
-	if resourceName, ok := ctx.Resources.ItemResourceName(int(item.ItemID), item.Identified); ok {
-		obj.Set("icon", collectionWebIcon(ctx, resourceName, item.ItemID, item.Identified))
-	} else {
-		obj.Set("icon", "")
-	}
 	fn.Invoke(obj)
 }
 

@@ -37,6 +37,13 @@ func (m *LoginMode) updateCharacterSelectInput(ctx client.Context) {
 			m.activateCharacterSelectSlot(ctx, m.selectedSlot, time.Now())
 		}
 	}
+	if charSelectWebEnabled() {
+		// The DOM layer owns rendering and button taps; keyboard shortcuts
+		// above still drive the same selection state it displays.
+		m.drainCharSelectWebActions(ctx)
+		m.syncCharSelectWeb(ctx)
+		return
+	}
 	m.showCharacterSelectWindow(ctx)
 	if m.charSelectWindow != nil {
 		m.charSelectWindow.Update(ctx)
@@ -45,7 +52,7 @@ func (m *LoginMode) updateCharacterSelectInput(ctx client.Context) {
 }
 
 func (m *LoginMode) updateCharacterSelectWindow(ctx client.Context) {
-	if ctx.Config.Headless {
+	if ctx.Config.Headless || charSelectWebEnabled() {
 		return
 	}
 	opts := gameui.CharacterSelectWindowOptions{
@@ -127,6 +134,13 @@ func (m *LoginMode) showCharacterSelectWindow(ctx client.Context) {
 }
 
 func (m *LoginMode) updateCharacterDelete(ctx client.Context) bool {
+	if charSelectWebEnabled() {
+		// The DOM layer mirrors the delete flow (confirm, then email key);
+		// its actions drive the same packet path as the canvas modals.
+		m.drainCharSelectWebActions(ctx)
+		m.syncCharSelectWeb(ctx)
+		return m.charDeleteWebStep != 0
+	}
 	if m.charDeleteConfirm.Update(ctx) {
 		return true
 	}
@@ -150,6 +164,11 @@ func (m *LoginMode) openCharacterDeleteConfirm(ctx client.Context) {
 		return
 	}
 	m.deleteCharID = character.ID
+	if charSelectWebEnabled() {
+		m.charDeleteWebStep = 1
+		m.charDeleteWebName = character.Name
+		return
+	}
 	m.charDeleteConfirm.Open(ctx, "Delete Character", fmt.Sprintf("Delete %s?", character.Name), func() {
 		m.charDeletePrompt.Open(ctx, "Delete Character", "Email", "Email", charDeleteKeyMaxBytes)
 	}, nil)
@@ -198,6 +217,7 @@ func (m *LoginMode) applyDeleteCharacterAccept(ctx client.Context) {
 		}
 	}
 	m.deleteCharID = 0
+	m.charDeleteWebStep = 0
 	if deletedName != "" {
 		m.status = fmt.Sprintf("deleted character %s", deletedName)
 	} else {
@@ -208,18 +228,27 @@ func (m *LoginMode) applyDeleteCharacterAccept(ctx client.Context) {
 
 func (m *LoginMode) applyDeleteCharacterRefuse(ctx client.Context, code uint8) {
 	m.deleteCharID = 0
+	m.charDeleteWebStep = 0
 	m.status = describeDeleteCharacterRefuse(code)
+	if charSelectWebEnabled() {
+		// The DOM layer shows the status line; a canvas alert would be
+		// invisible under it and swallow input.
+		return
+	}
 	m.charDeleteConfirm.OpenAlert(ctx, "Delete Character", m.status, nil)
 }
 
 func (m *LoginMode) cancelCharacterSelect(ctx client.Context) {
 	m.charSelectWindow = nil
+	m.charDeleteWebStep = 0
 	m.disableCharServerPing()
 	m.startPhaseFade(loginPhaseAccount, time.Now())
 	if ctx.Network != nil {
 		ctx.Network.Close()
 	}
 	m.status = "char select cancelled"
+	// Push the phase change so the DOM layer hides immediately.
+	m.syncCharSelectWeb(ctx)
 }
 
 func (m *LoginMode) prepareCharacterSelectFromSession(ctx client.Context) {

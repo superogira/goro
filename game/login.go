@@ -61,6 +61,12 @@ type LoginMode struct {
 	charDeleteConfirm   gameui.ConfirmModal
 	charDeletePrompt    gameui.TextPromptWindow
 	deleteCharID        uint32
+	// DOM character select state (web build; plain data on native).
+	charWebBG           string
+	charWebSyncKey      string
+	charPreviewWebURLs  map[uint32]string
+	charDeleteWebStep   int
+	charDeleteWebName   string
 	loginPingActive     bool
 	nextLoginPing       time.Time
 	charPingActive      bool
@@ -211,6 +217,9 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	}
 	if fading && m.phase == loginPhaseCharacter {
 		m.showCharacterSelectWindow(ctx)
+		// The enter-world fade rises to full: this sync is what finally
+		// hides the DOM layer (display flips once fade >= 0.999).
+		m.syncCharSelectWeb(ctx)
 	}
 
 	m.maybeSendLoginServerPing(ctx, now)
@@ -610,7 +619,7 @@ func (m *LoginMode) Draw(ctx client.Context, screen *render.Frame) {
 	// Cleared every frame and re-raised by drawLoadingScreen when a load
 	// cover is actually drawn; memoized on the page side.
 	render.SetWebLoading(false)
-	if m.skipCanvasTitleBackground() {
+	if m.skipCanvasTitleBackground() || m.skipCanvasCharSelectBackground() {
 		return
 	}
 	m.drawBackground(ctx, screen)

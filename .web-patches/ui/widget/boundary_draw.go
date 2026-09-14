@@ -44,6 +44,22 @@ func GetSceneRecorderFactory() SceneRecorder {
 	return sceneRecorderFactory
 }
 
+// sceneReplayCapable is implemented by canvases that consume
+// Canvas.ReplayScene for real (the render canvases). Test canvases discard
+// replays — on those, boundary widgets must draw directly or their pixels
+// never appear in the recorded output.
+type sceneReplayCapable interface {
+	SceneReplayCapable() bool
+}
+
+// canvasCanReplayScenes reports whether drawing a repaint boundary into
+// this canvas can go through the record-and-replay cache. Canvases that
+// discard ReplayScene (uitest.MockCanvas) get a direct draw instead.
+func canvasCanReplayScenes(canvas Canvas) bool {
+	capable, ok := canvas.(sceneReplayCapable)
+	return ok && capable.SceneReplayCapable()
+}
+
 // boundaryWidget is the interface that widgets with WidgetBase boundary
 // support must satisfy. All methods are provided by WidgetBase embedding.
 type boundaryWidget interface {
@@ -70,6 +86,12 @@ type boundaryWidget interface {
 // This is called from drawTreeRecursive when the widget is a boundary.
 // If no SceneRecorder factory is registered, falls back to normal draw.
 func drawBoundaryWidget(w Widget, ctx Context, canvas Canvas, stats *DrawStats) { //nolint:gocyclo,cyclop // boundary recording is inherently complex (cache hit/miss, dirty callback, size change, screen origin, device scale)
+	if !canvasCanReplayScenes(canvas) {
+		// This canvas discards scene replays (test double): draw directly
+		// so the widget's pixels still land in the recorded output.
+		w.Draw(ctx, canvas)
+		return
+	}
 	bw, ok := w.(boundaryWidget)
 	if !ok || sceneRecorderFactory == nil {
 		// Fallback: draw normally without boundary caching.

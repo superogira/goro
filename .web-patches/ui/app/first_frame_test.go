@@ -611,10 +611,11 @@ func TestTrackingCanvas_ReplaySceneIsNoOp(t *testing.T) {
 	}
 }
 
-// TestFirstFrame_RootBoundaryMakesTrackingCanvasBlind verifies that SetRoot
-// auto-enables RepaintBoundary on root (ADR-024 Phase 3), which causes
-// trackingCanvas to miss all DrawText calls (ReplayScene is no-op).
-// This documents WHY the old first_frame tests fail with root boundary.
+// TestFirstFrame_RootBoundaryMakesTrackingCanvasBlind verifies the fallback
+// for canvases that discard scene replays: SetRoot auto-enables the root
+// RepaintBoundary (ADR-024 Phase 3), but a non-replay-capable canvas (test
+// doubles) must still see the widget pixels — drawBoundaryWidget skips the
+// record-and-replay cache and draws directly.
 func TestFirstFrame_RootBoundaryMakesTrackingCanvasBlind(t *testing.T) {
 	uiApp := New()
 	w := uiApp.Window()
@@ -634,10 +635,10 @@ func TestFirstFrame_RootBoundaryMakesTrackingCanvasBlind(t *testing.T) {
 	w.Frame()
 	w.DrawTo(canvas)
 
-	// trackingCanvas.ReplayScene is no-op → zero DrawText calls.
-	if len(canvas.drawTextCalls) != 0 {
-		t.Errorf("expected 0 DrawText calls with root boundary + trackingCanvas, got %d",
-			len(canvas.drawTextCalls))
+	// trackingCanvas discards replays → the boundary falls back to direct
+	// draw → the text IS visible to the test canvas.
+	if len(canvas.drawTextCalls) == 0 {
+		t.Error("expected DrawText calls via the direct-draw fallback for a non-replay canvas")
 	}
 }
 

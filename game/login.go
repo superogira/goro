@@ -149,19 +149,21 @@ func (m *LoginMode) Enter(ctx client.Context) Mode {
 	if m.password == "" {
 		m.password = ctx.Config.Login.Password
 	}
-	m.loadBackground(ctx)
-	m.loadCharacterSelectSkin(ctx)
-	m.cursor.ensureLoaded(ctx)
-	// Warm the button-click sound while the title screen idles: it plays on
-	// login confirm and character selection, and a first press fetching its
-	// wav mid-frame is a visible stutter. Native Prefetch is a no-op.
-	if ctx.Resources != nil {
-		ctx.Resources.Prefetch(gameaudio.SFXPathCandidates(loginConfirmSFX))
-		// Item metadata tables name every drop's sprite; warming the fetch
-		// here gives the tiny download the whole login/char-select idle time.
-		ctx.Resources.Prefetch(res.ItemMetadataPrefetchGroups()...)
+	if !ctx.Config.Headless {
+		m.loadBackground(ctx)
+		m.loadCharacterSelectSkin(ctx)
+		m.cursor.ensureLoaded(ctx)
+		// Warm the button-click sound while the title screen idles: it plays on
+		// login confirm and character selection, and a first press fetching its
+		// wav mid-frame is a visible stutter. Native Prefetch is a no-op.
+		if ctx.Resources != nil {
+			ctx.Resources.Prefetch(gameaudio.SFXPathCandidates(loginConfirmSFX))
+			// Item metadata tables name every drop's sprite; warming the fetch
+			// here gives the tiny download the whole login/char-select idle time.
+			ctx.Resources.Prefetch(res.ItemMetadataPrefetchGroups()...)
+		}
+		render.SetCursorMode(render.CursorModeHidden)
 	}
-	render.SetCursorMode(render.CursorModeHidden)
 	m.playLoginBGM(ctx)
 	if m.phase == loginPhaseCharacter {
 		m.prepareCharacterSelectFromSession(ctx)

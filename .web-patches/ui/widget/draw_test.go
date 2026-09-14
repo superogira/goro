@@ -349,8 +349,12 @@ func TestDrawTree_SetsDrawStatsOnContext(t *testing.T) {
 	}
 }
 
-// noopCanvas is a minimal Canvas implementation for testing.
+// noopCanvas is a minimal Canvas implementation for testing. It opts into
+// scene replay capability so boundary cache-mechanics tests exercise the
+// record-and-replay path rather than the direct-draw fallback.
 type noopCanvas struct{}
+
+func (c *noopCanvas) SceneReplayCapable() bool { return true }
 
 func (c *noopCanvas) Clear(Color)                                                         {}
 func (c *noopCanvas) DrawRect(geometry.Rect, Color)                                       {}

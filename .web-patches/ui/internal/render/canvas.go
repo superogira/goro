@@ -709,6 +709,10 @@ func (c *Canvas) FillSVGPath(svgData string, viewBox float32, bounds geometry.Re
 // This is the retained-mode replay path (ADR-007): RepaintBoundary caches
 // child drawing as a scene.Scene and replays it on cache hit instead of
 // re-executing child.Draw().
+// SceneReplayCapable marks this canvas as consuming scene replays for
+// real, letting repaint boundaries use their record-and-replay cache.
+func (c *Canvas) SceneReplayCapable() bool { return true }
+
 func (c *Canvas) ReplayScene(s widget.SceneCache) {
 	if s == nil {
 		return

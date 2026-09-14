@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -36,7 +37,12 @@ func main() {
 		glog.Fatalf("%v", err)
 	}
 
-	if err := render.Run(game, cfg.Window, cfg.Render); err != nil {
+	if cfg.Headless {
+		err = render.RunHeadless(context.Background(), game, cfg.Window)
+	} else {
+		err = render.Run(game, cfg.Window, cfg.Render)
+	}
+	if err != nil {
 		glog.Fatalf("%v", err)
 	}
 }

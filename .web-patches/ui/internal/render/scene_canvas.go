@@ -588,6 +588,10 @@ func (c *SceneCanvas) ClipBounds() geometry.Rect {
 // The child scene was recorded in local coordinates (0,0 = boundary origin).
 // AppendWithTranslation offsets all path coordinates by the current cumulative
 // transform offset, following the Vello pattern (encoding.rs:162-169).
+// SceneReplayCapable marks this canvas as consuming scene replays for
+// real, letting repaint boundaries use their record-and-replay cache.
+func (c *SceneCanvas) SceneReplayCapable() bool { return true }
+
 func (c *SceneCanvas) ReplayScene(s widget.SceneCache) {
 	if s == nil {
 		return

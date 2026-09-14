@@ -18,6 +18,29 @@ function tick()
 end
 ```
 
+## Headless mode
+
+Run the same scripts without a window or audio:
+
+```sh
+./goro --headless --data-dir ~/OldRO \
+  --username tester --password secret --char-slot 0 \
+  --script scripts/loot-and-attack.lua
+```
+
+`--headless` enables automatic login and requires credentials and a character
+slot (0–8). These can also come from the existing `[login]` configuration.
+As with `--autologin`, the first login server and first character server are
+selected. The script is optional; without one the client stays connected.
+
+Headless mode updates at 60 Hz without drawing or loading scene assets. It
+keeps the collision grid, game data, network updates, and Lua scripts. Combat
+uses server timings and existing fallback durations when no sprite is loaded.
+Stop the process with Ctrl+C.
+
+There is no automatic reconnect or Lua API for answering interactive dialogs.
+`--no-ui` only hides the graphical client's UI.
+
 ## API
 
 All functions are exposed through the global `goro` table.
@@ -159,7 +182,7 @@ Alias for `goro.attack(id)`.
 
 ### `goro.skill(id, skill[, level])`
 
-Requests an actor-targeted skill on the actor with this id. `skill` can be either a numeric skill id or a learned skill name such as `"AC_DOUBLE"` or `"AL_HEAL"`.
+Requests a skill on the actor with this id. `skill` can be either a numeric skill id or a learned skill name such as `"AC_DOUBLE"` or `"AL_HEAL"`. Self-targeted skills use `goro.player().id`, for example `goro.skill(goro.player().id, "AL_ANGELUS")`. Ground-targeted skills are not supported by this function.
 
 Returns `true` if the actor is a valid target for the learned skill, otherwise `false`. Enemy skills remain limited to enemies, while friendly skills can target nearby players, homunculi, and mercenaries.
 

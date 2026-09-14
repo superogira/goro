@@ -56,8 +56,8 @@ func TestHoverE2E_ButtonInBoundary_DirtyPropagation(t *testing.T) {
 	if root.CachedScene() == nil {
 		t.Fatal("root CachedScene should be non-nil after initial paint")
 	}
-	initialVersion := root.SceneCacheVersion()
-	t.Logf("initial: sceneDirty=%v, version=%d", root.IsSceneDirty(), initialVersion)
+	initialVersion := btn.SceneCacheVersion()
+	t.Logf("initial: button sceneDirty=%v, version=%d (root=%v)", btn.IsSceneDirty(), initialVersion, root.IsSceneDirty())
 
 	// Step 2: Verify button's parent chain is wired.
 	if btn.Parent() == nil {
@@ -89,12 +89,14 @@ func TestHoverE2E_ButtonInBoundary_DirtyPropagation(t *testing.T) {
 		t.Error("button should have needsRedraw=true after MouseEnter")
 	}
 
-	// Step 6: Verify dirty propagated to root boundary.
-	if !root.IsSceneDirty() {
-		t.Error("root boundary sceneDirty should be true after button hover — " +
-			"propagateDirtyUpward did not reach root boundary. " +
-			"Check: 1) button.Parent() wired, 2) root.IsRepaintBoundary(), " +
-			"3) InvalidateScene() called")
+	// Step 6: Verify dirty reached the nearest boundary. Buttons are their
+	// own repaint boundaries in this fork (button raster isolation), so the
+	// hover invalidates the BUTTON's scene — the root stays clean and never
+	// re-records.
+	if !btn.IsSceneDirty() {
+		t.Error("button boundary sceneDirty should be true after hover — " +
+			"propagateDirtyUpward did not reach the button's own boundary. " +
+			"Check: 1) button.IsRepaintBoundary(), 2) InvalidateScene() called")
 	}
 
 	// Step 7: Verify onBoundaryDirty callback fired.
@@ -107,12 +109,12 @@ func TestHoverE2E_ButtonInBoundary_DirtyPropagation(t *testing.T) {
 	invalidateRectCalled = false
 	PaintBoundaryLayersWithContext(root, nil, ctx)
 
-	newVersion := root.SceneCacheVersion()
+	newVersion := btn.SceneCacheVersion()
 	if newVersion <= initialVersion {
-		t.Errorf("SceneCacheVersion should increment after re-recording: "+
+		t.Errorf("button SceneCacheVersion should increment after re-recording: "+
 			"initial=%d, after=%d", initialVersion, newVersion)
 	}
-	t.Logf("after hover re-record: version=%d, sceneDirty=%v", newVersion, root.IsSceneDirty())
+	t.Logf("after hover re-record: button version=%d, sceneDirty=%v", newVersion, btn.IsSceneDirty())
 
 	// Step 9: Verify scene is clean after re-recording (ready for next frame).
 	if root.IsSceneDirty() {
@@ -191,9 +193,11 @@ func TestHoverE2E_DeepNesting_PropagatesUpward(t *testing.T) {
 	)
 	btn.Event(ctx, enterEvt)
 
-	if !root.IsSceneDirty() {
-		t.Error("root boundary should be scene-dirty after deep hover — " +
-			"propagateDirtyUpward failed to walk 3-level parent chain")
+	// Buttons are their own repaint boundaries in this fork, so the hover
+	// invalidates the button's own scene; the root stays clean.
+	if !btn.IsSceneDirty() {
+		t.Error("button boundary should be scene-dirty after deep hover — " +
+			"propagateDirtyUpward did not invalidate the button's own boundary")
 	}
 
 	if callbackCount == 0 {
@@ -272,14 +276,15 @@ func TestHoverE2E_WindowHandleEvent_FullChain(t *testing.T) {
 		t.Errorf("hovered widget = %T, want button", win.HoveredWidget())
 	}
 
-	// Verify root boundary is scene-dirty.
-	if sd, ok := win.Root().(sceneDirtyChecker); ok {
+	// Buttons are their own repaint boundaries in this fork: the hover
+	// invalidates the button's own scene. The root may stay clean.
+	if sd, ok := win.HoveredWidget().(sceneDirtyChecker); ok {
 		if !sd.IsSceneDirty() {
-			t.Error("root boundary should be scene-dirty after hover on button — " +
+			t.Error("button boundary should be scene-dirty after hover — " +
 				"the dirty propagation chain is broken")
 		}
 	} else {
-		t.Error("root does not implement IsSceneDirty")
+		t.Error("hovered button does not implement IsSceneDirty")
 	}
 
 	// Verify Window knows it needs redraw.

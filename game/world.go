@@ -544,6 +544,13 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	m.ui.npcDialog.ResetPublished(ctx)
 	m.ui.npcCutin.Clear()
 	ctx.World.Items = make(map[uint32]worldstate.FloorItem)
+	// Bots need the collision grid and map acknowledgement, but no scene assets.
+	if ctx.Config.Headless {
+		if ctx.World.MapName != "" {
+			_ = ctx.Network.SendLoadEndAck()
+		}
+		return nil
+	}
 	playerStatus := ""
 	character := ctx.Session.SelectedCharacter()
 	visualCharacter := localPlayerVisualCharacter(ctx)
@@ -728,20 +735,22 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// Status presentation must follow server updates even when a window or
 	// modal consumes input for the rest of the frame.
 	removeExpiredStatusEffects(ctx.Session, now)
-	m.ui.statusIcons.Update(ctx, now)
 	m.updateMail(ctx, now)
-	m.ui.pvpCounter.Update(ctx)
-	// The FPS/MEM HUD is a debug instrument (?stats=1 / -render-stats). Kept
-	// off by default: its 2Hz text refresh is a recurring dirty region that
-	// unions with other UI damage and amplifies partial repaints.
-	if ctx.Config.Render.Stats {
-		m.ui.perfHUD.Update(ctx)
-	}
 	progressBlocksActions := m.updateServerProgress(ctx, now)
-	if !progressBlocksActions && m.handleLevelUpNotificationAction(ctx, m.ui.levelUpNotifications.Update(ctx)) {
-		// The notification click belongs exclusively to the UI. Returning here
-		// prevents the same press from reaching the map after the icon closes.
-		return nil, nil
+	if !ctx.Config.Headless {
+		m.ui.statusIcons.Update(ctx, now)
+		m.ui.pvpCounter.Update(ctx)
+		// The FPS/MEM HUD is a debug instrument (?stats=1 / -render-stats). Kept
+		// off by default: its 2Hz text refresh is a recurring dirty region that
+		// unions with other UI damage and amplifies partial repaints.
+		if ctx.Config.Render.Stats {
+			m.ui.perfHUD.Update(ctx)
+		}
+		if !progressBlocksActions && m.handleLevelUpNotificationAction(ctx, m.ui.levelUpNotifications.Update(ctx)) {
+			// The notification click belongs exclusively to the UI. Returning here
+			// prevents the same press from reaching the map after the icon closes.
+			return nil, nil
+		}
 	}
 	if !progressBlocksActions {
 		m.updatePendingAttack(ctx, "update", false)
@@ -757,6 +766,18 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	m.cleanupVanishedActors(ctx, now)
 	m.processScheduledActorStops(ctx, now)
 	m.processScheduledWalkResumes(ctx, now)
+	if ctx.Config.Headless {
+		m.playDueScheduledSounds(ctx, now)
+		if !progressBlocksActions && m.mapFade.phase != mapFadeHold && m.mapFade.phase != mapFadePrewarm {
+			dead := playerIsDead(ctx)
+			m.updateBotInput(ctx, !dead)
+			if !dead {
+				m.updateCompanionAI(ctx, now)
+			}
+			m.updateBot(ctx, now)
+		}
+		return nil, nil
+	}
 	m.processActorMotionSounds(ctx, now)
 	m.processMapSounds(ctx, now)
 	m.playDueScheduledSounds(ctx, now)

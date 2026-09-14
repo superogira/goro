@@ -33,8 +33,10 @@ func charSelectWebEnabled() bool {
 // skipCanvasCharSelectBackground hides the canvas login background while
 // the DOM layer fully covers the character phase.
 func (m *LoginMode) skipCanvasCharSelectBackground() bool {
-	return charSelectWebEnabled() && m.phase == loginPhaseCharacter &&
-		m.fade.phase == loginFadeNone && !m.fade.enterWorld
+	if !charSelectWebEnabled() || m.fade.enterWorld || m.fade.phase != loginFadeNone {
+		return false
+	}
+	return m.phase == loginPhaseCharacter || m.phase == loginPhaseCreate
 }
 
 // drainCharSelectWebActions services the layer's "char:" actions: slot

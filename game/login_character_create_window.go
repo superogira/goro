@@ -52,6 +52,13 @@ const (
 )
 
 func (m *LoginMode) updateCharacterCreateInput(ctx client.Context) {
+	if charCreateWebEnabled() {
+		// The DOM layer owns rendering and form input; Escape still routes
+		// through the global phase escape before this runs.
+		m.drainCharCreateWebActions(ctx)
+		m.syncCharCreateWeb(ctx)
+		return
+	}
 	m.showCharacterCreateWindow(ctx)
 	if m.charCreateWindow != nil {
 		m.charCreateWindow.Update(ctx)
@@ -151,7 +158,7 @@ func (m *LoginMode) showCharacterCreateWindow(ctx client.Context) {
 }
 
 func (m *LoginMode) updateCharacterCreateWindow(ctx client.Context) {
-	if ctx.Config.Headless {
+	if ctx.Config.Headless || charCreateWebEnabled() {
 		return
 	}
 	opts := gameui.CharacterCreateWindowOptions{

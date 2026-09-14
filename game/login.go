@@ -67,6 +67,11 @@ type LoginMode struct {
 	charPreviewWebURLs  map[uint32]string
 	charDeleteWebStep   int
 	charDeleteWebName   string
+	// DOM character creation state (web build; plain data on native).
+	createWebBG           string
+	createWebSyncKey      string
+	createPreviewWebURL   string
+	createPreviewWebKey   charCreatePreviewKey
 	loginPingActive     bool
 	nextLoginPing       time.Time
 	charPingActive      bool
@@ -220,6 +225,9 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		// The enter-world fade rises to full: this sync is what finally
 		// hides the DOM layer (display flips once fade >= 0.999).
 		m.syncCharSelectWeb(ctx)
+	}
+	if fading && m.phase == loginPhaseCreate {
+		m.syncCharCreateWeb(ctx)
 	}
 
 	m.maybeSendLoginServerPing(ctx, now)
@@ -776,6 +784,10 @@ func (m *LoginMode) publishPhaseWindow(ctx client.Context) {
 	case loginPhaseCreate:
 		m.showCharacterCreateWindow(ctx)
 	}
+	// The landing phase is what finally hides the create layer: the fade
+	// swaps the phase before the create sync could observe a full cover,
+	// so push it once here (no-op unless the key changed).
+	m.syncCharCreateWeb(ctx)
 }
 
 func (m *LoginMode) clearLoginWindows(ctx client.Context) {

@@ -41,7 +41,7 @@ import (
 
 const (
 	fbIOCTLGetVarScreeninfo = 0x4600
-	fbIOCTLGetFixScreeninfo = 0x4601
+	fbIOCTLGetFixScreeninfo = 0x4602
 
 	evTypeKey = 0x01
 	evTypeAbs = 0x03
@@ -373,10 +373,13 @@ func probeFBGeometry(f *os.File) (fbGeometry, error) {
 
 	var fixBuf [80]byte
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), fbIOCTLGetFixScreeninfo, uintptr(unsafe.Pointer(&fixBuf[0]))); errno != 0 {
-		return geo, fmt.Errorf("FBIOGET_FSCREENINFO: %w", errno)
+		// Some fbdev drivers refuse the fixed-screeninfo ioctl; the
+		// variable info plus the classic packed layout is enough.
+		logger().Warn("fbdev: FBIOGET_FSCREENINFO failed, assuming packed layout", "errno", errno.Error())
+	} else {
+		geo.smemLen = int(binary.LittleEndian.Uint32(fixBuf[24:]))
+		geo.lineLength = int(binary.LittleEndian.Uint32(fixBuf[48:]))
 	}
-	geo.smemLen = int(binary.LittleEndian.Uint32(fixBuf[24:]))
-	geo.lineLength = int(binary.LittleEndian.Uint32(fixBuf[48:]))
 	if geo.lineLength == 0 {
 		geo.lineLength = geo.width * geo.bpp / 8
 	}

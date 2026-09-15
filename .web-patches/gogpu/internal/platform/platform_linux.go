@@ -192,6 +192,12 @@ type x11Platform struct {
 // newPlatformManager returns a PlatformManager for Linux.
 // Detects Wayland vs X11 from environment variables.
 func newPlatformManager() PlatformManager {
+	// Explicit fbdev selection for embedded handhelds that run without an
+	// X11/Wayland compositor (GOGPU_PLATFORM=fbdev).
+	if os.Getenv("GOGPU_PLATFORM") == "fbdev" {
+		logger().Info("platform selected", "type", "fbdev")
+		return newFBDevPlatform()
+	}
 	// Prefer Wayland if WAYLAND_DISPLAY is set
 	if os.Getenv("WAYLAND_DISPLAY") != "" {
 		logger().Info("platform selected", "type", "wayland", "WAYLAND_DISPLAY", os.Getenv("WAYLAND_DISPLAY"))

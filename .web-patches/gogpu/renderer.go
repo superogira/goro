@@ -271,6 +271,14 @@ func newRenderer(platWin platform.PlatformWindow, graphicsAPI types.GraphicsAPI,
 		transparent: transparent,
 	}
 
+	// fbdev windows have no GPU surface to present to: render into the
+	// headless software surface and blit the pixels to the framebuffer.
+	if hs, ok := platWin.(interface{ UseHeadlessSurface() bool }); ok && hs.UseHeadlessSurface() {
+		graphicsAPI = types.GraphicsAPISoftware
+		r.forceSoftwareAdapter = true
+		r.surfaceFormat = gputypes.TextureFormatBGRA8Unorm
+	}
+
 	// Phase 1: Create GPU instance with backend mask (may include multiple backends).
 	if err := r.initInstance(graphicsAPI); err != nil {
 		return nil, err
@@ -423,6 +431,18 @@ func (r *Renderer) initAdapterDevice(surfaceHint *wgpu.Surface) error {
 // createSurface creates the wgpu Surface from the window handles.
 // Does not configure dimensions — call configureSurface after device is ready.
 func (r *Renderer) createSurface(ws *RenderTarget) error {
+	if hs, ok := ws.platWindow.(interface{ UseHeadlessSurface() bool }); ok && hs.UseHeadlessSurface() {
+		// fbdev: no native window to hand to a GPU backend — render into
+		// the headless software surface and read the pixels back.
+		surface, err := r.instance.CreateSurfaceFromTarget(wgpu.HeadlessSurfaceTarget{})
+		if err != nil {
+			return fmt.Errorf("gogpu: failed to create headless surface: %w", err)
+		}
+		ws.surface = surface
+		ws.state = SurfaceReady
+		ws.format = r.surfaceFormat
+		return nil
+	}
 	displayHandle, windowHandle := ws.platWindow.GetHandle()
 	surface, err := r.instance.CreateSurface(displayHandle, windowHandle)
 	if err != nil {
@@ -891,6 +911,17 @@ func (ws *RenderTarget) present() (reconfigured, presented bool) {
 		ds.Reset()
 	}
 	if err == nil {
+		// fbdev-style windows: copy the presented software frame into the
+		// framebuffer so it becomes visible.
+		if sink, ok := ws.platWindow.(interface {
+			BlitPixels(pixels []byte, width, height int, bgra bool) error
+		}); ok {
+			if pixels, rerr := ws.surface.ReadPixels(); rerr != nil {
+				slog.Debug("gogpu: fbdev readback failed", "error", rerr)
+			} else if berr := sink.BlitPixels(pixels, int(ws.width), int(ws.height), ws.format == gputypes.TextureFormatBGRA8Unorm); berr != nil {
+				slog.Debug("gogpu: fbdev blit failed", "error", berr)
+			}
+		}
 		return false, true
 	}
 	// Mirror recoverFromAcquireError: outdated is expected (resize/DPI/monitor),

@@ -92,6 +92,8 @@ func main() {
 
 	upgrader := makeUpgrader(*addr)
 
+	registerAEOPDHandlers()
+
 	http.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("addr")
 		host, _, err := net.SplitHostPort(target)

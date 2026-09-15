@@ -36,6 +36,16 @@
    แนะนำสร้าง service ให้รันอัตโนมัติ เช่น ด้วย NSSM:
      nssm install goro-webbridge C:\goro\webbridge.exe "-addr 0.0.0.0:8124"
 
+   ตั้ง environment variable AEOPD_DSN ให้ service ก่อน start (จำเป็น
+   สำหรับ endpoint /aeopd/login และ /aeopd/docs ของ NPC สมุดทะเบียน
+   หนังสือ — ถ้าไม่ตั้ง endpoint เหล่านี้จะตอบ error แต่ตัวเกมไม่กระทบ):
+     AEOPD_DSN = "catgg_aeopd:<รหัสผ่าน>@tcp(192.168.1.211:3306)/catgg_aeopd?charset=utf8mb4&parseTime=true&timeout=5s&readTimeout=10s"
+   (ห้ามเขียนรหัสผ่านลงใน source code / commit — ใช้ env หรือ
+    service file ที่ไม่ได้เก็บใน git เท่านั้น ถ้าดูแลผ่าน NSSM:
+     nssm set goro-webbridge AppEnvironmentExtra AEOPD_DSN=catgg_aeopd:<รหัสผ่าน>@tcp(...) )
+   ฝั่ง Linux (ไฟล์ webbridge-linux-amd64.service บนเครื่อง deploy) ให้ใส่
+   บรรทัด Environment=AEOPD_DSN=... ใน [Service]
+
 ตั้งค่า Nginx Proxy Manager (ro.catgg.net)
 ------------------------------------------
 ใน Proxy Host ของ ro.catgg.net:

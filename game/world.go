@@ -1287,6 +1287,11 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		if actor, ok := clickedTalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths); ok {
 			glog.Debugf("click npc talk target mouse=%d,%d id=%d name=%q job=%d object_type=%d player=%d,%d target=%d,%d", ctx.Input.MouseX, ctx.Input.MouseY, actor.ID, actor.Name, actor.Job, actor.ObjectType, playerX, playerY, actor.X, actor.Y)
 			m.clearAttackFocus()
+			// The AEOPD registry portal opens the DOM window instead of a
+			// server dialog (no-op on native).
+			if sarabanPortalActor(actor) && openSarabanWeb() {
+				return nil, nil
+			}
 			m.requestNPCTalk(ctx, actor, "click")
 			return nil, nil
 		}

@@ -47,6 +47,7 @@ var aeopdDocTypeLabels = map[string]string{
 	"rule":           "ระเบียบ",
 	"regulation":     "ข้อบังคับ",
 	"policy":         "นโยบาย",
+	"form":           "แบบฟอร์ม",
 	"other":          "อื่นๆ",
 }
 
@@ -200,7 +201,7 @@ func handleAEOPDDocs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var total int
 	if err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM shooting_range_documents WHERE status != 'cancelled'").Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM documents WHERE status != 'cancelled'").Scan(&total); err != nil {
 		aeopdWriteJSON(w, http.StatusBadGateway, map[string]string{"error": "query failed"})
 		return
 	}
@@ -213,7 +214,7 @@ func handleAEOPDDocs(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT doc_type, DATE_FORMAT(doc_date, '%d-%m-%Y'), sender, IFNULL(receiver, ''), topic
-		FROM shooting_range_documents
+		FROM documents
 		WHERE status != 'cancelled'
 		ORDER BY created_at DESC, id DESC
 		LIMIT ? OFFSET ?`, aeopdPageRows, (page-1)*aeopdPageRows)

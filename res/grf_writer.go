@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
 )
@@ -167,6 +168,14 @@ func buildGRFTable(entries []grfPackEntry) ([]byte, error) {
 func encodeGRFTableName(name string) (string, error) {
 	name = strings.ReplaceAll(filepath.ToSlash(name), "/", "\\")
 	encoded, _, err := transform.String(korean.EUCKR.NewEncoder(), name)
+	if err == nil {
+		return encoded, nil
+	}
+	// Extracted trees often carry CP1252 mojibake names (EUC-KR bytes the
+	// extraction tool decoded as Windows-1252). Windows-1252 maps those
+	// runes back to the original bytes, so the archive keeps the exact
+	// names the game looks up.
+	encoded, _, err = transform.String(charmap.Windows1252.NewEncoder(), name)
 	if err != nil {
 		return "", err
 	}

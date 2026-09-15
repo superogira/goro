@@ -28,7 +28,7 @@ sub1(
     font: 13px/1.4 Sarabun, 'Noto Sans Thai', system-ui, sans-serif; color: #2a2622;
   }
   #goro-saraban .title {
-    text-align: center; font-weight: 600;
+    text-align: center; font-weight: 600; cursor: move; touch-action: none;
     margin: -8px -12px 10px; padding: 6px 10px;
     background: linear-gradient(180deg, #d6e8fa, #b8d6f2);
     border-bottom: 1px solid #76a0ce;
@@ -74,6 +74,12 @@ sub1(
   }
   #goro-saraban .pager button:disabled { opacity: .35; cursor: default; }
   #goro-saraban .hint { text-align: center; color: #8a7f6a; font-size: 11px; margin-top: 5px; }
+  #goro-saraban .rs {
+    position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+    cursor: nwse-resize; touch-action: none;
+    background: linear-gradient(135deg, transparent 46%, rgba(120,110,90,.55) 46%, rgba(120,110,90,.55) 54%, transparent 54%);
+    border-radius: 0 0 9px 0;
+  }
   /* DOM chat shortcuts (Alt+M) */""",
 )
 
@@ -103,6 +109,7 @@ sub1(
           '<button id="goro-saraban-login">Login</button>' +
           '</div><div class="msg" id="goro-saraban-msg"></div>';
         wireLogin();
+        wireMove();
         return;
       }
       el.innerHTML = '<div class="title">\\u0e17\\u0e30\\u0e40\\u0e1a\\u0e35\\u0e22\\u0e19\\u0e2b\\u0e19\\u0e31\\u0e07\\u0e2a\\u0e37\\u0e2d (AEOPD)<div class="x">\\u2715</div></div>' +
@@ -116,8 +123,12 @@ sub1(
         '<button id="goro-saraban-prev">\\u2039</button>' +
         '<span id="goro-saraban-page"></span>' +
         '<button id="goro-saraban-next">\\u203a</button>' +
-        '</div><div class="hint" id="goro-saraban-hint"></div>';
+        '</div><div class="hint" id="goro-saraban-hint"></div><div class="rs"></div>';
       el.querySelector('.x').addEventListener('pointerdown', function (ev) { ev.stopPropagation(); closePanel(); });
+      wireMove();
+      var wrap = el.querySelector('.docwrap');
+      if (state.wrapH) wrap.style.maxHeight = state.wrapH;
+      keepInView();
       document.getElementById('goro-saraban-logout').addEventListener('pointerdown', function (ev) {
         ev.stopPropagation();
         state.token = ''; state.name = ''; state.page = 1;
@@ -157,6 +168,55 @@ sub1(
       });
       setTimeout(function () { user.focus(); }, 0);
     }
+    // Drag by the title bar; the bottom-right handle resizes width and
+    // list height (kept across re-renders through state.wrapH / el width).
+    function wireMove() {
+      var title = el.querySelector('.title');
+      var drag = null;
+      title.addEventListener('pointerdown', function (ev) {
+        if (ev.target.closest('.x')) return;
+        var r = el.getBoundingClientRect();
+        el.style.transform = 'none';
+        el.style.left = r.left + 'px';
+        el.style.top = r.top + 'px';
+        drag = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+        try { title.setPointerCapture(ev.pointerId); } catch (e) {}
+        ev.preventDefault();
+      });
+      title.addEventListener('pointermove', function (ev) {
+        if (!drag) return;
+        el.style.left = Math.max(0, Math.min(ev.clientX - drag.x, window.innerWidth - el.offsetWidth)) + 'px';
+        el.style.top = Math.max(0, Math.min(ev.clientY - drag.y, window.innerHeight - el.offsetHeight)) + 'px';
+      });
+      title.addEventListener('pointerup', function () { drag = null; });
+      title.addEventListener('pointercancel', function () { drag = null; });
+      var handle = el.querySelector('.rs');
+      if (!handle) return;
+      var wrap = el.querySelector('.docwrap');
+      var rs = null;
+      handle.addEventListener('pointerdown', function (ev) {
+        ev.stopPropagation();
+        rs = { x: ev.clientX, y: ev.clientY, w: el.offsetWidth, h: wrap.offsetHeight };
+        try { handle.setPointerCapture(ev.pointerId); } catch (e) {}
+        ev.preventDefault();
+      });
+      handle.addEventListener('pointermove', function (ev) {
+        if (!rs) return;
+        el.style.width = Math.max(420, Math.min(rs.w + ev.clientX - rs.x, window.innerWidth - 24)) + 'px';
+        var h = Math.max(140, Math.min(rs.h + ev.clientY - rs.y, Math.round(window.innerHeight * 0.7)));
+        wrap.style.maxHeight = h + 'px';
+        state.wrapH = h + 'px';
+      });
+      handle.addEventListener('pointerup', function () { rs = null; });
+      handle.addEventListener('pointercancel', function () { rs = null; });
+    }
+    // After a drag the panel keeps explicit left/top; re-clamp it into the
+    // viewport whenever the content height changes (render + row loads).
+    function keepInView() {
+      if (el.style.transform !== 'none') return;
+      el.style.left = Math.max(0, Math.min(parseFloat(el.style.left) || 0, window.innerWidth - el.offsetWidth)) + 'px';
+      el.style.top = Math.max(0, Math.min(parseFloat(el.style.top) || 0, window.innerHeight - el.offsetHeight)) + 'px';
+    }
     function loadPage(page) {
       var rowsEl = document.getElementById('goro-saraban-rows');
       var hint = document.getElementById('goro-saraban-hint');
@@ -180,6 +240,7 @@ sub1(
               '<td title="' + esc(row.topic) + '">' + esc(row.topic) + '</td></tr>';
           });
           rowsEl.innerHTML = html || '';
+          keepInView();
           document.getElementById('goro-saraban-page').textContent = d.page + ' / ' + d.pages;
           prev.disabled = d.page <= 1;
           next.disabled = d.page >= d.pages;

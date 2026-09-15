@@ -45,13 +45,25 @@ func cursorWebSync(img *render.Image, key string, x, y float64) {
 		cursorWebURLs[key] = url
 	}
 	cursorWebMutex.Unlock()
+	cursorWebSetOSMode(false)
 	fn.Invoke(url, x, y)
 }
 
-// cursorWebHide removes the DOM cursor (debug no-cursor mode).
+// cursorWebHide removes the DOM cursor (debug no-cursor mode) and hands
+// the pointer back to the OS cursor: without this the pointer-seen CSS
+// keeps hiding the OS cursor everywhere and the page is left cursorless.
 func cursorWebHide() {
+	cursorWebSetOSMode(true)
 	if fn := js.Global().Get("goroCursorSync"); fn.Type() == js.TypeFunction {
 		fn.Invoke(nil, 0, 0)
+	}
+}
+
+// cursorWebSetOSMode toggles the page's OS-cursor mode. Idempotent and
+// cheap: normal frames re-assert false, no-cursor frames re-assert true.
+func cursorWebSetOSMode(os bool) {
+	if fn := js.Global().Get("goroCursorOSMode"); fn.Type() == js.TypeFunction {
+		fn.Invoke(os)
 	}
 }
 

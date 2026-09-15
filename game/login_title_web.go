@@ -54,11 +54,14 @@ func (m *LoginMode) syncTitleWeb(ctx client.Context, alpha float64) {
 	}
 	fade := strconv.FormatFloat(alpha, 'f', 3, 64)
 	alert := m.titleWebAlertState()
+	nowin := ctx.Config.Login.DebugNoWindow
 	if m.titleWebBG != "" && m.titleWebPhase == phase && m.titleWebFade == fade &&
-		m.titleWebStatus == m.status && m.titleWebAlert == alert {
+		m.titleWebStatus == m.status && m.titleWebAlert == alert && m.titleWebNowin == nowin {
 		return
 	}
-	if m.titleWebBG == "" {
+	// nobg=1 never produces a background URL: push anyway (the layer draws
+	// plain black) instead of waiting forever and hiding the login form.
+	if m.titleWebBG == "" && !ctx.Config.Login.DebugNoBackground {
 		m.titleWebBG = m.titleWebBackgroundData(ctx)
 		if m.titleWebBG == "" {
 			return // background not loaded yet; retry next frame
@@ -68,6 +71,7 @@ func (m *LoginMode) syncTitleWeb(ctx client.Context, alpha float64) {
 	obj.Set("phase", phase)
 	obj.Set("fade", alpha)
 	obj.Set("bg", m.titleWebBG)
+	obj.Set("nowin", nowin)
 	obj.Set("status", m.status)
 	if alert != "" {
 		title, message, okOnly := m.titleWebAlertContent()
@@ -83,6 +87,7 @@ func (m *LoginMode) syncTitleWeb(ctx client.Context, alpha float64) {
 	m.titleWebFade = fade
 	m.titleWebStatus = m.status
 	m.titleWebAlert = alert
+	m.titleWebNowin = nowin
 	js.Global().Get("goroTitleSync").Invoke(obj)
 }
 

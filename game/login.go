@@ -43,6 +43,7 @@ type LoginMode struct {
 	titleWebFade        string
 	titleWebStatus      string
 	titleWebAlert       string
+	titleWebNowin       bool
 	bgSource            string
 	bgLoaded            bool
 	bgmStarted          bool

@@ -137,7 +137,11 @@ Append these to the page URL, e.g. `webro/?stats=1&fps=1`. They can be combined.
 | `?char-slot=N` | Pick character slot N automatically after login (0-based); with `auto=1` the session runs from the title screen into the map with no taps |
 | `?mute=1` | Disable BGM and SFX |
 | `?stats=1` | Enable render stats: one-per-second frame-split lines and slow-frame warnings (>16ms) in the browser console, plus the FPS/MEM widget HUD in the bottom-right corner of the map |
-| `?fps=1` | Show the engine FPS counter (top-left). Drawn straight to the frame, so it stays visible with `noui=1` |
+| `?fps=1` | Show the engine FPS counter (a DOM meter in the bottom-right corner). It is not part of the widget UI layer, so it stays visible with `noui=1` |
+| `?scale=<f>` | Render resolution scale: a fraction (`scale=0.6`) or a percent (`scale=60`). Below 1.0 the 3D canvas renders smaller and the browser stretches it back — GPU cost drops quadratically while DOM/overlay text stays crisp |
+| `?gpu=<mode>` | GPU adapter selection: `software` (browser fallback adapter — the escape hatch for blocklisted or broken drivers), `low` (power-saving), `high` (performance) |
+| `?debug` | On-page diagnostics panel: boot progress, key events, GPU/WebGPU errors, stdout. Toggle visibility with F9 |
+| `?fakedpr=<n>` | Override `window.devicePixelRatio` (development aid for reproducing HiDPI blur on a normal display) |
 | `?noui=1` | Skip the widget UI layer entirely once inside the map — pure 3D world with no windows. Login and character select stay playable; tap/keyboard input still works. Used to measure how much frame budget the UI raster costs |
 | `?nobg=1` | Title screen without the background art |
 | `?nowin=1` | Title screen without the login window |
@@ -313,6 +317,7 @@ Currently implemented (not a claim of complete reference-client parity):
    * Button bar
    * Multi-row shortcuts bar with classic key bindings
    * Classic Battle Mode (`/bm`), direct typing, and F12 shortcut-bar switching
+   * Chat shortcuts (Alt+M editor, Alt+1..0 quick send)
    * Console
    * Minimap with player, NPC, party, and guild markers
    * Items with vertical category tabs
@@ -342,6 +347,20 @@ Currently implemented (not a claim of complete reference-client parity):
    * Item pickup notifications
    * Item and skill tooltips
    * Status icons with roBrowser-sourced metadata
+ * Web build (wasm) — DOM UI
+   * Title, login, service select, character selection, and character
+     creation render as page DOM: crisp browser text at any zoom and DPI,
+     with the canvas login background behind them
+   * In-world HUD as page DOM: hotbar (multi-row, battle-mode key labels),
+     chat console, minimap, inventory with tabs and drag & drop, skill and
+     equipment windows, settings, stats, multiple independent item-info and
+     card-artwork windows, chat shortcuts editor
+   * Classic RO sprite cursor rendered as a DOM element: follows the pointer
+     everywhere (canvas and DOM layers), magnet snapping preserved, and the
+     OS cursor hides once the pointer is seen — like the original client
+   * Touch controls for tablets: toggleable floating stick for walking, an
+     action button (attack nearest monster / pick nearest item) that can be
+     dragged anywhere, and quick slots around it mirroring the hotbar
  * Emotes
  * Overlay text
    * FPS meter

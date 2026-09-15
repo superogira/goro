@@ -25,20 +25,31 @@ GorORG35.sh   (launcher)
 
 1. คัดลอกโฟลเดอร์ `GorORG35/` และไฟล์ `GorORG35.sh` ไปไว้ที่ `Roms/APPS/`
    ของ SD card (แบบเดียวกับการติดตั้ง Z3apps ด้วยมือ)
-2. ใส่ไฟล์ข้อมูลเกม — เลือกได้ 2 แบบ:
+2. ใส่ไฟล์ข้อมูลเกมลงใน `Roms/APPS/GorORG35/` — เลือกได้ 2 แบบ:
    - **ไฟล์รวม GRF (แนะนำ)**: วาง `data.grf` (โครงสร้างมาตรฐาน ข้างในเป็น
-     `data\...`) ใน `Roms/APPS/GorORG35/data/` ไฟล์เดียวจบ — เร็วกว่าบน SD
-     card (เปิดไฟล์น้อยครั้ง อ่านต่อเนื่อง) และก๊อปปี้ง่ายกว่าเยอะ
+     `data\...`) ไว้ข้าง ๆ ไฟล์ `goro` ได้เลย พร้อมโฟลเดอร์ `BGM/` แยกตาม
+     layout คลาสสิกของ RO — เร็วกว่าบน SD card (เปิดไฟล์น้อยครั้ง
+     อ่านต่อเนื่อง) และก๊อปปี้ง่ายกว่าเยอะ
    - **โฟลเดอร์แตกไฟล์**: คัดลอก `data/` จาก deployment ของเว็บ (GRF ที่แตก
-     แล้ว) มาวางแทนได้ตามเดิม
+     แล้ว) มาวางเป็น `Roms/APPS/GorORG35/data/`
    - ผสมกันได้: ไฟล์หลวม (loose) จะชนะ (override) ไฟล์ใน GRF
-3. แก้ที่อยู่เซิร์ฟเวอร์ใน `Roms/APPS/GorORG35/data/clientinfo.xml`:
-   `<address>` ให้ชี้มาที่ IP ของเครื่องที่รัน rAthena ในวง LAN
-   (ของเว็บเป็น 127.0.0.1 เพราะ webbridge อยู่บนเครื่องเดียวกัน —
-   เครื่องเกมต่อ TCP ตรง จึงต้องใช้ IP จริง)
-   ถ้าใช้ GRF และไม่อยากแก้ข้างใน archive: วาง `clientinfo.xml`
-   (โดยไม่มีโฟลเดอร์ data ครอบ) ไว้ใน `Roms/APPS/GorORG35/data/`
-   ข้าง ๆ ไฟล์ .grf ก็ได้ — ไฟล์หลวมชนะ archive
+3. แก้ที่อยู่เซิร์ฟเวอร์: ถ้า `clientinfo.xml` ข้างใน GRF ชี้มาถูกที่แล้ว
+   (IP ของเครื่อง rAthena ในวง LAN) ข้ามขั้นนี้ได้เลย — ไม่ต้องแก้อะไร
+   ถ้าอยาก override โดยไม่แก้ข้างใน archive: วาง `clientinfo.xml`
+   ไว้ข้าง ๆ ไฟล์ `goro` (ไฟล์หลวมชนะ archive) เช่น
+
+   ```xml
+   <?xml version="1.0" encoding="euc-kr" ?>
+   <clientinfo>
+       <connection>
+           <display>My Server</display>
+           <address>192.168.x.x</address>
+           <port>6900</port>
+           <version>18</version>
+           <langtype>1</langtype>
+       </connection>
+   </clientinfo>
+   ```
 4. รีสตาร์ทเครื่อง (หรือรีสแกน APPS) แล้วเปิดจากเมนู APPS
 
 log การรันอยู่ที่ `Roms/APPS/GorORG35-logfile.txt`

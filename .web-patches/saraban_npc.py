@@ -41,6 +41,11 @@ sub1(
     border-radius: 4px; background: rgba(232, 223, 200, .7); cursor: pointer;
     text-align: center; line-height: 16px; color: #6a6055; font-size: 11px;
   }
+  #goro-saraban .title .mx {
+    position: absolute; right: 26px; top: 3px; width: 18px; height: 18px;
+    border-radius: 4px; background: rgba(232, 223, 200, .7); cursor: pointer;
+    text-align: center; line-height: 16px; color: #6a6055; font-size: 11px;
+  }
   #goro-saraban .login { display: flex; flex-direction: column; gap: 8px; width: 260px; margin: 10px auto 4px; }
   #goro-saraban .login input {
     padding: 4px 8px; border-radius: 5px;
@@ -102,7 +107,7 @@ sub1(
       if (!state.open) { el.style.display = 'none'; return; }
       el.style.display = 'block';
       if (!state.token) {
-        el.innerHTML = '<div class="title">\\u0e17\\u0e30\\u0e40\\u0e1a\\u0e35\\u0e22\\u0e19\\u0e2b\\u0e19\\u0e31\\u0e07\\u0e2a\\u0e37\\u0e2d (AEOPD)<div class="x">\\u2715</div></div>' +
+        el.innerHTML = '<div class="title">\\u0e17\\u0e30\\u0e40\\u0e1a\\u0e35\\u0e22\\u0e19\\u0e2b\\u0e19\\u0e31\\u0e07\\u0e2a\\u0e37\\u0e2d (AEOPD)<div class="mx">\\u26f6</div><div class="x">\\u2715</div></div>' +
           '<div class="login">' +
           '<input type="text" id="goro-saraban-user" placeholder="Username" autocomplete="off" spellcheck="false">' +
           '<input type="password" id="goro-saraban-pass" placeholder="Password">' +
@@ -110,9 +115,10 @@ sub1(
           '</div><div class="msg" id="goro-saraban-msg"></div>';
         wireLogin();
         wireMove();
+        if (state.max) applyMax();
         return;
       }
-      el.innerHTML = '<div class="title">\\u0e17\\u0e30\\u0e40\\u0e1a\\u0e35\\u0e22\\u0e19\\u0e2b\\u0e19\\u0e31\\u0e07\\u0e2a\\u0e37\\u0e2d (AEOPD)<div class="x">\\u2715</div></div>' +
+      el.innerHTML = '<div class="title">\\u0e17\\u0e30\\u0e40\\u0e1a\\u0e35\\u0e22\\u0e19\\u0e2b\\u0e19\\u0e31\\u0e07\\u0e2a\\u0e37\\u0e2d (AEOPD)<div class="mx">\\u26f6</div><div class="x">\\u2715</div></div>' +
         '<div class="who"><span>' + esc(state.name) + ' \\u00b7 \\u0e17\\u0e31\\u0e49\\u0e07\\u0e2b\\u0e21\\u0e14 <span id="goro-saraban-count">' + state.total + '</span> \\u0e23\\u0e32\\u0e22\\u0e01\\u0e32\\u0e23</span>' +
         '<button id="goro-saraban-logout">Logout</button></div>' +
         '<div class="docwrap"><table><thead><tr>' +
@@ -129,6 +135,7 @@ sub1(
       var wrap = el.querySelector('.docwrap');
       if (state.wrapH) wrap.style.maxHeight = state.wrapH;
       keepInView();
+      if (state.max) applyMax();
       document.getElementById('goro-saraban-logout').addEventListener('pointerdown', function (ev) {
         ev.stopPropagation();
         state.token = ''; state.name = ''; state.page = 1;
@@ -174,7 +181,8 @@ sub1(
       var title = el.querySelector('.title');
       var drag = null;
       title.addEventListener('pointerdown', function (ev) {
-        if (ev.target.closest('.x')) return;
+        if (ev.target.closest('.x') || ev.target.closest('.mx')) return;
+        if (state.max) unmaximize(ev.clientX, ev.clientY);
         var r = el.getBoundingClientRect();
         el.style.transform = 'none';
         el.style.left = r.left + 'px';
@@ -190,6 +198,12 @@ sub1(
       });
       title.addEventListener('pointerup', function () { drag = null; });
       title.addEventListener('pointercancel', function () { drag = null; });
+      var mx = el.querySelector('.mx');
+      if (mx) mx.addEventListener('pointerdown', function (ev) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        maximizeToggle();
+      });
       var handle = el.querySelector('.rs');
       if (!handle) return;
       var wrap = el.querySelector('.docwrap');
@@ -216,6 +230,52 @@ sub1(
       if (el.style.transform !== 'none') return;
       el.style.left = Math.max(0, Math.min(parseFloat(el.style.left) || 0, window.innerWidth - el.offsetWidth)) + 'px';
       el.style.top = Math.max(0, Math.min(parseFloat(el.style.top) || 0, window.innerHeight - el.offsetHeight)) + 'px';
+    }
+    // Full-screen toggle: the title-bar button expands the window to the
+    // whole viewport (list stretches via flex); dragging the title while
+    // maximized restores the saved size under the cursor.
+    function applyMax() {
+      el.style.transform = 'none';
+      el.style.left = '0px';
+      el.style.top = '0px';
+      el.style.width = window.innerWidth + 'px';
+      el.style.maxWidth = 'none';
+      el.style.height = window.innerHeight + 'px';
+      el.style.borderRadius = '0';
+      el.style.display = 'flex';
+      el.style.flexDirection = 'column';
+      var wrap = el.querySelector('.docwrap');
+      if (wrap) { wrap.style.maxHeight = 'none'; wrap.style.flex = '1 1 auto'; wrap.style.minHeight = '0'; }
+      var handle = el.querySelector('.rs');
+      if (handle) handle.style.display = 'none';
+      var mx = el.querySelector('.mx');
+      if (mx) mx.textContent = '\\u2750';
+    }
+    function unmaximize(ux, uy) {
+      var m = state.max;
+      if (!m) return;
+      state.max = null;
+      el.style.height = '';
+      el.style.maxWidth = '';
+      el.style.borderRadius = '';
+      el.style.flexDirection = '';
+      el.style.display = 'block';
+      el.style.width = m.w + 'px';
+      var wrap = el.querySelector('.docwrap');
+      if (wrap) { wrap.style.flex = ''; wrap.style.minHeight = ''; wrap.style.maxHeight = state.wrapH || ''; }
+      var handle = el.querySelector('.rs');
+      if (handle) handle.style.display = '';
+      var mx = el.querySelector('.mx');
+      if (mx) mx.textContent = '\\u26f6';
+      el.style.left = (ux == null ? m.left : Math.max(0, Math.min(ux - m.w / 2, window.innerWidth - m.w))) + 'px';
+      el.style.top = (uy == null ? m.top : Math.max(0, uy - 14)) + 'px';
+      keepInView();
+    }
+    function maximizeToggle() {
+      if (state.max) { unmaximize(); return; }
+      var r = el.getBoundingClientRect();
+      state.max = { left: r.left, top: r.top, w: r.width };
+      applyMax();
     }
     function loadPage(page) {
       var rowsEl = document.getElementById('goro-saraban-rows');
@@ -249,6 +309,9 @@ sub1(
         .catch(function () { hint.textContent = '\\u0e42\\u0e2b\\u0e25\\u0e14\\u0e44\\u0e21\\u0e48\\u0e2a\\u0e33\\u0e40\\u0e23\\u0e47\\u0e08'; });
     }
     function closePanel() { state.open = false; render(); }
+    window.addEventListener('resize', function () {
+      if (state.max && state.open) applyMax();
+    });
     window.goroSarabanOpen = function () {
       state.open = true;
       render();

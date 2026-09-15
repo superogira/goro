@@ -1,4 +1,4 @@
-﻿การ Deploy goro (เวอร์ชันเว็บ) — ro.catgg.net + Windows Server 192.168.1.162
+﻿การ Deploy goro (เวอร์ชันเว็บ) — ro.catgg.net + Windows Server <bridge-ip>
 ============================================================================
 
 โครงสร้างที่ตั้งเป้า
@@ -6,16 +6,16 @@
   [เบราว์เซอร์ผู้เล่น]
         │  HTTPS (หน้าเว็บ + ไฟล์เกม + WebSocket)
         ▼
-  ro.catgg.net  (Nginx Proxy Manager → 192.168.1.211:80  เก็บไฟล์ /webro)
+  ro.catgg.net  (Nginx Proxy Manager → <web-ip>:80  เก็บไฟล์ /webro)
         │  path /wsro/  (proxy แบบ WebSocket)
         ▼
-  Windows Server 192.168.1.162
+  Windows Server <bridge-ip>
         ├── webbridge.exe   (รับ WebSocket แล้วแปลงเป็น TCP)
         └── rAthena         (login 6900 / char 6121 / map 5121)
 
 ไฟล์ที่ต้องอัพโหลด
 ------------------
-1. เว็บเซิร์ฟเวอร์ (192.168.1.211 → ro.catgg.net):
+1. เว็บเซิร์ฟเวอร์ (<web-ip> → ro.catgg.net):
    อัพโหลด "ทั้งโฟลเดอร์" C:\laragon\www\webro\ ไปไว้ที่ path /webro ของเว็บ
    สิ่งที่สำคัญ:
      - index.html        (build v23)
@@ -26,7 +26,7 @@
    (ถ้า server รัน nginx เอง ให้แน่ใจว่า MIME type ของ .wasm =
     application/wasm ไม่งั้น instantiateStreaming จะพัง)
 
-2. Windows Server 192.168.1.162:
+2. Windows Server <bridge-ip>:
    คัดลอก webbridge.exe (ในโฟลเดอร์นี้) ไปไว้ที่เครื่องนั้น เช่น C:\goro\webbridge.exe
    แล้วสั่งรัน:
      webbridge.exe -addr 0.0.0.0:8124
@@ -39,10 +39,10 @@
    ตั้ง environment variable AEOPD_DSN ให้ service ก่อน start (จำเป็น
    สำหรับ endpoint /aeopd/login และ /aeopd/docs ของ NPC สมุดทะเบียน
    หนังสือ — ถ้าไม่ตั้ง endpoint เหล่านี้จะตอบ error แต่ตัวเกมไม่กระทบ):
-     AEOPD_DSN = "catgg_aeopd:<รหัสผ่าน>@tcp(192.168.1.211:3306)/catgg_aeopd?charset=utf8mb4&parseTime=true&timeout=5s&readTimeout=10s"
+     AEOPD_DSN = "<db-user>:<รหัสผ่าน>@tcp(<db-host>:3306)/<db-name>?charset=utf8mb4&parseTime=true&timeout=5s&readTimeout=10s"
    (ห้ามเขียนรหัสผ่านลงใน source code / commit — ใช้ env หรือ
     service file ที่ไม่ได้เก็บใน git เท่านั้น ถ้าดูแลผ่าน NSSM:
-     nssm set goro-webbridge AppEnvironmentExtra AEOPD_DSN=catgg_aeopd:<รหัสผ่าน>@tcp(...) )
+     nssm set goro-webbridge AppEnvironmentExtra AEOPD_DSN=<db-user>:<รหัสผ่าน>@tcp(<db-host>:3306)/<db-name> )
    ฝั่ง Linux (ไฟล์ webbridge-linux-amd64.service บนเครื่อง deploy) ให้ใส่
    บรรทัด Environment=AEOPD_DSN=... ใน [Service]
 
@@ -51,19 +51,19 @@
 ใน Proxy Host ของ ro.catgg.net:
 
   1) ส่วน Details (มีอยู่แล้ว):
-       Scheme: http   Forward Hostname: 192.168.1.211   Forward Port: 80
+       Scheme: http   Forward Hostname: <web-ip>   Forward Port: 80
        เปิด Websockets Support ✔ (สำคัญ!)
 
   2) แท็บ Advanced — Custom Locations เพิ่ม:
        Location:      /wsro
        Scheme:        http
-       Forward Host:  192.168.1.162
+       Forward Host:  <bridge-ip>
        Forward Port:  8124
        เปิด Websockets Support ✔
 
      หรือถ้าใช้ config ตรง ๆ (custom nginx.conf):
        location /wsro/ {
-           proxy_pass http://192.168.1.162:8124/;
+           proxy_pass http://<bridge-ip>:8124/;
            proxy_http_version 1.1;
            proxy_set_header Upgrade $http_upgrade;
            proxy_set_header Connection "upgrade";
@@ -73,9 +73,9 @@
 
 การเชื่อมต่อจะไหลแบบนี้:
   เบราว์เซอร์ → wss://ro.catgg.net/wsro/connect?addr=127.0.0.1:6900
-  → NPM → ws://192.168.1.162:8124 → webbridge dial 127.0.0.1:6900 (rAthena บนเครื่องเดียวกัน)
+  → NPM → ws://<bridge-ip>:8124 → webbridge dial 127.0.0.1:6900 (rAthena บนเครื่องเดียวกัน)
 
-ข้อกำหนดฝั่ง rAthena (บน 192.168.1.162)
+ข้อกำหนดฝั่ง rAthena (บน <bridge-ip>)
 --------------------------------------
 - ให้ login/char/map server รันอยู่บนเครื่องเดียวกับ webbridge (ตามแผน)
 
@@ -86,7 +86,7 @@ reverse proxies") ส่ง WebSocket ping ทุก 25 วินาที เ�
 (NPM) ตัดการเชื่อมต่อที่เงียบเกิน proxy_read_timeout 60 วินาที
 (อาการที่ผู้เล่นเจอ: ยืนเฉย/อ่าน dialog นาน ๆ แล้วโดนเด้งออกเป็นระยะ)
 
-- ถ้ายังใช้ webbridge.exe เวอร์ชันเก่าบน 192.168.1.162 ให้แทนที่ด้วย
+- ถ้ายังใช้ webbridge.exe เวอร์ชันเก่าบน <bridge-ip> ให้แทนที่ด้วย
   webbridge.exe ตัวใหม่ในโฟลเดอร์นี้ แล้ว restart service
 - ยกระดับเพิ่ม (ถ้าทำได้): ใน NPM ของโดเมนเกม ใส่ custom config ที่
   location /wsro/ ดังนี้เพื่อกันเหนียวอีกชั้น:
@@ -94,14 +94,14 @@ reverse proxies") ส่ง WebSocket ping ทุก 25 วินาที เ�
       proxy_send_timeout 3600s;
 - rAthena ควร advertise ที่อยู่ char/map server เป็น 127.0.0.1
   (ค่า default ของ char_athena.conf / map_athena.conf) —
-  เพราะ webbridge จะ dial ผ่าน loopback ของเครื่อง .162 เอง
+  เพราะ webbridge จะ dial ผ่าน loopback ของเครื่อง bridge เอง
 - พอร์ต 6900/6121/5121 ไม่ต้องเปิด firewall สู่ภายนอกเลย!
-  เปิดแค่พอร์ต 8124 (inbound TCP จาก 192.168.1.211 หรือทั้ง LAN)
+  เปิดแค่พอร์ต 8124 (inbound TCP จาก <web-ip> หรือทั้ง LAN)
 
 ความปลอดภัยของ webbridge
 ------------------------
 - default: รับปลายทางเฉพาะ loopback (127.0.0.1) เท่านั้น
-  ใครก็ต่อมาขอได้แค่เกมเซิร์ฟเวอร์บนเครื่อง .162 เอง ไม่สามารถใช้เป็น
+  ใครก็ต่อมาขอได้แค่เกมเซิร์ฟเวอร์บนเครื่อง bridge เอง ไม่สามารถใช้เป็น
   proxy ยิงเครื่องอื่นได้
 - ถ้าจะย้าย rAthena ไปคนละเครื่องกับ bridge ให้รันด้วย:
     webbridge.exe -addr 0.0.0.0:8124 -allow-private
@@ -111,7 +111,7 @@ reverse proxies") ส่ง WebSocket ping ทุก 25 วินาที เ�
 ทางเลือก: ชี้ WebSocket ตรง (ไม่ผ่าน NPM)
 -----------------------------------------
 ถ้าเปิดหน้าเกมแบบ http:// (ไม่มี HTTPS) สามารถข้าม path /wsro ได้โดยเปิด:
-    http://ro.catgg.net/webro/index.html?ws=ws://192.168.1.162:8124
+    http://ro.catgg.net/webro/index.html?ws=ws://<bridge-ip>:8124
 หรือแก้ window.goroWSBase ใน index.html
 ข้อควรระวัง: ถ้าหน้าเว็บเป็น https:// เบราว์เซอร์จะบล็อก ws:// (mixed content)
 ต้องใช้ทางผ่าน NPM แบบ wss:// เท่านั้น
@@ -119,9 +119,9 @@ reverse proxies") ส่ง WebSocket ping ทุก 25 วินาที เ�
 ตรวจสอบว่าใช้งานได้
 ------------------
 1. เปิด http://ro.catgg.net/webro/ → ควรเห็นหน้า login
-2. ที่เครื่อง .162 จะเห็น log ของ webbridge:
+2. ที่เครื่อง bridge จะเห็น log ของ webbridge:
      bridge <ip ของ NPM> <-> 127.0.0.1:6900
-3. ล็อกอินด้วยบัญชีใน rAthena ของเครื่อง .162 (ไม่ใช่ของเครื่อง dev)
+3. ล็อกอินด้วยบัญชีใน rAthena ของเครื่อง bridge (ไม่ใช่ของเครื่อง dev)
 
 หมายเหตุ
 ------

@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/db"
@@ -217,14 +218,16 @@ func TestShortcutBarClearsCachedSlotsOnCharacterChange(t *testing.T) {
 	}
 }
 
-func TestShortcutBarActivatesSecondRowNumberKey(t *testing.T) {
+func TestShortcutBarActivatesSecondRowBattleKey(t *testing.T) {
 	inputState := input.NewState()
-	inputState.SetKey(input.Key1, true)
+	inputState.SetKeyCode(gpucontext.KeyQ, true)
 	actions := &skillWindowTestRenderer{}
 	bar := &ShortcutBar{}
 	bar.slots[shortcutCols] = shortcutSlotState{kind: shortcutSkill, skillID: 6, skillLevel: 2}
+	ctx := shortcutBarActionContext(inputState)
+	ctx.Session.BattleMode = true
 
-	if !bar.Update(shortcutBarActionContext(inputState), actions) {
+	if !bar.UpdateKeyboardInput(ctx, actions, false) {
 		t.Fatal("second-row shortcut key was not consumed")
 	}
 	if actions.used.ID != 6 || actions.used.Level != 2 {
@@ -247,14 +250,16 @@ func TestShortcutBarSkipsKeyActivationWhenKeyboardBlocked(t *testing.T) {
 	}
 }
 
-func TestShortcutBarActivatesThirdRowLetterKey(t *testing.T) {
+func TestShortcutBarActivatesThirdRowBattleKey(t *testing.T) {
 	inputState := input.NewState()
-	inputState.SetKey(input.KeyQ, true)
+	inputState.SetKeyCode(gpucontext.KeyA, true)
 	actions := &skillWindowTestRenderer{}
 	bar := &ShortcutBar{}
 	bar.slots[2*shortcutCols] = shortcutSlotState{kind: shortcutSkill, skillID: 28, skillLevel: 4}
+	ctx := shortcutBarActionContext(inputState)
+	ctx.Session.BattleMode = true
 
-	if !bar.Update(shortcutBarActionContext(inputState), actions) {
+	if !bar.UpdateKeyboardInput(ctx, actions, false) {
 		t.Fatal("third-row shortcut key was not consumed")
 	}
 	if actions.used.ID != 28 || actions.used.Level != 4 {
@@ -262,40 +267,43 @@ func TestShortcutBarActivatesThirdRowLetterKey(t *testing.T) {
 	}
 }
 
-func TestShortcutBarF12CyclesVisibleRows(t *testing.T) {
+func TestShortcutBarF12CyclesActiveRow(t *testing.T) {
 	inputState := input.NewState()
 	inputState.SetKey(input.KeyF12, true)
 	bar := &ShortcutBar{}
 
-	if !bar.Update(shortcutBarActionContext(inputState), nil) {
+	if !bar.UpdateKeyboardInput(shortcutBarActionContext(inputState), nil, false) {
 		t.Fatal("F12 shortcut was not consumed")
 	}
-	if got := bar.visibleRowCount(); got != 2 {
-		t.Fatalf("visible rows = %d, want 2", got)
+	if bar.activeRow != 1 || bar.visibleRowCount() != 1 {
+		t.Fatal("F12 should change the selected bar, not expand it")
 	}
 
-	bar.setVisibleRows(Context{}, shortcutMaxRows)
-	if !bar.Update(shortcutBarActionContext(inputState), nil) {
+	bar.activeRow = shortcutMaxRows - 1
+	if !bar.UpdateKeyboardInput(shortcutBarActionContext(inputState), nil, false) {
 		t.Fatal("F12 wrap shortcut was not consumed")
 	}
-	if got := bar.visibleRowCount(); got != shortcutMinRows {
-		t.Fatalf("wrapped visible rows = %d, want %d", got, shortcutMinRows)
+	if bar.activeRow != 0 {
+		t.Fatal("F12 did not wrap to the first bar")
 	}
 }
 
-func TestShortcutLabelsMatchROBrowserDefaults(t *testing.T) {
+func TestShortcutLabelsMatchClassicBattleMode(t *testing.T) {
 	tests := map[int]string{
-		0:                      "F1",
-		shortcutCols - 1:       "F9",
-		shortcutCols:           "1",
-		2*shortcutCols - 1:     "9",
-		2 * shortcutCols:       "Q",
-		shortcutTotalSlots - 1: "O",
+		0:                      "F1 / Z",
+		shortcutCols - 1:       "F9 / .",
+		shortcutCols:           "Q",
+		2*shortcutCols - 1:     "O",
+		2 * shortcutCols:       "A",
+		shortcutTotalSlots - 1: "L",
 	}
 	for slot, want := range tests {
-		if got := shortcutLabelForSlot(slot); got != want {
+		if got := shortcutLabelForSlot(slot, 0, true); got != want {
 			t.Fatalf("slot %d label = %q, want %q", slot, got, want)
 		}
+	}
+	if shortcutLabelForSlot(9, 1, false) != "F1" || shortcutLabelForSlot(0, 1, false) != "" {
+		t.Fatal("normal-mode labels did not follow the selected F-key row")
 	}
 }
 

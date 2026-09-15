@@ -122,11 +122,11 @@ individual game-window layout.
 
 ### Keyboard shortcuts
 
-- [ ] Add a shortcut configuration window instead of relying only on the hardcoded F1-F9, 1-9, and Q-O mapping.
+- [ ] Add a shortcut configuration window instead of relying only on the classic F1-F9 and Battle Mode mappings.
 - [ ] Persist physical-key bindings so layouts such as AZERTY remain correct.
-- [ ] Add the original Alt+M shortcut-list window for chat-command bindings.
-- [ ] Support editing and clearing all Alt+1 through Alt+0 command slots.
-- [ ] Verify original Battle Mode behavior for the 2008 client and expose it cleanly if it differs from Goro's always-available extra rows.
+- [x] Add the original Alt+M shortcut-list window for chat-command bindings.
+- [x] Support editing and clearing all Alt+1 through Alt+0 command slots, saved locally. The View button reuses the emote picker; shortcuts use physical keys (including AZERTY) and the console's command handling.
+- [x] Classic Battle Mode: `/bm` or `/battlemode` toggles physical Z-., Q-O, and A-L shortcut rows. With it off (the login default), typing goes directly to chat; with it on, Enter or Space opens chat temporarily. F1-F9 work while chatting, and F12 cycles the selected bar independently of the +/− row controls.
 - [ ] Keep server-side item/skill hotkey slots distinct from client-side physical key bindings.
 
 ### Missing-map recovery

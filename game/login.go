@@ -148,6 +148,7 @@ func (m *LoginMode) Enter(ctx client.Context) Mode {
 	m.keepID = ctx.Config.Login.KeepID
 	savedUsername := ctx.Config.Login.SavedUsername
 	if ctx.Session != nil {
+		ctx.Session.BattleMode = false
 		m.keepID = ctx.Session.KeepLoginID
 		savedUsername = ctx.Session.SavedUsername
 	}

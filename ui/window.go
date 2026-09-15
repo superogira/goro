@@ -506,6 +506,16 @@ func topEscapeOverlay(ctx client.Context) widget.Widget {
 	return nil
 }
 
+// escapePressed reports whether this window owns the current Escape
+// press: it must be the topmost closeOnEsc overlay in the manager stack.
+func (w *Window) escapePressed(ctx client.Context) bool {
+	if ctx.Input == nil || !ctx.Input.JustPressed(input.KeyEscape) {
+		return false
+	}
+	top := topEscapeOverlay(ctx)
+	return top == nil || top == w.published
+}
+
 func (w *Window) ensurePosition(ctx client.Context) {
 	if w.positioned {
 		return

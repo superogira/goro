@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
@@ -34,16 +35,22 @@ const (
 	shortcutControlW   = int(rotheme.IconButtonSize)
 )
 
-var shortcutKeys = [...]input.Key{
+var shortcutFunctionKeys = [...]input.Key{
 	input.KeyF1, input.KeyF2, input.KeyF3, input.KeyF4, input.KeyF5, input.KeyF6, input.KeyF7, input.KeyF8, input.KeyF9,
-	input.Key1, input.Key2, input.Key3, input.Key4, input.Key5, input.Key6, input.Key7, input.Key8, input.Key9,
-	input.KeyQ, input.KeyW, input.KeyE, input.KeyR, input.KeyT, input.KeyY, input.KeyU, input.KeyI, input.KeyO,
 }
 
-var shortcutKeyLabels = [...]string{
-	"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9",
-	"1", "2", "3", "4", "5", "6", "7", "8", "9",
+// Classic /bm uses physical positions, including the punctuation keys on the
+// bottom QWERTY row. These positions remain usable on AZERTY without Shift.
+var shortcutBattleKeys = [...]input.KeyCode{
+	gpucontext.KeyZ, gpucontext.KeyX, gpucontext.KeyC, gpucontext.KeyV, gpucontext.KeyB, gpucontext.KeyN, gpucontext.KeyM, gpucontext.KeyComma, gpucontext.KeyPeriod,
+	gpucontext.KeyQ, gpucontext.KeyW, gpucontext.KeyE, gpucontext.KeyR, gpucontext.KeyT, gpucontext.KeyY, gpucontext.KeyU, gpucontext.KeyI, gpucontext.KeyO,
+	gpucontext.KeyA, gpucontext.KeyS, gpucontext.KeyD, gpucontext.KeyF, gpucontext.KeyG, gpucontext.KeyH, gpucontext.KeyJ, gpucontext.KeyK, gpucontext.KeyL,
+}
+
+var shortcutBattleLabels = [...]string{
+	"Z", "X", "C", "V", "B", "N", "M", ",", ".",
 	"Q", "W", "E", "R", "T", "Y", "U", "I", "O",
+	"A", "S", "D", "F", "G", "H", "J", "K", "L",
 }
 
 type shortcutKind int
@@ -67,6 +74,7 @@ type ShortcutBar struct {
 	slots         [shortcutTotalSlots]shortcutSlotState
 	webSyncKey    string
 	visibleRows   int
+	activeRow     int
 	hotkeyVersion int
 	content       widget.Widget
 	root          widget.Widget
@@ -169,18 +177,15 @@ func (b *ShortcutBar) Update(ctx Context, actions GameActions) bool {
 		}
 		if ctx.Input != nil {
 			// The DOM hotbar replaced the canvas bar, not the keyboard path:
-			// shortcut keys must still fire. The same blocker chain as the
-			// native build (chat active, NPC dialog or a modal window open)
-			// gates it, since wasm receives keydowns even while a page
-			// input is focused.
+			// F-keys, the F12 row switch and Battle Mode direct keys share
+			// the native keyboard-input logic. The same blocker chain as
+			// the native build gates it; a focused page input stops its
+			// keydowns from reaching the game listener at all.
 			if blocker, ok := actions.(KeyboardShortcutBlocker); ok && blocker.KeyboardShortcutsBlocked(ctx) {
 				return false
 			}
-			for i, key := range shortcutKeys {
-				if ctx.Input.JustPressed(key) {
-					b.activate(ctx, actions, i)
-					return true
-				}
+			if b.UpdateKeyboardInput(ctx, actions, false) {
+				return true
 			}
 		}
 		return false
@@ -193,18 +198,40 @@ func (b *ShortcutBar) Update(ctx Context, actions GameActions) bool {
 	if blocker, ok := actions.(KeyboardShortcutBlocker); ok && blocker.KeyboardShortcutsBlocked(ctx) {
 		return false
 	}
+	return b.pointInside(ctx, ctx.Input.MouseX, ctx.Input.MouseY)
+}
+
+// UpdateKeyboardInput is separate from pointer dispatch: F1-F9 must still work
+// while chat has focus, and hovering another window must not eat shortcuts.
+// The world excludes modals and other forms before calling this method.
+func (b *ShortcutBar) UpdateKeyboardInput(ctx Context, actions GameActions, chatActive bool) bool {
+	if ctx.Input == nil || ctx.Input.Pressed(input.KeyAlt) || ctx.Input.Pressed(input.KeyCtrl) ||
+		ctx.Input.KeyCodeDown(gpucontext.KeyLeftSuper) || ctx.Input.KeyCodeDown(gpucontext.KeyRightSuper) {
+		return false
+	}
+	b.SyncFromSession(ctx)
 	if ctx.Input.JustPressed(input.KeyF12) {
-		b.cycleVisibleRows(ctx)
+		b.activeRow = (b.activeRow + 1) % shortcutMaxRows
+		b.rebuild(ctx)
 		return true
 	}
-	for i, key := range shortcutKeys {
+	for i, key := range shortcutFunctionKeys {
 		if ctx.Input.JustPressed(key) {
-			b.activate(ctx, actions, i)
+			b.activate(ctx, actions, b.activeRow*shortcutCols+i)
 			b.redraw()
 			return true
 		}
 	}
-	return b.pointInside(ctx, ctx.Input.MouseX, ctx.Input.MouseY)
+	if ctx.Session != nil && ctx.Session.BattleMode && !chatActive {
+		for slot, key := range shortcutBattleKeys {
+			if ctx.Input.ConsumeKeyCodePress(key) {
+				b.activate(ctx, actions, slot)
+				b.redraw()
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (b *ShortcutBar) Publish(ctx Context, actions GameActions, assets AssetProvider) {
@@ -265,8 +292,12 @@ func (b *ShortcutBar) setVisibleRows(ctx Context, rows int) {
 	if rows == b.visibleRowCount() {
 		return
 	}
-	oldRoot := b.root
 	b.visibleRows = rows
+	b.rebuild(ctx)
+}
+
+func (b *ShortcutBar) rebuild(ctx Context) {
+	oldRoot := b.root
 	b.content = nil
 	b.root = nil
 	b.rootX = 0
@@ -283,14 +314,6 @@ func (b *ShortcutBar) setVisibleRows(ctx Context, rows int) {
 	b.Publish(ctx, b.actions, b.assets)
 	b.redraw()
 	b.invalidate(ctx)
-}
-
-func (b *ShortcutBar) cycleVisibleRows(ctx Context) {
-	nextRows := b.visibleRowCount() + 1
-	if nextRows > shortcutMaxRows {
-		nextRows = shortcutMinRows
-	}
-	b.setVisibleRows(ctx, nextRows)
 }
 
 func clampShortcutRows(rows int) int {
@@ -419,9 +442,10 @@ func (b *ShortcutBar) activate(ctx Context, actions GameActions, slot int) {
 
 func (b *ShortcutBar) slotAt(ctx Context, mx, my int) (int, bool) {
 	for i := 0; i < b.visibleRowCount()*shortcutCols; i++ {
-		x, y := b.slotBounds(ctx, i)
+		slot := (b.activeRow*shortcutCols + i) % shortcutTotalSlots
+		x, y := b.slotBounds(ctx, slot)
 		if pointInRect(mx, my, x, y, shortcutSlot, shortcutSlot) {
-			return i, true
+			return slot, true
 		}
 	}
 	return 0, false
@@ -439,7 +463,7 @@ func (b *ShortcutBar) bounds(ctx Context) (int, int) {
 
 func (b *ShortcutBar) slotBounds(ctx Context, slot int) (int, int) {
 	x, y := b.bounds(ctx)
-	row := slot / shortcutCols
+	row := (slot/shortcutCols - b.activeRow + shortcutMaxRows) % shortcutMaxRows
 	col := slot % shortcutCols
 	return x + shortcutPad + col*(shortcutSlot+shortcutGap), y + shortcutPad + row*(shortcutSlot+shortcutRowGap)
 }
@@ -466,7 +490,8 @@ func (b *ShortcutBar) ensureContent() {
 	for row := 0; row < visibleRows; row++ {
 		columns := make([]widget.Widget, 0, shortcutCols)
 		for col := 0; col < shortcutCols; col++ {
-			columns = append(columns, b.slotColumn(row*shortcutCols+col))
+			slot := ((b.activeRow+row)%shortcutMaxRows)*shortcutCols + col
+			columns = append(columns, b.slotColumn(slot))
 		}
 		rows = append(rows, primitives.HBox(columns...).
 			Gap(shortcutGap).
@@ -644,7 +669,7 @@ func (b *ShortcutBar) tooltipText(slot int) string {
 	if slot < 0 || slot >= shortcutTotalSlots {
 		return ""
 	}
-	label := shortcutLabelForSlot(slot)
+	label := shortcutLabelForSlot(slot, b.activeRow, b.ctx.Session != nil && b.ctx.Session.BattleMode)
 	entry := b.slots[slot]
 	if entry.kind == shortcutEmpty {
 		return label
@@ -679,11 +704,21 @@ func (b *ShortcutBar) tooltipText(slot int) string {
 	return name
 }
 
-func shortcutLabelForSlot(slot int) string {
-	if slot < 0 || slot >= len(shortcutKeyLabels) {
+func shortcutLabelForSlot(slot, activeRow int, battle bool) string {
+	if slot < 0 || slot >= shortcutTotalSlots {
 		return ""
 	}
-	return shortcutKeyLabels[slot]
+	label := ""
+	if slot/shortcutCols == activeRow {
+		label = fmt.Sprintf("F%d", slot%shortcutCols+1)
+	}
+	if battle {
+		if label != "" {
+			label += " / "
+		}
+		label += shortcutBattleLabels[slot]
+	}
+	return label
 }
 
 func (b *ShortcutBar) hideTooltip() {

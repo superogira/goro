@@ -168,7 +168,15 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
-	js.Global().Set("goroCharCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+	js.Global().Set("goroChatShortcutsAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "cshort:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+		js.Global().Set("goroCharCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()
 			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "create:"+args[0].String())
@@ -528,7 +536,8 @@ func (b *ShortcutBar) hotbarWebSync(ctx Context) {
 		}
 		entry.Set("icon", icon)
 		entry.Set("label", label)
-		entry.Set("key", shortcutKeyLabels[i])
+		battle := ctx.Session != nil && ctx.Session.BattleMode
+		entry.Set("key", shortcutLabelForSlot(i, b.activeRow, battle))
 		slots.SetIndex(i, entry)
 	}
 	obj.Set("slots", slots)
@@ -539,7 +548,8 @@ func (b *ShortcutBar) hotbarWebSync(ctx Context) {
 func (b *ShortcutBar) hotbarWebKey(ctx Context) string {
 	var sb strings.Builder
 	x, y := b.bounds(ctx)
-	fmt.Fprintf(&sb, "pos=%d,%d|rows=%d|", x, y, b.visibleRowCount())
+	battle := ctx.Session != nil && ctx.Session.BattleMode
+	fmt.Fprintf(&sb, "pos=%d,%d|rows=%d|bm=%t|row=%d|", x, y, b.visibleRowCount(), battle, b.activeRow)
 	for i := range b.slots {
 		s := &b.slots[i]
 		label := ""

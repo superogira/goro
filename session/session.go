@@ -15,6 +15,7 @@ type Session struct {
 	SavedUsername        string
 	NoShift              bool
 	NoCtrl               bool
+	BattleMode           bool
 	LessEffects          bool
 	HomunculusCustomAI   bool
 	HomunculusAggressive bool

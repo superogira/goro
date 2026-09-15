@@ -213,6 +213,7 @@ type worldUI struct {
 	statsWindow          gameui.StatsWindow
 	skillWindow          gameui.SkillWindow
 	emoteWindow          gameui.EmoteWindow
+	chatShortcuts        gameui.ChatShortcutsWindow
 	friendsWindow        gameui.FriendsWindow
 	guildWindow          gameui.GuildWindow
 	friendSettings       gameui.FriendSettingsWindow
@@ -286,6 +287,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.mercenaryConfirm.IsOpen() ||
 		u.starPlaceConfirm.IsOpen() ||
 		u.settingsWindow.IsOpen() ||
+		u.chatShortcuts.IsOpen() ||
 		u.autoSpellWindow.IsOpen() ||
 		u.monsterInfoWindow.IsOpen() ||
 		u.identifyWindow.IsOpen() ||
@@ -616,6 +618,7 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 }
 
 func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
+	m.ui.console.Rebind(ctx)
 	m.ui.console.OnGuildWindow = func() { m.toggleGuildWindow(ctx) }
 	m.ui.guildWindow.EmblemImage = func(ctx client.Context) image.Image {
 		if ctx.Session == nil || m.guildEmblems == nil {
@@ -647,7 +650,11 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 		m.ui.statsWindow.Rebind(ctx)
 	m.ui.skillWindow.Rebind(ctx, m)
 	m.ui.levelUpNotifications.Rebind(ctx)
+	m.ui.emoteWindow.OnSelect = m.ui.chatShortcuts.SelectEmotion
 	m.ui.emoteWindow.Rebind(ctx, &m.ui.console)
+	m.ui.chatShortcuts.Rebind(ctx, &m.ui.console, func() {
+		m.ui.emoteWindow.OpenWindow(ctx, &m.ui.console)
+	})
 	m.ui.homunculusSkill.Rebind(ctx, m)
 	m.ui.mercenarySkill.Rebind(ctx, m)
 	m.ui.friendsWindow.Rebind(ctx)
@@ -805,6 +812,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.guildWindow.UpdateKeyboardInput(ctx) {
 		return nil, nil
 	}
+	if m.ui.chatShortcuts.UpdateKeyboardInput(ctx) {
+		return nil, nil
+	}
 	dead := playerIsDead(ctx)
 	keyboardBlocked := m.ui.keyboardInputBlocked(ctx)
 	m.updateBotInput(ctx, !dead && !keyboardBlocked)
@@ -814,7 +824,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// Window.Update consumes pointer hover so that map input does not pass
 	// through the UI. Handle keyboard-only window shortcuts before pointer
 	// dispatch, otherwise their JustPressed event can be lost.
-	if m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) {
+	if m.chatShortcutFromInput(ctx) || m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) {
+		return nil, nil
+	}
+	if !dead && !m.ui.nonConsoleKeyboardInputBlocked(ctx) && m.ui.shortcutBar.UpdateKeyboardInput(ctx, m, m.ui.console.Active()) {
 		return nil, nil
 	}
 	if dead {
@@ -1021,7 +1034,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.weaponRefine.Update(ctx) {
 		return nil, nil
 	}
-	if !dead && m.ui.console.UpdateInput(ctx) {
+	if !dead && !m.ui.chatShortcuts.KeyboardShortcutsBlocked() && m.ui.console.UpdateInput(ctx) {
+		return nil, nil
+	}
+	if m.ui.chatShortcuts.Update(ctx) {
 		return nil, nil
 	}
 	if m.ui.settingsWindow.Update(ctx) {
@@ -1371,10 +1387,9 @@ func (m *WorldMode) toggleEmoteWindowFromInput(ctx client.Context) bool {
 	if ctx.Input == nil || m.ui.nonConsoleKeyboardInputBlocked(ctx) {
 		return false
 	}
-	if !ctx.Input.Pressed(input.KeyAlt) || !ctx.Input.JustPressed(input.KeyL) {
+	if !plainAltDown(ctx.Input) || !ctx.Input.JustPressed(input.KeyL) {
 		return false
 	}
-	m.discardConsoleShortcutText(ctx)
 	m.ui.emoteWindow.Toggle(ctx, &m.ui.console)
 	return true
 }
@@ -1383,18 +1398,11 @@ func (m *WorldMode) toggleGuildWindowFromInput(ctx client.Context) bool {
 	if ctx.Input == nil || m.ui.nonConsoleKeyboardInputBlocked(ctx) {
 		return false
 	}
-	if !ctx.Input.Pressed(input.KeyAlt) || !ctx.Input.JustPressed(input.KeyG) {
+	if !plainAltDown(ctx.Input) || !ctx.Input.JustPressed(input.KeyG) {
 		return false
 	}
-	m.discardConsoleShortcutText(ctx)
 	m.toggleGuildWindow(ctx)
 	return true
-}
-
-func (m *WorldMode) discardConsoleShortcutText(ctx client.Context) {
-	if ctx.Input != nil && m.ui.console.Active() {
-		m.ui.console.DiscardTextInput(ctx.Input.TextInput())
-	}
 }
 
 func (m *WorldMode) toggleGuildWindow(ctx client.Context) {
@@ -1561,6 +1569,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.statsWindow = m.ui.statsWindow
 	next.ui.skillWindow = m.ui.skillWindow
 	next.ui.emoteWindow = m.ui.emoteWindow
+	next.ui.chatShortcuts = m.ui.chatShortcuts
 	next.ui.friendsWindow = m.ui.friendsWindow
 	next.ui.guildWindow = m.ui.guildWindow
 	next.ui.friendSettings = m.ui.friendSettings

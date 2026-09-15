@@ -49,6 +49,11 @@ type uiAppReceiver interface {
 	SetUIApp(client.UIApp)
 }
 
+type keyboardInputPreparer interface {
+	PrepareKeyInput(input.KeyCode, gpucontext.Modifiers)
+	PrepareTextInput(input.KeyCode) bool
+}
+
 type uiAppBridge struct {
 	*uiapp.App
 	runner *runner
@@ -332,6 +337,10 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 	widget.RegisterClipboardProvider(gg)
 	defer widget.RegisterClipboardProvider(nil)
 	events := newFanoutEventSource(gg.EventSource())
+	if preparer, ok := game.(keyboardInputPreparer); ok {
+		events.prepareKeyInput = preparer.PrepareKeyInput
+		events.prepareTextInput = preparer.PrepareTextInput
+	}
 	uiTheme := rotheme.Default.AsTheme()
 	uiTheme.Colors.Background = widget.RGBA8(0, 0, 0, 0)
 	uiWindow := &uiWindowProvider{WindowProvider: gg}
@@ -475,6 +484,8 @@ func powerPreference(name string) gputypes.PowerPreference {
 }
 
 type fanoutEventSource struct {
+	prepareKeyInput      func(input.KeyCode, gpucontext.Modifiers)
+	prepareTextInput     func(input.KeyCode) bool
 	keyPress             []func(gpucontext.Key, gpucontext.Modifiers)
 	keyRelease           []func(gpucontext.Key, gpucontext.Modifiers)
 	textInput            []func(string)
@@ -492,17 +503,32 @@ type fanoutEventSource struct {
 
 func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 	f := &fanoutEventSource{}
+	keyCode := gpucontext.KeyUnknown
 	source.OnKeyPress(func(key gpucontext.Key, mods gpucontext.Modifiers) {
+		keyCode = key
+		// Editing keys do not generate text events. Restore their destination
+		// before UI dispatch so the first Delete/Backspace is not lost.
+		if f.prepareKeyInput != nil {
+			f.prepareKeyInput(key, mods)
+		}
 		for _, fn := range f.keyPress {
 			fn(key, mods)
 		}
 	})
 	source.OnKeyRelease(func(key gpucontext.Key, mods gpucontext.Modifiers) {
+		if key == keyCode {
+			keyCode = gpucontext.KeyUnknown
+		}
 		for _, fn := range f.keyRelease {
 			fn(key, mods)
 		}
 	})
 	source.OnTextInput(func(text string) {
+		// Let the active mode focus a text field or suppress shortcut text
+		// before either UI or game listeners receive it.
+		if f.prepareTextInput != nil && f.prepareTextInput(keyCode) {
+			return
+		}
 		for _, fn := range f.textInput {
 			fn(text)
 		}
@@ -533,6 +559,9 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 		}
 	})
 	source.OnFocus(func(focused bool) {
+		if !focused {
+			keyCode = gpucontext.KeyUnknown
+		}
 		for _, fn := range f.focus {
 			fn(focused)
 		}

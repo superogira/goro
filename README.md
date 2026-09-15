@@ -312,6 +312,7 @@ Currently implemented (not a claim of complete reference-client parity):
    * Basic information
    * Button bar
    * Multi-row shortcuts bar with classic key bindings
+   * Classic Battle Mode (`/bm`), direct typing, and F12 shortcut-bar switching
    * Console
    * Minimap with player, NPC, party, and guild markers
    * Items with vertical category tabs

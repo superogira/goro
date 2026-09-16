@@ -43,6 +43,7 @@ import (
 const (
 	fbIOCTLGetVarScreeninfo = 0x4600
 	fbIOCTLGetFixScreeninfo = 0x4602
+	fbIOCTLPanDisplay       = 0x4606
 
 	evTypeKey = 0x01
 	evTypeAbs = 0x03
@@ -183,7 +184,11 @@ type fbdevPlatform struct {
 	cursorX, cursorY float64
 	// fbScale renders at 1/fbScale of the panel and BlitPixels upscales;
 	// pointer events are mapped back into the smaller surface space.
-	fbScale          int
+	fbScale int
+	// varBuf is the raw fb_var_screeninfo from probing; panning with it
+	// at init activates the fb layer for scanout (StockOS leaves the
+	// layer off until an FBIOPAN/FBIOPUT touches the mode).
+	varBuf           [160]byte
 	buttons          gpucontext.Buttons
 	axes             map[uint16]int32
 	hatX, hatY       int
@@ -210,7 +215,7 @@ func (p *fbdevPlatform) Init() error {
 	if err != nil {
 		return fmt.Errorf("fbdev: open %s: %w", dev, err)
 	}
-	geo, err := probeFBGeometry(f)
+	geo, err := p.probeFBGeometry(f)
 	if err != nil {
 		f.Close()
 		return fmt.Errorf("fbdev: %w", err)
@@ -235,6 +240,14 @@ func (p *fbdevPlatform) Init() error {
 		"virtual", fmt.Sprintf("%dx%d", geo.widthVirtual, geo.heightVirtual),
 		"offsets", fmt.Sprintf("+%d+%d", geo.xoffset, geo.yoffset),
 		"bpp", geo.bpp, "line", geo.lineLength, "maplen", len(mem))
+	// Activate the fb layer for scanout: on StockOS the layer stays off
+	// until an FBIOPAN/FBIOPUT touches the mode — writes before this are
+	// invisible (fbtest proved the pan is the trigger).
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), fbIOCTLPanDisplay, uintptr(unsafe.Pointer(&p.varBuf[0]))); errno != 0 {
+		logger().Info("fbdev: FBIOPAN_DISPLAY failed (continuing)", "errno", errno.Error())
+	} else {
+		logger().Info("fbdev: FBIOPAN_DISPLAY ok, fb layer activated")
+	}
 	if os.Getenv("GOGPU_FB_PROBE") == "color" {
 		p.probeBufferColors()
 	}
@@ -341,7 +354,7 @@ func (p *fbdevPlatform) Destroy() {
 
 // --- framebuffer geometry ---
 
-func probeFBGeometry(f *os.File) (fbGeometry, error) {
+func (p *fbdevPlatform) probeFBGeometry(f *os.File) (fbGeometry, error) {
 	var geo fbGeometry
 	// Development fake: a plain file standing in for the framebuffer,
 	// with geometry supplied through env vars instead of ioctls.
@@ -371,7 +384,7 @@ func probeFBGeometry(f *os.File) (fbGeometry, error) {
 		return geo, nil
 	}
 
-	var varBuf [160]byte
+	varBuf := &p.varBuf
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), fbIOCTLGetVarScreeninfo, uintptr(unsafe.Pointer(&varBuf[0]))); errno != 0 {
 		return geo, fmt.Errorf("FBIOGET_VSCREENINFO: %w", errno)
 	}

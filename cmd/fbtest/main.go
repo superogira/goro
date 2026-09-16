@@ -1,3 +1,5 @@
+//go:build linux
+
 // fbtest: a tiny RG35XX display diagnostic.
 //
 // It answers three questions in one run, logging everything to

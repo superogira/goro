@@ -50,6 +50,9 @@ fi
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
 export GOGPU_LOG=debug
-export GOGPU_FB_SCALE=2
+# gogpu now activates the fb layer itself (FBIOPAN at init) — the thing
+# fbtest discovered. Full 640x480 for now: the half-size path caused a
+# resize fight between the game and UI surfaces (login drawn top-left,
+# colors off), so it stays off until that's fixed.
 ./goro -config goro.ini -data-dir .
 echo "goro exited: $?"

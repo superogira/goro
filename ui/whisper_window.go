@@ -269,6 +269,11 @@ func (w *WhisperWindow) submitFromFocusedEnter(ctx Context) bool {
 }
 
 func (w *WhisperWindow) refresh(ctx Context) {
+	if whisperWebEnabled() {
+		// The DOM twin owns the presentation; publishing here would flash
+		// a canvas window on top of it.
+		return
+	}
 	w.SetContent(w.widgetTree(ctx))
 	w.Publish(ctx)
 }

@@ -22,6 +22,7 @@ def sub1(old, new):
 sub1(
     "</style>",
     """  /* DOM chat room windows */
+  #goro-chatroom-create { width: 340px; }
   .goro-social .frm { display: flex; align-items: center; gap: 8px; margin: 6px 2px; }
   .goro-social .frm .lb { flex: 0 0 auto; min-width: 56px; font-size: 12px; color: #3a689c; }
   .goro-social .finput {
@@ -85,7 +86,7 @@ sub1(
     function ccBuild() {
       cc.innerHTML = '<div class="title">Make a Room<div class="x">\\u2715</div></div>' +
         '<div class="frm"><span class="lb">Title</span><input class="finput" data-k="title" maxlength="32" placeholder="Room Title"></div>' +
-        '<div class="frm"><span class="lb">Limit</span><input class="finput" data-k="limit" maxlength="2" inputmode="numeric" style="flex:0 0 64px">' +
+        '<div class="frm"><span class="lb">Limit</span><input class="finput" data-k="limit" maxlength="2" inputmode="numeric" style="flex:0 0 44px">' +
         '<span class="lb" style="min-width:0;margin-left:8px">Type</span>' +
         '<label><input type="radio" name="cc-type" value="public" checked> Public</label>' +
         '<label><input type="radio" name="cc-type" value="private"> Private</label></div>' +

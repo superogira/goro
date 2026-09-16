@@ -232,6 +232,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroPartyCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "pcr:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 	js.Global().Set("goroChatRoomAction", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()

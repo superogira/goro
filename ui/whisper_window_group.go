@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -8,6 +9,7 @@ import (
 // Closing a window hides the conversation; opening it again restores it.
 type WhisperWindows struct {
 	conversations []*WhisperWindow
+	webSig        string
 }
 
 func (w *WhisperWindows) Find(target string) *WhisperWindow {
@@ -105,6 +107,7 @@ func (w *WhisperWindows) updateWeb(ctx Context) (bool, WhisperWindowAction) {
 		}
 	}
 	var windows []whisperWebWindow
+	var sig strings.Builder
 	for _, conversation := range w.conversations {
 		if !conversation.IsOpen() {
 			continue
@@ -114,8 +117,21 @@ func (w *WhisperWindows) updateWeb(ctx Context) (bool, WhisperWindowAction) {
 			entry.lines = append(entry.lines, whisperWebLine{text: line.text, kind: whisperKind(line)})
 		}
 		windows = append(windows, entry)
+		sig.WriteString(entry.target)
+		sig.WriteByte('|')
+		sig.WriteString(strconv.Itoa(len(entry.lines)))
+		if len(entry.lines) > 0 {
+			sig.WriteByte('|')
+			sig.WriteString(entry.lines[len(entry.lines)-1].text)
+		}
+		sig.WriteByte(';')
 	}
-	whisperWebSync(windows)
+	// Push only when the conversations changed: the page keeps per-window
+	// DOM nodes alive between syncs (drags and input focus survive).
+	if sig.String() != w.webSig {
+		w.webSig = sig.String()
+		whisperWebSync(windows)
+	}
 	// The DOM panels do not cover the game input by existing — only a
 	// real send consumes, so the rest of the window chain still updates.
 	for _, conversation := range w.conversations {

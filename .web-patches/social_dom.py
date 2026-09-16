@@ -311,63 +311,92 @@ sub1(
       psRender();
     };
 
-    // -- whisper windows --
+    // -- whisper windows (keyed: a panel is built once per target and
+    // only the log updates across syncs, so drags and input focus
+    // survive) --
     var whRoot = document.getElementById('goro-whisper');
-    var whState = { windows: [], drafts: {}, pos: {} };
+    var whPanels = {};
+    var whDrafts = {};
+    var whPos = {};
     function whAct(a) { if (window.goroWhisperAction) window.goroWhisperAction(a); }
-    function whRender() {
-      whRoot.innerHTML = '';
-      whState.windows.forEach(function (win, idx) {
-        var panel = document.createElement('div');
-        panel.className = 'goro-social';
-        var pos = whState.pos[win.target];
-        panel.style.display = 'block';
-        panel.style.pointerEvents = 'auto';
-        panel.style.right = 'auto';
-        panel.style.left = (pos && pos.x != null ? pos.x : Math.min(24 + idx * 34, window.innerWidth - 320)) + 'px';
-        panel.style.bottom = 'auto';
-        panel.style.top = (pos && pos.y != null ? pos.y : window.innerHeight - 300 - idx * 26) + 'px';
-        var lines = win.lines.length ? win.lines : [{ text: 'No messages', kind: '' }];
-        panel.innerHTML = '<div class="title">1:1 ' + esc(win.target) + '<div class="x">\\u2715</div></div>' +
-          '<div class="chatlog">' + lines.map(function (l) {
-            return '<div class="' + esc(l.kind) + '">' + esc(l.text) + '</div>';
-          }).join('') + '</div>' +
-          '<div class="chatrow"><input type="text" maxlength="100" placeholder="Message"><button>Send</button></div>';
-        whRoot.appendChild(panel);
-        stop(panel);
-        wireDrag(panel, panel.querySelector('.title'));
-        var log = panel.querySelector('.chatlog');
-        log.scrollTop = log.scrollHeight;
-        var input = panel.querySelector('input');
-        input.value = whState.drafts[win.target] || '';
-        function send() {
-          var text = input.value.trim();
-          if (!text) return;
-          delete whState.drafts[win.target];
-          input.value = '';
-          whAct('send:' + win.target + ':' + text);
-        }
-        ['keydown', 'keyup', 'keypress'].forEach(function (k) {
-          input.addEventListener(k, function (ev) {
-            ev.stopPropagation();
-            if (ev.key === 'Enter') { ev.preventDefault(); send(); }
-          });
-        });
-        input.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
-        input.addEventListener('input', function () { whState.drafts[win.target] = input.value; });
-        panel.querySelector('.chatrow button').addEventListener('pointerdown', function () { send(); });
-        panel.querySelector('.x').addEventListener('pointerdown', function () { whAct('close:' + win.target); });
-        // remember drag position between syncs
-        var title = panel.querySelector('.title');
-        title.addEventListener('pointerup', function () {
-          var r = panel.getBoundingClientRect();
-          whState.pos[win.target] = { x: r.left, y: r.top };
+    function whSig(win) {
+      var last = win.lines.length ? win.lines[win.lines.length - 1].text : '';
+      return win.lines.length + '|' + last;
+    }
+    function whBuild(win, idx) {
+      var panel = document.createElement('div');
+      panel.className = 'goro-social';
+      panel.style.display = 'block';
+      panel.style.pointerEvents = 'auto';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+      var pos = whPos[win.target];
+      panel.style.left = (pos && pos.x != null ? pos.x : Math.min(24 + idx * 34, Math.max(0, window.innerWidth - 320))) + 'px';
+      panel.style.top = (pos && pos.y != null ? pos.y : Math.max(8, window.innerHeight - 300 - idx * 26)) + 'px';
+      panel.innerHTML = '<div class="title">1:1 ' + esc(win.target) + '<div class="x">\\u2715</div></div>' +
+        '<div class="chatlog"></div>' +
+        '<div class="chatrow"><input type="text" maxlength="100" placeholder="Message"><button>Send</button></div>';
+      stop(panel);
+      wireDrag(panel, panel.querySelector('.title'));
+      var input = panel.querySelector('input');
+      input.value = whDrafts[win.target] || '';
+      function send() {
+        var text = input.value.trim();
+        if (!text) return;
+        delete whDrafts[win.target];
+        input.value = '';
+        whAct('send:' + win.target + ':' + text);
+      }
+      ['keydown', 'keyup', 'keypress'].forEach(function (k) {
+        input.addEventListener(k, function (ev) {
+          ev.stopPropagation();
+          if (ev.key === 'Enter') { ev.preventDefault(); send(); }
         });
       });
+      input.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+      input.addEventListener('input', function () { whDrafts[win.target] = input.value; });
+      panel.querySelector('.chatrow button').addEventListener('pointerdown', function (ev) { ev.stopPropagation(); send(); });
+      panel.querySelector('.x').addEventListener('pointerdown', function (ev) { ev.stopPropagation(); whAct('close:' + win.target); });
+      panel.querySelector('.title').addEventListener('pointerup', function () {
+        var r = panel.getBoundingClientRect();
+        whPos[win.target] = { x: r.left, y: r.top };
+      });
+      return panel;
+    }
+    function whUpdateLog(panel, win) {
+      var log = panel.querySelector('.chatlog');
+      var lines = win.lines.length ? win.lines : [{ text: 'No messages', kind: '' }];
+      log.innerHTML = lines.map(function (l) {
+        return '<div class="' + esc(l.kind) + '">' + esc(l.text) + '</div>';
+      }).join('');
+      log.scrollTop = log.scrollHeight;
     }
     window.goroWhisperSync = function (windows) {
-      whState.windows = windows || [];
-      whRender();
+      var seen = {};
+      (windows || []).forEach(function (win, idx) {
+        if (!win.target) return;
+        seen[win.target] = true;
+        var entry = whPanels[win.target];
+        var sig = whSig(win);
+        if (!entry || !entry.el.isConnected) {
+          var panel = whBuild(win, idx);
+          whUpdateLog(panel, win);
+          whRoot.appendChild(panel);
+          whPanels[win.target] = { el: panel, sig: sig };
+          return;
+        }
+        if (entry.sig !== sig) {
+          entry.sig = sig;
+          whUpdateLog(entry.el, win);
+        }
+      });
+      Object.keys(whPanels).forEach(function (target) {
+        if (!seen[target]) {
+          whPanels[target].el.remove();
+          delete whPanels[target];
+          delete whDrafts[target];
+        }
+      });
     };
   })();
   // ---- DOM text prompt (goroTextPromptSync) ----""",

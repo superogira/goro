@@ -75,6 +75,12 @@ func (w *WhisperWindow) open(ctx Context, target string) {
 	if whisperWebEnabled() {
 		// DOM twin active: the group syncs every frame; no canvas window.
 		// (explicit Window.open: this type's own open method shadows it)
+		if !strings.EqualFold(w.target, target) {
+			w.target = target
+			w.lines = nil
+			w.input = ""
+			w.inputField = nil
+		}
 		w.Window.open = true
 		return
 	}

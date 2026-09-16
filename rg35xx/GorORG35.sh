@@ -5,54 +5,51 @@
 # App folder layout (the app folder itself is the data root):
 #   GorORG35/goro        binary
 #   GorORG35/goro.ini    config
+#   GorORG35/fbtest      tiny display diagnostic (run first)
 #   GorORG35/data.grf    packed game data (entries data\...)
 #   GorORG35/BGM/        loose BGM (classic RO layout, optional)
 #   GorORG35/clientinfo.xml  loose override for the server address (optional)
-# or an extracted tree in GorORG35/data/.
-#
-# Everything the run prints (system context + goro's own log) lands in
-# GorORG35-logfile.txt next to this script, and goro also writes
-# GorORG35/goro.log through its own file sink.
 progdir=$(cd "$(dirname "$0")" && pwd)
 exec >>"$progdir/GorORG35-logfile.txt" 2>&1
 echo "=== goro launch $(date) ==="
 uname -a
-free -m 2>/dev/null || true
-ls -la "$progdir/GorORG35" 2>/dev/null | head -20
+free -m 2>/dev/null | head -2
 
-# Display topology dump: fb0 writes never reached the panel (the color
-# probe covered every buffer), so the visible layer lives elsewhere —
-# most likely DRM/KMS, which is how SDL2 apps drive this firmware.
-for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_pixel /sys/class/graphics/fb0/name; do
+# What is the system launcher doing while an app runs? Its cmdline and
+# script (if readable) reveal whether it keeps drawing a loading screen.
+for pid in $(pidof launcher.sh 2>/dev/null); do
+  echo "-- launcher pid $pid:"
+  echo "  cmdline: $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"
+  echo "  exe: $(readlink /proc/$pid/exe 2>/dev/null)"
+  script=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | awk '{print $1}')
+  if [ -f "$script" ]; then
+    echo "  script (first 3000 bytes):"
+    head -c 3000 "$script" 2>/dev/null | sed 's/^/    /'
+  fi
+done
+
+# Display nodes recap
+for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_pixel; do
   echo "  $f = $(cat "$f" 2>/dev/null)"
 done
-echo "-- /dev/dri:"
-ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
-echo "-- sunxi display nodes:"
-ls -la /dev/disp /dev/ion /dev/sunxi_disp* 2>/dev/null || echo "  (none)"
-echo "-- /dev/fb*:"
-ls -la /dev/fb* 2>/dev/null || echo "  (none)"
-echo "-- /sys/class/graphics:"
-ls /sys/class/graphics/ 2>/dev/null
-echo "-- display processes:"
-ps 2>/dev/null | grep -iE 'main|ui|igs|launch' | grep -v grep | head -10
+ls -la /dev/disp /dev/fb0 2>/dev/null
 
 cd "$progdir/GorORG35"
+
+# --- 1) display diagnostic: paints fb0 in a loop for ~25s (cycling
+# red/green/blue/yellow/white every 5s), verifies writes survive
+# read-back, and probes the mode-setting ioctls. Watch the screen
+# during this phase and check fbtest.log afterwards.
+if [ -x ./fbtest ] || [ -f ./fbtest ]; then
+  chmod +x ./fbtest 2>/dev/null
+  echo "-- running fbtest (~28s, watch the screen for colors) --"
+  ./fbtest .
+  echo "fbtest exited: $?"
+fi
+
+# --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
-# color probe: paints EVERY screen-sized chunk of fb0's memory with a
-# cycling color (red,green,blue,yellow) for 6 seconds at startup — the
-# color on the panel identifies which chunk the display scans
-export GOGPU_FB_PROBE=color
-# gogpu logs the real framebuffer geometry (device, size, virtual size,
-# offsets, bpp, stride)
 export GOGPU_LOG=debug
-# render at half the panel size; the fb blit upscales it (roughly 4x
-# cheaper on the software rasterizer)
 export GOGPU_FB_SCALE=2
-# render at half the panel size; the fb blit upscales it (roughly 4x
-# cheaper on the software rasterizer)
-export GOGPU_FB_SCALE=2
-# Not exec: this shell survives goro and records how it ended —
-# exit 137 = SIGKILL (the kernel OOM killer), 139 = segfault.
 ./goro -config goro.ini -data-dir .
 echo "goro exited: $?"

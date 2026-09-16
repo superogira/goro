@@ -28,6 +28,8 @@ for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_p
 done
 echo "-- /dev/dri:"
 ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
+echo "-- sunxi display nodes:"
+ls -la /dev/disp /dev/ion /dev/sunxi_disp* 2>/dev/null || echo "  (none)"
 echo "-- /dev/fb*:"
 ls -la /dev/fb* 2>/dev/null || echo "  (none)"
 echo "-- /sys/class/graphics:"
@@ -37,6 +39,10 @@ ps 2>/dev/null | grep -iE 'main|ui|igs|launch' | grep -v grep | head -10
 
 cd "$progdir/GorORG35"
 export GOGPU_PLATFORM=fbdev
+# color probe: paints EVERY screen-sized chunk of fb0's memory with a
+# cycling color (red,green,blue,yellow) for 6 seconds at startup — the
+# color on the panel identifies which chunk the display scans
+export GOGPU_FB_PROBE=color
 # gogpu logs the real framebuffer geometry (device, size, virtual size,
 # offsets, bpp, stride)
 export GOGPU_LOG=debug

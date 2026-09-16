@@ -485,21 +485,21 @@ func (p *fbdevPlatform) probeBufferColors() {
 	if screen <= 0 {
 		return
 	}
+	// Cycle the palette over EVERY screen-sized chunk of the mapping —
+	// if the panel scans any 480-line window inside smem, a color shows.
 	colors := [][3]byte{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}}
 	chunks := len(p.fbMem) / screen
-	if chunks > len(colors) {
-		chunks = len(colors)
-	}
 	for i := 0; i < chunks; i++ {
 		seg := p.fbMem[i*screen:]
 		if len(seg) > screen {
 			seg = seg[:screen]
 		}
-		fillFBColor(seg, geo, colors[i][0], colors[i][1], colors[i][2])
+		c := colors[i%len(colors)]
+		fillFBColor(seg, geo, c[0], c[1], c[2])
 	}
 	logger().Info("fbdev: color probe painted",
 		"chunks", chunks, "screen_bytes", screen,
-		"hold", "6s", "order", "red,green,blue,yellow")
+		"hold", "6s", "order", "red,green,blue,yellow,cycling")
 	time.Sleep(6 * time.Second)
 }
 

@@ -61,6 +61,7 @@ func (m *WorldMode) handleChatRoomCreateAck(ctx client.Context, ack network.Chat
 		m.pendingChatRoom = network.ChatRoomCreate{}
 		member := selectedCharacterName(ctx.Session)
 		m.ui.chatRoom.Open(ctx, room.Title, room.Limit, room.Public, []string{member})
+		m.applyLocalChatRoomBoard(ctx, room.Title, room.Limit, room.Public)
 		m.ui.console.AddBlueMessage("%s", chatRoomCreateAckMessage(ctx, ack))
 	case 1, 2:
 		m.pendingChatRoom = network.ChatRoomCreate{}
@@ -146,7 +147,9 @@ func (m *WorldMode) handleChatRoomAction(ctx client.Context, action gameui.ChatR
 		if err := ctx.Network.SendExitChatRoom(); err != nil {
 			m.ui.console.AddErrorMessage("Leave chat room failed.")
 			glog.Warnf("chat room leave failed: %v", err)
+			return
 		}
+		m.clearLocalChatRoomBoard(ctx)
 		return
 	}
 	message := strings.TrimSpace(action.Message)
@@ -226,6 +229,7 @@ func (m *WorldMode) handleChatRoomMemberJoin(ctx client.Context, join network.Ch
 	name := strings.TrimSpace(join.Name)
 	m.ui.chatRoom.AddMember(ctx, name, join.Count)
 	m.ui.chatRoom.AddSystem(ctx, chatRoomMemberMessage(ctx, 179, "%s entered the chat room.", name))
+	m.updateLocalChatRoomBoardCount(ctx, join.Count)
 }
 
 func (m *WorldMode) handleChatRoomMemberLeave(ctx client.Context, leave network.ChatRoomMemberLeave) {
@@ -241,6 +245,7 @@ func (m *WorldMode) handleChatRoomMemberLeave(ctx client.Context, leave network.
 		fallback = "%s has been kicked out of the chat room."
 	}
 	m.ui.chatRoom.AddSystem(ctx, chatRoomMemberMessage(ctx, messageID, fallback, name))
+	m.updateLocalChatRoomBoardCount(ctx, leave.Count)
 }
 
 func (m *WorldMode) handleChatRoomChange(ctx client.Context, change network.ChatRoomChange) {
@@ -255,6 +260,57 @@ func (m *WorldMode) handleChatRoomRoleChange(ctx client.Context, role network.Ch
 		return
 	}
 	m.ui.chatRoom.SetOwner(ctx, role.Name)
+	if strings.EqualFold(strings.TrimSpace(role.Name), selectedCharacterName(ctx.Session)) {
+		// Ownership moved to us: the board broadcast skips the (new) owner,
+		// so mirror it locally from the live room state.
+		m.applyLocalChatRoomBoard(ctx, m.ui.chatRoom.RoomTitle(), m.ui.chatRoom.RoomLimit(), m.ui.chatRoom.RoomPublic())
+		m.updateLocalChatRoomBoardCount(ctx, m.ui.chatRoom.RoomCount())
+	}
+}
+
+// localChatRoomBoardID is a synthetic room id for the local player's own
+// board: the server broadcasts ZC_ROOM_NEWENTRY/ZC_DESTROY_ROOM as
+// AREA_WOSC — everyone but the owner — so the creating client manages its
+// own board and never needs to match the server's room ids.
+const localChatRoomBoardID = 1
+
+// applyLocalChatRoomBoard mirrors the creator's board into local world
+// state; without it the creating client shows no board above itself.
+func (m *WorldMode) applyLocalChatRoomBoard(ctx client.Context, title string, limit uint16, public bool) {
+	if ctx.World == nil || strings.TrimSpace(title) == "" {
+		return
+	}
+	player := &ctx.World.Player
+	player.ChatRoom = true
+	player.ChatRoomID = localChatRoomBoardID
+	player.ChatRoomTitle = strings.TrimSpace(title)
+	player.ChatRoomLimit = limit
+	player.ChatRoomCount = 1
+	player.ChatRoomPublic = public
+}
+
+// clearLocalChatRoomBoard removes the local board when the owner leaves
+// the room (the server never sends us the destroy for our own board).
+func (m *WorldMode) clearLocalChatRoomBoard(ctx client.Context) {
+	if ctx.World == nil || !ctx.World.Player.ChatRoom {
+		return
+	}
+	if ctx.World.Player.ChatRoomID != localChatRoomBoardID {
+		return
+	}
+	clearActorChatRoom(&ctx.World.Player)
+}
+
+// updateLocalChatRoomBoardCount keeps the local board's member count in
+// sync while we own the room.
+func (m *WorldMode) updateLocalChatRoomBoardCount(ctx client.Context, count uint16) {
+	if ctx.World == nil || !ctx.World.Player.ChatRoom {
+		return
+	}
+	if ctx.World.Player.ChatRoomID != localChatRoomBoardID {
+		return
+	}
+	ctx.World.Player.ChatRoomCount = count
 }
 
 func (m *WorldMode) addChatRoomMessage(ctx client.Context, chat network.ChatMessage) {

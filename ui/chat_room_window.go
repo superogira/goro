@@ -159,6 +159,19 @@ func (w *ChatRoomWindow) PopAction() ChatRoomWindowAction {
 	return action
 }
 
+// RoomTitle/RoomLimit/RoomPublic/RoomCount expose the live room state so
+// the game layer can mirror the owner's board locally when the server
+// transfers ownership to us.
+func (w *ChatRoomWindow) RoomTitle() string { return w.title }
+func (w *ChatRoomWindow) RoomLimit() uint16 { return w.limit }
+func (w *ChatRoomWindow) RoomPublic() bool  { return w.public }
+func (w *ChatRoomWindow) RoomCount() uint16 {
+	if w.count > 0 {
+		return w.count
+	}
+	return uint16(len(w.members))
+}
+
 func (w *ChatRoomWindow) AddMessage(ctx Context, text string) {
 	w.addLine(ctx, strings.TrimSpace(text), "", widget.RGBA8(232, 238, 245, 255))
 }

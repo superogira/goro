@@ -48,6 +48,8 @@ type WorldMode struct {
 	falcons           map[uint32]*falconRenderState
 	cursorView        *spriteView
 	cursorViewMiss    bool
+	chatBoardTipSig   string
+	chatBoardBounds   map[uint32]vendingBoardBounds
 	slotMachineView   *spriteView
 	slotMachineMiss   bool
 	cursorFallback    *render.Image

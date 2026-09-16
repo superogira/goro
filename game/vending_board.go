@@ -26,6 +26,7 @@ func (m *WorldMode) drawVendingBoardLabels(screen *render.Frame, ctx client.Cont
 }
 
 func (m *WorldMode) drawChatRoomBoardLabels(screen *render.Frame, ctx client.Context, entries []sceneActorDrawEntry) {
+	bounds := make(map[uint32]vendingBoardBounds, len(entries))
 	for _, entry := range entries {
 		if !actorHasChatRoom(entry.actor) {
 			continue
@@ -38,7 +39,14 @@ func (m *WorldMode) drawChatRoomBoardLabels(screen *render.Frame, ctx client.Con
 			labelY -= boardLabelHeight(vendingLabel) + boardLabelGap
 		}
 		drawBoardLabel(screen, label, entry.screenX, labelY, icon)
+		if box, ok := boardLabelBounds(label, entry.screenX, labelY); ok {
+			bounds[entry.actor.ID] = box
+		}
 	}
+	// Hover and click hit-testing read these drawn bounds: recomputing them
+	// from world state drifts, because the draw path anchors the sprite and
+	// scales the local player's body while the projection shortcut does not.
+	m.chatBoardBounds = bounds
 }
 
 func chatRoomBoardLabel(actor worldstate.Actor) string {
@@ -225,7 +233,7 @@ func (m *WorldMode) hoveredChatRoomBoard(ctx client.Context, projection scenePro
 		if actor.ID == 0 || isLocalActor(ctx, actor.ID) || !actorHasChatRoom(actor) {
 			continue
 		}
-		bounds, ok := m.chatRoomBoardActorBounds(ctx, projection, actor, now)
+		bounds, ok := m.chatRoomBoardHitBounds(ctx, projection, actor, now)
 		if !ok || !bounds.contains(float64(mouseX), float64(mouseY)) {
 			continue
 		}
@@ -267,6 +275,16 @@ func (m *WorldMode) chatRoomBoardActorBounds(ctx client.Context, projection scen
 		topY -= boardLabelHeight(actor.VendingName) + boardLabelGap
 	}
 	return boardLabelBounds(label, float64(point.x), topY)
+}
+
+// chatRoomBoardHitBounds prefers the bounds captured while drawing the
+// board this frame and falls back to the projection shortcut before the
+// first draw (and in tests).
+func (m *WorldMode) chatRoomBoardHitBounds(ctx client.Context, projection sceneProjection, actor worldstate.Actor, now time.Time) (vendingBoardBounds, bool) {
+	if bounds, ok := m.chatBoardBounds[actor.ID]; ok {
+		return bounds, true
+	}
+	return m.chatRoomBoardActorBounds(ctx, projection, actor, now)
 }
 
 func boardLabelBounds(label string, centerX, topY float64) (vendingBoardBounds, bool) {

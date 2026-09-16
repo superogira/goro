@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/kivutar/goro/glog"
 )
 
 // deferredWebPackState tracks the background download of the wav web pack
@@ -95,7 +97,16 @@ func NewManager(root string) (*Manager, error) {
 	}
 
 	m := &Manager{Root: filepath.Clean(root)}
+	if abs, err := filepath.Abs(m.Root); err == nil {
+		glog.Infof("resources: root %s", abs)
+	}
 	m.scanKnownFiles()
+	for _, archive := range m.Archives {
+		glog.Infof("resources: archive %s (%d entries)", archive.Path(), archive.Count())
+	}
+	if len(m.Archives) == 0 {
+		glog.Warnf("resources: no GRF archives found under %s", m.Root)
+	}
 	m.ClientInfo = ClientInfo{
 		Connections: []Connection{
 			{Display: "Local rAthena", Address: "127.0.0.1", Port: 6900, Version: 55, LangType: 0},
@@ -110,6 +121,11 @@ func NewManager(root string) (*Manager, error) {
 		if len(info.Connections) > 0 {
 			m.ClientInfo = info
 		}
+		if len(info.Connections) > 0 {
+			glog.Infof("resources: clientinfo %s -> %d connection(s), first %s:%d", source, len(info.Connections), info.Connections[0].Address, info.Connections[0].Port)
+		}
+	} else {
+		glog.Warnf("resources: no clientinfo.xml found; defaulting to %s:%d", m.ClientInfo.Connections[0].Address, m.ClientInfo.Connections[0].Port)
 	}
 
 	return m, nil

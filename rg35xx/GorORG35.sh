@@ -20,21 +20,29 @@ uname -a
 free -m 2>/dev/null || true
 ls -la "$progdir/GorORG35" 2>/dev/null | head -20
 
-# Framebuffer visibility probe: goro paints each screen buffer of fb0 a
-# different solid color for 6 seconds (red = buffer 0, green = 1,
-# blue = 2, yellow = 3). The color you see identifies the buffer the
-# panel actually scans; NO color at all means fb0 is not the visible
-# layer and no fbdev app can draw there.
-for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_pixel; do
+# Display topology dump: fb0 writes never reached the panel (the color
+# probe covered every buffer), so the visible layer lives elsewhere —
+# most likely DRM/KMS, which is how SDL2 apps drive this firmware.
+for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_pixel /sys/class/graphics/fb0/name; do
   echo "  $f = $(cat "$f" 2>/dev/null)"
 done
+echo "-- /dev/dri:"
+ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
+echo "-- /dev/fb*:"
+ls -la /dev/fb* 2>/dev/null || echo "  (none)"
+echo "-- /sys/class/graphics:"
+ls /sys/class/graphics/ 2>/dev/null
+echo "-- display processes:"
+ps 2>/dev/null | grep -iE 'main|ui|igs|launch' | grep -v grep | head -10
 
 cd "$progdir/GorORG35"
 export GOGPU_PLATFORM=fbdev
-export GOGPU_FB_PROBE=color
 # gogpu logs the real framebuffer geometry (device, size, virtual size,
 # offsets, bpp, stride)
 export GOGPU_LOG=debug
+# render at half the panel size; the fb blit upscales it (roughly 4x
+# cheaper on the software rasterizer)
+export GOGPU_FB_SCALE=2
 # render at half the panel size; the fb blit upscales it (roughly 4x
 # cheaper on the software rasterizer)
 export GOGPU_FB_SCALE=2

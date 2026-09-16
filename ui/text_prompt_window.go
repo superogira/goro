@@ -29,10 +29,12 @@ type TextPromptWindow struct {
 	maxLength   int
 	inputField  *textfield.Widget
 	action      TextPromptAction
+	// webOpen marks the DOM-panel twin as the active presentation (web
+	// build only); the canvas window is untouched in that mode.
+	webOpen bool
 }
 
 func (w *TextPromptWindow) Open(ctx Context, title, label, placeholder string, maxLength int) {
-	w.EnsureWindow(textPromptW, ROWindowTitleHeight+textPromptContentH+ROWindowFooterHeight)
 	w.ctx = ctx
 	w.title = title
 	w.label = label
@@ -41,15 +43,35 @@ func (w *TextPromptWindow) Open(ctx Context, title, label, placeholder string, m
 	w.maxLength = maxLength
 	w.inputField = nil
 	w.action = TextPromptAction{}
+	if textPromptWebSync(title, label, placeholder, maxLength, true) {
+		w.webOpen = true
+		w.open = true
+		return
+	}
+	w.EnsureWindow(textPromptW, ROWindowTitleHeight+textPromptContentH+ROWindowFooterHeight)
 	w.Window.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
 	w.focusInput(ctx)
+}
+
+// Close hides whichever presentation is active.
+func (w *TextPromptWindow) Close() {
+	if w.webOpen {
+		w.webOpen = false
+		w.open = false
+		textPromptWebSync(w.title, w.label, w.placeholder, w.maxLength, false)
+		return
+	}
+	w.Window.Close()
 }
 
 func (w *TextPromptWindow) Update(ctx Context) bool {
 	w.ctx = ctx
 	if !w.IsOpen() {
 		return false
+	}
+	if w.webOpen {
+		return w.updateWeb(ctx)
 	}
 	if w.submitFromFocusedEnter(ctx) {
 		w.Publish(ctx)
@@ -58,6 +80,28 @@ func (w *TextPromptWindow) Update(ctx Context) bool {
 	consumed := w.Window.Update(ctx)
 	w.Publish(ctx)
 	return consumed
+}
+
+// updateWeb services the DOM panel: typed submissions arrive through the
+// action queue; Escape (which reaches the game only when the page input
+// is not focused) cancels. Stays consumed while open so game shortcuts
+// yield, exactly like the canvas twin.
+func (w *TextPromptWindow) updateWeb(ctx Context) bool {
+	text, cancelled := drainTextPromptWebActions()
+	if cancelled {
+		w.Close()
+		return true
+	}
+	if text != "" {
+		w.action = TextPromptAction{Text: text, Submitted: true}
+		w.Close()
+		return true
+	}
+	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEscape) {
+		w.Close()
+		return true
+	}
+	return true
 }
 
 func (w *TextPromptWindow) Rebind(ctx Context) {

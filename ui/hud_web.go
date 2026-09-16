@@ -176,6 +176,14 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroTextPromptAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "tprompt:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 		js.Global().Set("goroCharCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()

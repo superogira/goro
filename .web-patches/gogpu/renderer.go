@@ -918,7 +918,11 @@ func (ws *RenderTarget) present() (reconfigured, presented bool) {
 		}); ok {
 			if pixels, rerr := ws.surface.ReadPixels(); rerr != nil {
 				slog.Debug("gogpu: fbdev readback failed", "error", rerr)
-			} else if berr := sink.BlitPixels(pixels, int(ws.width), int(ws.height), ws.format == gputypes.TextureFormatBGRA8Unorm); berr != nil {
+			// ReadPixels' contract is a tightly packed RGBA8 snapshot
+			// regardless of the surface format, so the sink's bgra flag
+			// must stay false — passing the surface format here swapped
+			// red and blue on fbdev panels.
+			} else if berr := sink.BlitPixels(pixels, int(ws.width), int(ws.height), false); berr != nil {
 				slog.Debug("gogpu: fbdev blit failed", "error", berr)
 			}
 		}

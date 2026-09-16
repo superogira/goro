@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gogpu/ui/core/checkbox"
 	"github.com/gogpu/ui/core/radio"
@@ -20,6 +21,8 @@ type PartySettingsWindow struct {
 	Window
 	expShare      uint32
 	refuseInvites bool
+	// webOpen marks the DOM twin as the active presentation (web build).
+	webOpen bool
 }
 
 func (w *PartySettingsWindow) Open(ctx Context) {
@@ -28,8 +31,24 @@ func (w *PartySettingsWindow) Open(ctx Context) {
 	party := sessionParty(ctx.Session)
 	w.expShare = party.ExpShare
 	w.refuseInvites = party.RefuseInvites
+	if partySetupWebSync(partySetupWebState{open: true, expShare: w.expShare, refuseInvite: w.refuseInvites}) {
+		w.webOpen = true
+		w.open = true
+		return
+	}
 	w.Window.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
+}
+
+// Close hides whichever presentation is active.
+func (w *PartySettingsWindow) Close() {
+	if w.webOpen {
+		w.webOpen = false
+		w.open = false
+		partySetupWebSync(partySetupWebState{})
+		return
+	}
+	w.Window.Close()
 }
 
 func (w *PartySettingsWindow) Update(ctx Context) bool {
@@ -37,6 +56,21 @@ func (w *PartySettingsWindow) Update(ctx Context) bool {
 	w.ctx = ctx
 	if !w.IsOpen() {
 		return false
+	}
+	if w.webOpen {
+		for _, action := range drainSocialWebActions("ps:") {
+			if action == "ps:cancel" {
+				w.Close()
+				return true
+			}
+			if parts := strings.Split(action, ":"); len(parts) == 4 && parts[0] == "ps" && parts[1] == "ok" {
+				w.expShare = parsePartySettingUint32(parts[2])
+				w.refuseInvites = parts[3] == "1"
+				w.apply(ctx)
+				return true
+			}
+		}
+		return true
 	}
 	consumed := w.Window.Update(ctx)
 	w.Publish(ctx)
@@ -92,6 +126,9 @@ func (w *PartySettingsWindow) widgetTree(ctx Context) widget.Widget {
 }
 
 func (w *PartySettingsWindow) apply(ctx Context) {
+	if w.webOpen {
+		defer w.Close()
+	}
 	if ctx.Session != nil {
 		ctx.Session.Party.ExpShare = w.expShare
 		ctx.Session.Party.RefuseInvites = w.refuseInvites
@@ -104,7 +141,9 @@ func (w *PartySettingsWindow) apply(ctx Context) {
 			glog.Warnf("party invite settings failed: %v", err)
 		}
 	}
-	w.Window.Close()
+	if !w.webOpen {
+		w.Window.Close()
+	}
 }
 
 func parsePartySettingUint32(value string) uint32 {

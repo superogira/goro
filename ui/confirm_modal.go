@@ -30,6 +30,8 @@ type ConfirmModal struct {
 	okOnly      bool
 	ctx         client.Context
 	openedFrame uint64
+	// webOpen marks the DOM twin as the active presentation (web build).
+	webOpen bool
 }
 
 func (m *ConfirmModal) Open(ctx client.Context, title, message string, onOK, onCancel func()) {
@@ -56,6 +58,11 @@ func (m *ConfirmModal) openPrompt(ctx client.Context) {
 	if ctx.Input != nil {
 		m.openedFrame = ctx.Input.FrameID()
 	}
+	if confirmWebSync(m.title, m.message, m.okOnly, true) {
+		m.webOpen = true
+		m.open = true
+		return
+	}
 	m.EnsureWindow(smallPromptWidth, m.promptHeight())
 	m.CloseOnEsc = false // Escape is handled here, including opening-frame suppression.
 	m.SetSize(smallPromptWidth, m.promptHeight())
@@ -67,6 +74,17 @@ func (m *ConfirmModal) Update(ctx client.Context) bool {
 	m.ctx = ctx
 	if !m.Window.IsOpen() {
 		return false
+	}
+	if m.webOpen {
+		for _, action := range drainSocialWebActions("cfm:") {
+			switch action {
+			case "cfm:ok":
+				m.Confirm(m.ctx)
+			case "cfm:cancel":
+				m.Cancel(m.ctx)
+			}
+		}
+		return true
 	}
 	// Widget callbacks can open this modal before the triggering key reaches
 	// input.State. Only accept keyboard confirmation in a later input frame.
@@ -119,6 +137,12 @@ func (m *ConfirmModal) Cancel(ctx client.Context) {
 }
 
 func (m *ConfirmModal) Close(ctx client.Context) {
+	if m.webOpen {
+		m.webOpen = false
+		m.open = false
+		confirmWebSync(m.title, m.message, m.okOnly, false)
+		return
+	}
 	m.Window.Close()
 	m.Publish(ctx)
 }

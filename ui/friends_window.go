@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gogpu/ui/event"
@@ -28,6 +29,9 @@ type FriendsWindow struct {
 	action           FriendsWindowAction
 	contextMenu      FriendContextMenu
 	partyContextMenu PartyContextMenu
+	// webOpen marks the DOM twin as the active presentation (web build).
+	webOpen   bool
+	webSyncID string
 }
 
 type friendsWindowTab int
@@ -77,6 +81,12 @@ func (w *FriendsWindow) OpenWindow(ctx Context) {
 	w.ctx = ctx
 	w.snapshot = friendsWindowSnapshot(ctx.Session)
 	w.tab = friendsWindowTabFriends
+	if friendsWebSync(w.webState()) {
+		w.webOpen = true
+		w.webSyncID = w.snapshot
+		w.open = true
+		return
+	}
 	w.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
 }
@@ -84,12 +94,50 @@ func (w *FriendsWindow) OpenWindow(ctx Context) {
 func (w *FriendsWindow) Close() {
 	w.contextMenu.Close()
 	w.partyContextMenu.Close()
+	if w.webOpen {
+		w.webOpen = false
+		w.open = false
+		friendsWebSync(friendsWebState{open: false, tab: w.webTab(), title: w.webTitle()})
+		return
+	}
 	w.Window.Close()
 }
+
+// webTab returns the DOM tab name for the active tab.
+func (w *FriendsWindow) webTab() string {
+	if w.tab == friendsWindowTabParty {
+		return "party"
+	}
+	return "friends"
+}
+
+func (w *FriendsWindow) webTitle() string {
+	if w.tab == friendsWindowTabParty {
+		return partyWindowTitle(sessionParty(w.ctx.Session))
+	}
+	friends := sessionFriends(w.ctx.Session)
+	return fmt.Sprintf("Friends (%d/%d)", len(friends), friendsListMax)
+}
+
+// webState snapshots everything the DOM panel renders.
+func (w *FriendsWindow) webState() friendsWebState {
+	return friendsWebState{
+		open:      true,
+		tab:       w.webTab(),
+		title:     w.webTitle(),
+		friends:   sessionFriends(w.ctx.Session),
+		party:     sessionParty(w.ctx.Session),
+		canManage: partyCanManageSession(w.ctx.Session),
+	}
+}
+
 
 func (w *FriendsWindow) Update(ctx Context) bool {
 	w.EnsureWindow(friendsWindowWidth, friendsWindowHeight)
 	w.ctx = ctx
+	if w.webOpen {
+		return w.updateWeb(ctx)
+	}
 	if w.drainContextMenuAction() {
 		return true
 	}
@@ -140,6 +188,12 @@ func (w *FriendsWindow) Rebind(ctx Context) {
 	if !w.IsOpen() {
 		return
 	}
+	if w.webOpen {
+		w.snapshot = friendsWindowSnapshot(ctx.Session)
+		w.webSyncID = ""
+		w.syncWebIfChanged()
+		return
+	}
 	w.ctx = ctx
 	w.snapshot = friendsWindowSnapshot(ctx.Session)
 	w.SetContent(w.widgetTree(ctx))
@@ -150,6 +204,89 @@ func (w *FriendsWindow) PopAction() FriendsWindowAction {
 	action := w.action
 	w.action = FriendsWindowAction{}
 	return action
+}
+
+// syncWebIfChanged re-pushes the DOM state when the session snapshot or
+// the active tab changed.
+func (w *FriendsWindow) syncWebIfChanged() {
+	key := w.webTab() + "|" + w.snapshot
+	if key == w.webSyncID {
+		return
+	}
+	w.webSyncID = key
+	friendsWebSync(w.webState())
+}
+
+// updateWeb services the DOM friends panel: tab switches, footer buttons
+// and per-row actions (aid-keyed) feed the same FriendsWindowAction flow
+// the canvas window produces, so the game side needs no changes.
+func (w *FriendsWindow) updateWeb(ctx Context) bool {
+	w.snapshot = friendsWindowSnapshot(ctx.Session)
+	for _, action := range drainSocialWebActions("fw:") {
+		switch {
+		case action == "fw:close":
+			w.Close()
+			return true
+		case action == "fw:tab:friends":
+			w.tab = friendsWindowTabFriends
+		case action == "fw:tab:party":
+			w.tab = friendsWindowTabParty
+		case action == "fw:fsetup":
+			w.action = FriendsWindowAction{Kind: FriendsWindowActionFriendSettings}
+		case action == "fw:pcreate":
+			w.action = FriendsWindowAction{Kind: FriendsWindowActionPartyCreate}
+		case action == "fw:pinvite":
+			w.action = FriendsWindowAction{Kind: FriendsWindowActionPartyInvite}
+		case action == "fw:psettings":
+			w.action = FriendsWindowAction{Kind: FriendsWindowActionPartySettings}
+		case action == "fw:pleave":
+			w.action = FriendsWindowAction{Kind: FriendsWindowActionPartyLeave}
+		case strings.HasPrefix(action, "fw:fwhisper:"):
+			if friend, ok := w.friendByWebID(strings.TrimPrefix(action, "fw:fwhisper:")); ok {
+				w.action = FriendsWindowAction{Kind: FriendsWindowActionFriendWhisper, Friend: friend}
+			}
+		case strings.HasPrefix(action, "fw:fdelete:"):
+			if friend, ok := w.friendByWebID(strings.TrimPrefix(action, "fw:fdelete:")); ok {
+				w.action = FriendsWindowAction{Kind: FriendsWindowActionFriendDelete, Friend: friend}
+			}
+		case strings.HasPrefix(action, "fw:fblock:"):
+			if friend, ok := w.friendByWebID(strings.TrimPrefix(action, "fw:fblock:")); ok {
+				w.action = FriendsWindowAction{Kind: FriendsWindowActionFriendBlockWhisper, Friend: friend}
+			}
+		case strings.HasPrefix(action, "fw:pinfo:"):
+			if member, ok := w.partyMemberByWebID(strings.TrimPrefix(action, "fw:pinfo:")); ok {
+				w.action = FriendsWindowAction{Kind: FriendsWindowActionPartyMemberInfo, PartyMember: member}
+			}
+		case strings.HasPrefix(action, "fw:pwhisper:"):
+			if member, ok := w.partyMemberByWebID(strings.TrimPrefix(action, "fw:pwhisper:")); ok {
+				w.action = FriendsWindowAction{Kind: FriendsWindowActionPartyMemberWhisper, PartyMember: member}
+			}
+		case strings.HasPrefix(action, "fw:pexpel:"):
+			if member, ok := w.partyMemberByWebID(strings.TrimPrefix(action, "fw:pexpel:")); ok {
+				w.action = FriendsWindowAction{Kind: FriendsWindowActionPartyMemberExpel, PartyMember: member}
+			}
+		}
+	}
+	w.syncWebIfChanged()
+	return true
+}
+
+func (w *FriendsWindow) friendByWebID(id string) (session.Friend, bool) {
+	for _, friend := range sessionFriends(w.ctx.Session) {
+		if strconv.FormatUint(uint64(friend.AccountID), 10) == id {
+			return friend, true
+		}
+	}
+	return session.Friend{}, false
+}
+
+func (w *FriendsWindow) partyMemberByWebID(id string) (session.PartyMember, bool) {
+	for _, member := range sessionParty(w.ctx.Session).Members {
+		if strconv.FormatUint(uint64(member.AccountID), 10) == id {
+			return member, true
+		}
+	}
+	return session.PartyMember{}, false
 }
 
 func (w *FriendsWindow) widgetTree(ctx Context) widget.Widget {

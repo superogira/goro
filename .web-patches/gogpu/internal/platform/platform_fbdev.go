@@ -239,7 +239,11 @@ func (p *fbdevPlatform) Init() error {
 		"device", dev, "size", fmt.Sprintf("%dx%d", geo.width, geo.height),
 		"virtual", fmt.Sprintf("%dx%d", geo.widthVirtual, geo.heightVirtual),
 		"offsets", fmt.Sprintf("+%d+%d", geo.xoffset, geo.yoffset),
-		"bpp", geo.bpp, "line", geo.lineLength, "maplen", len(mem))
+		"bpp", geo.bpp, "line", geo.lineLength, "maplen", len(mem),
+		"bitfields", fmt.Sprintf("r<%d:%d> g<%d:%d> b<%d:%d>",
+			geo.redBits.offset, geo.redBits.length,
+			geo.greenBits.offset, geo.greenBits.length,
+			geo.blueBits.offset, geo.blueBits.length))
 	// Activate the fb layer for scanout: on StockOS the layer stays off
 	// until an FBIOPAN/FBIOPUT touches the mode — writes before this are
 	// invisible (fbtest proved the pan is the trigger).
@@ -572,14 +576,10 @@ func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) er
 					if bgra {
 						r, b = b, r
 					}
-					var pix uint32
-					if geo.redBits.length > 0 {
-						pix |= (uint32(r) >> (8 - geo.redBits.length)) << geo.redBits.offset
-						pix |= (uint32(g) >> (8 - geo.greenBits.length)) << geo.greenBits.offset
-						pix |= (uint32(b) >> (8 - geo.blueBits.length)) << geo.blueBits.offset
-					} else {
-						pix = uint32(r)<<16 | uint32(g)<<8 | uint32(b)
-					}
+					// Standard little-endian XRGB (bytes B,G,R,X): fbtest
+					// proved the panel takes this literally; the driver's
+					// declared bitfields disagree and swap red/blue.
+					pix := uint32(r)<<16 | uint32(g)<<8 | uint32(b)
 					binary.LittleEndian.PutUint32(row[x*4:], pix)
 				}
 				break
@@ -593,14 +593,7 @@ func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) er
 				if bgra {
 					r, b = b, r
 				}
-				var pix uint32
-				if geo.redBits.length > 0 {
-					pix |= (uint32(r) >> (8 - geo.redBits.length)) << geo.redBits.offset
-					pix |= (uint32(g) >> (8 - geo.greenBits.length)) << geo.greenBits.offset
-					pix |= (uint32(b) >> (8 - geo.blueBits.length)) << geo.blueBits.offset
-				} else {
-					pix = uint32(r)<<16 | uint32(g)<<8 | uint32(b)
-				}
+				var pix uint32 = uint32(r)<<16 | uint32(g)<<8 | uint32(b)
 				binary.LittleEndian.PutUint32(row[x*4:], pix)
 			}
 		case 16:

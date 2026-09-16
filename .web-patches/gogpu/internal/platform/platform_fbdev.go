@@ -451,10 +451,15 @@ func (w *fbdevWindow) PhysicalSize() (int, int) {
 func (w *fbdevWindow) ScaleFactor() float64 { return 1 }
 
 func (w *fbdevWindow) PrepareFrame() PrepareFrameResult {
+	// Report the (optionally scaled) surface size, not the raw panel
+	// size: beginFrame reconfigures the surface to match this value, so
+	// returning the panel size here fought the scaled resize every
+	// frame (surface ping-ponged 320x240 <-> 640x480).
+	width, height := w.platform.surfaceSize()
 	return PrepareFrameResult{
 		ScaleFactor:    1,
-		PhysicalWidth:  uint32(w.platform.geo.width),  //nolint:gosec // fb size fits u32
-		PhysicalHeight: uint32(w.platform.geo.height), //nolint:gosec // fb size fits u32
+		PhysicalWidth:  uint32(width),  //nolint:gosec // fb size fits u32
+		PhysicalHeight: uint32(height), //nolint:gosec // fb size fits u32
 	}
 }
 

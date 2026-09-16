@@ -59,7 +59,42 @@ sub1(
   (function () {
     var root = document.getElementById('goro-vboards');
     var panels = {};   // id -> { el, x, y, title }
-    var iconURL = encodeURI('data/texture/\\uc720\\uc800\\uc778\\ud130\\ud398\\uc774\\uc2a4/basic_interface/shop.bmp');
+    // boardIconMagentaKey: shop.bmp keys transparency on magenta (the
+    // same rule as the game's res.isROMagenta); decode once, cache.
+    var iconURL = '';
+    var iconQueue = [];
+    var iconLoading = false;
+    function boardIconMagentaKey() {
+      if (iconURL || iconLoading) return;
+      iconLoading = true;
+      var img = new Image();
+      img.onload = function () {
+        var cv = document.createElement('canvas');
+        cv.width = img.naturalWidth || 24;
+        cv.height = img.naturalHeight || 24;
+        var cx = cv.getContext('2d');
+        cx.drawImage(img, 0, 0);
+        var d;
+        try { d = cx.getImageData(0, 0, cv.width, cv.height); }
+        catch (e) { iconLoading = false; return; }
+        var p = d.data;
+        for (var i = 0; i < p.length; i += 4) {
+          if (p[i] >= 248 && p[i + 1] <= 8 && p[i + 2] >= 248) p[i + 3] = 0;
+        }
+        cx.putImageData(d, 0, 0);
+        iconURL = cv.toDataURL();
+        iconQueue.forEach(function (im) { im.src = iconURL; });
+        iconQueue = [];
+      };
+      img.onerror = function () { iconLoading = false; };
+      img.src = encodeURI('data/texture/\\uc720\\uc800\\uc778\\ud130\\ud398\\uc774\\uc2a4/basic_interface/shop.bmp');
+    }
+    function boardIcon(el) {
+      var im = el.querySelector('img');
+      if (iconURL) { im.src = iconURL; return; }
+      boardIconMagentaKey();
+      iconQueue.push(im);
+    }
     window.goroVendingBoardsSync = function (boards) {
       var seen = {};
       (boards || []).forEach(function (b) {
@@ -68,7 +103,8 @@ sub1(
         if (!p) {
           var el = document.createElement('div');
           el.className = 'vb';
-          el.innerHTML = '<img alt="" src="' + iconURL + '"><span></span>';
+          el.innerHTML = '<img alt=""><span></span>';
+          boardIcon(el);
           root.appendChild(el);
           p = panels[b.id] = { el: el, x: -1, y: -1, title: '' };
         }

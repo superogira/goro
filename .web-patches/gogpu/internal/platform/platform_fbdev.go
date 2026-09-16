@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -162,11 +163,11 @@ type fbBitfield struct {
 // fbdevPlatform is the process-level backend: one fullscreen window,
 // evdev readers feeding a shared event queue.
 type fbdevPlatform struct {
-	events  *eventqueue.Queue[Event]
-	wakeCh  chan struct{}
-	geo     fbGeometry
-	fbFile  *os.File
-	fbMem   []byte
+	events *eventqueue.Queue[Event]
+	wakeCh chan struct{}
+	geo    fbGeometry
+	fbFile *os.File
+	fbMem  []byte
 
 	mu      sync.Mutex // guards window creation/close state
 	window  *fbdevWindow
@@ -178,6 +179,9 @@ type fbdevPlatform struct {
 
 	// virtual cursor / button / stick state, guarded by inputMu
 	cursorX, cursorY float64
+	// fbScale renders at 1/fbScale of the panel and BlitPixels upscales;
+	// pointer events are mapped back into the smaller surface space.
+	fbScale          int
 	buttons          gpucontext.Buttons
 	axes             map[uint16]int32
 	hatX, hatY       int
@@ -223,6 +227,7 @@ func (p *fbdevPlatform) Init() error {
 		return fmt.Errorf("fbdev: mmap: %w", err)
 	}
 	p.fbFile, p.fbMem, p.geo = f, mem, geo
+	p.fbScale = fbScaleFromEnv()
 	logger().Info("fbdev: framebuffer ready",
 		"device", dev, "size", fmt.Sprintf("%dx%d", geo.width, geo.height),
 		"bpp", geo.bpp, "line", geo.lineLength, "maplen", len(mem))
@@ -246,11 +251,12 @@ func (p *fbdevPlatform) CreateWindow(config Config) (PlatformWindow, error) {
 	p.cursorX = float64(p.geo.width) / 2
 	p.cursorY = float64(p.geo.height) / 2
 	p.inputMu.Unlock()
-	// Size the application to the framebuffer and grant focus so text
-	// fields work without a window manager.
+	// Size the application to the (optionally scaled) surface and grant
+	// focus so text fields work without a window manager.
+	surfW, surfH := p.surfaceSize()
 	p.events.Push(Event{Type: EventResize, WindowID: w.id,
-		Width: p.geo.width, Height: p.geo.height,
-		PhysicalWidth: p.geo.width, PhysicalHeight: p.geo.height})
+		Width: surfW, Height: surfH,
+		PhysicalWidth: surfW, PhysicalHeight: surfH})
 	p.events.Push(Event{Type: EventFocus, WindowID: w.id, Focused: true})
 	p.wake()
 	return w, nil
@@ -408,9 +414,15 @@ func (w *fbdevWindow) GetHandle() (instance, window uintptr) { return 0, 0 }
 // through the software surface and BlitPixels.
 func (w *fbdevWindow) UseHeadlessSurface() bool { return true }
 
-func (w *fbdevWindow) LogicalSize() (int, int)  { return w.platform.geo.width, w.platform.geo.height }
-func (w *fbdevWindow) PhysicalSize() (int, int) { return w.platform.geo.width, w.platform.geo.height }
-func (w *fbdevWindow) ScaleFactor() float64     { return 1 }
+func (w *fbdevWindow) LogicalSize() (int, int) {
+	w2, h2 := w.platform.surfaceSize()
+	return w2, h2
+}
+func (w *fbdevWindow) PhysicalSize() (int, int) {
+	w2, h2 := w.platform.surfaceSize()
+	return w2, h2
+}
+func (w *fbdevWindow) ScaleFactor() float64 { return 1 }
 
 func (w *fbdevWindow) PrepareFrame() PrepareFrameResult {
 	return PrepareFrameResult{
@@ -420,9 +432,9 @@ func (w *fbdevWindow) PrepareFrame() PrepareFrameResult {
 	}
 }
 
-func (w *fbdevWindow) InSizeMove() bool  { return false }
-func (w *fbdevWindow) ShouldClose() bool { return w.shouldClose }
-func (w *fbdevWindow) SetTitle(string)   {}
+func (w *fbdevWindow) InSizeMove() bool    { return false }
+func (w *fbdevWindow) ShouldClose() bool   { return w.shouldClose }
+func (w *fbdevWindow) SetTitle(string)     {}
 func (w *fbdevWindow) SetMinSize(int, int) {}
 func (w *fbdevWindow) SetMaxSize(int, int) {}
 func (w *fbdevWindow) SetCursor(int)       {}
@@ -444,17 +456,20 @@ func (w *fbdevWindow) Close() {
 func (w *fbdevWindow) Show() {}
 func (w *fbdevWindow) Hide() {}
 
-func (w *fbdevWindow) SetPosition(int, int)         {}
-func (w *fbdevWindow) SyncFrame()                   {}
-func (w *fbdevWindow) SetCursorMode(mode int)       { w.cursorMode = mode }
-func (w *fbdevWindow) CursorMode() int              { return w.cursorMode }
-func (w *fbdevWindow) SetModalFrameCallback(func()) {}
-func (w *fbdevWindow) RequestSize(width, height int) {}
+func (w *fbdevWindow) SetPosition(int, int)                 {}
+func (w *fbdevWindow) SyncFrame()                           {}
+func (w *fbdevWindow) SetCursorMode(mode int)               { w.cursorMode = mode }
+func (w *fbdevWindow) CursorMode() int                      { return w.cursorMode }
+func (w *fbdevWindow) SetModalFrameCallback(func())         {}
+func (w *fbdevWindow) RequestSize(width, height int)        {}
 func (w *fbdevWindow) StartDrag([]string, func(DragResult)) {}
 func (w *fbdevWindow) Destroy()                             {}
 
 // BlitPixels writes a presented software frame (RGBA or BGRA, row-major,
 // tightly packed) into the framebuffer, honoring offsets and line length.
+// A frame that is a whole fraction of the panel is scaled up with
+// nearest-neighbor sampling, so a reduced render resolution still fills
+// the screen.
 func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) error {
 	p := w.platform
 	geo := p.geo
@@ -464,15 +479,42 @@ func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) er
 	if width <= 0 || height <= 0 {
 		return fmt.Errorf("fbdev: blit size %dx%d", width, height)
 	}
+	stepX, stepY := 1, 1
+	if geo.width > width && geo.width%width == 0 && geo.height%height == 0 && geo.height >= height {
+		stepX = geo.width / width
+		stepY = geo.height / height
+	}
 	srcRow := width * 4
 	dstBase := geo.yoffset*geo.lineLength + geo.xoffset*geo.bpp/8
-	for y := 0; y < height && y < geo.height; y++ {
+	for y := 0; y < height && y*stepY < geo.height; y++ {
 		src := pixels[y*srcRow : y*srcRow+srcRow]
-		row := p.fbMem[dstBase+y*geo.lineLength:]
+		row := p.fbMem[dstBase+y*stepY*geo.lineLength:]
 		switch geo.bpp {
 		case 32:
-			for x := 0; x < width && x < geo.width; x++ {
-				r, g, b := src[x*4], src[x*4+1], src[x*4+2]
+			if stepX == 1 {
+				for x := 0; x < width && x < geo.width; x++ {
+					r, g, b := src[x*4], src[x*4+1], src[x*4+2]
+					if bgra {
+						r, b = b, r
+					}
+					var pix uint32
+					if geo.redBits.length > 0 {
+						pix |= (uint32(r) >> (8 - geo.redBits.length)) << geo.redBits.offset
+						pix |= (uint32(g) >> (8 - geo.greenBits.length)) << geo.greenBits.offset
+						pix |= (uint32(b) >> (8 - geo.blueBits.length)) << geo.blueBits.offset
+					} else {
+						pix = uint32(r)<<16 | uint32(g)<<8 | uint32(b)
+					}
+					binary.LittleEndian.PutUint32(row[x*4:], pix)
+				}
+				break
+			}
+			for x := 0; x < geo.width; x++ {
+				sx := x / stepX
+				if sx >= width {
+					break
+				}
+				r, g, b := src[sx*4], src[sx*4+1], src[sx*4+2]
 				if bgra {
 					r, b = b, r
 				}
@@ -487,8 +529,23 @@ func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) er
 				binary.LittleEndian.PutUint32(row[x*4:], pix)
 			}
 		case 16:
-			for x := 0; x < width && x < geo.width; x++ {
-				r, g, b := src[x*4], src[x*4+1], src[x*4+2]
+			if stepX == 1 {
+				for x := 0; x < width && x < geo.width; x++ {
+					r, g, b := src[x*4], src[x*4+1], src[x*4+2]
+					if bgra {
+						r, b = b, r
+					}
+					pix := (uint32(r)>>3)<<11 | (uint32(g)>>2)<<5 | uint32(b)>>3
+					binary.LittleEndian.PutUint16(row[x*2:], uint16(pix))
+				}
+				break
+			}
+			for x := 0; x < geo.width; x++ {
+				sx := x / stepX
+				if sx >= width {
+					break
+				}
+				r, g, b := src[sx*4], src[sx*4+1], src[sx*4+2]
 				if bgra {
 					r, b = b, r
 				}
@@ -685,6 +742,8 @@ func (p *fbdevPlatform) pointerButton(button gpucontext.Buttons, down bool) {
 	}
 	buttons := p.buttons
 	p.inputMu.Unlock()
+	sx, sy := p.surfacePoint(x, y)
+	x, y = float64(sx), float64(sy)
 
 	btn := gpucontext.ButtonMiddle
 	switch button {
@@ -759,6 +818,40 @@ func (p *fbdevPlatform) queueHatKeys(oldVal, newVal int, negKey, posKey gpuconte
 	p.wake()
 }
 
+// fbScaleFromEnv reads GOGPU_FB_SCALE (1-4); 2 renders at half size and
+// lets BlitPixels upscale — roughly 4x cheaper on a software rasterizer.
+func fbScaleFromEnv() int {
+	n, _ := strconv.Atoi(os.Getenv("GOGPU_FB_SCALE"))
+	if n < 1 {
+		n = 1
+	}
+	if n > 4 {
+		n = 4
+	}
+	return n
+}
+
+// surfaceSize is the panel size divided by the render scale.
+func (p *fbdevPlatform) surfaceSize() (int, int) {
+	if p.fbScale <= 1 {
+		return p.geo.width, p.geo.height
+	}
+	w := p.geo.width / p.fbScale
+	h := p.geo.height / p.fbScale
+	if w < 1 || h < 1 {
+		return p.geo.width, p.geo.height
+	}
+	return w, h
+}
+
+// surfacePoint maps framebuffer pixel coordinates into surface space.
+func (p *fbdevPlatform) surfacePoint(x, y float64) (float32, float32) {
+	if p.fbScale <= 1 {
+		return float32(x), float32(y)
+	}
+	return float32(x / float64(p.fbScale)), float32(y / float64(p.fbScale))
+}
+
 // cursorLoop moves the virtual cursor from stick deflection at a fixed
 // rate and posts pointer-move events.
 func (p *fbdevPlatform) cursorLoop() {
@@ -794,11 +887,12 @@ func (p *fbdevPlatform) cursorLoop() {
 		x, y := p.cursorX, p.cursorY
 		buttons := p.buttons
 		p.inputMu.Unlock()
+		sx, sy := p.surfacePoint(x, y)
 		p.push(Event{Type: EventPointerMove, WindowID: p.windowID(), Pointer: gpucontext.PointerEvent{
 			Type:        gpucontext.PointerMove,
 			PointerID:   1,
-			X:           x,
-			Y:           y,
+			X:           float64(sx),
+			Y:           float64(sy),
 			Width:       1,
 			Height:      1,
 			PointerType: gpucontext.PointerTypeMouse,

@@ -19,8 +19,24 @@ echo "=== goro launch $(date) ==="
 uname -a
 free -m 2>/dev/null || true
 ls -la "$progdir/GorORG35" 2>/dev/null | head -20
+
+# Framebuffer probe: paint the whole fb white for 2 seconds. If the screen
+# does NOT turn white, /dev/fb0 is not the visible layer and nothing any
+# app draws there can show up.
+echo "fb probe: painting /dev/fb0 white"
+for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_pixel; do
+  echo "  $f = $(cat "$f" 2>/dev/null)"
+done
+head -c 2000000 /dev/zero | tr '\0' '\377' > /dev/fb0 2>&1 || echo "  fb write failed: $?"
+sleep 2
+
 cd "$progdir/GorORG35"
 export GOGPU_PLATFORM=fbdev
+# gogpu logs the real framebuffer geometry (device, size, bpp, stride)
+export GOGPU_LOG=debug
+# render at half the panel size; the fb blit upscales it (roughly 4x
+# cheaper on the software rasterizer)
+export GOGPU_FB_SCALE=2
 # Not exec: this shell survives goro and records how it ended —
 # exit 137 = SIGKILL (the kernel OOM killer), 139 = segfault.
 ./goro -config goro.ini -data-dir .

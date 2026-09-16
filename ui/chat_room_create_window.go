@@ -34,11 +34,21 @@ type ChatRoomCreateWindow struct {
 	passwordField *textfield.Widget
 	limitField    *textfield.Widget
 	action        ChatRoomCreateWindowAction
+	// webOpen marks the DOM-panel twin as the active presentation (web
+	// build only); the canvas window is untouched in that mode.
+	webOpen bool
 }
 
 func (w *ChatRoomCreateWindow) Open(ctx Context) {
-	w.EnsureWindow(chatRoomCreateW, ROWindowTitleHeight+chatRoomCreateContentH+ROWindowFooterHeight)
 	w.ctx = ctx
+	if chatRoomCreateWebSync(true) {
+		// The DOM twin owns the presentation; the form values live in
+		// the page, which resets them on every open.
+		w.webOpen = true
+		w.open = true
+		return
+	}
+	w.EnsureWindow(chatRoomCreateW, ROWindowTitleHeight+chatRoomCreateContentH+ROWindowFooterHeight)
 	w.title = ""
 	w.password = ""
 	w.limit = "20"
@@ -52,12 +62,26 @@ func (w *ChatRoomCreateWindow) Open(ctx Context) {
 	w.Publish(ctx)
 }
 
+// Close hides whichever presentation is active.
+func (w *ChatRoomCreateWindow) Close() {
+	if w.webOpen {
+		w.webOpen = false
+		w.open = false
+		chatRoomCreateWebSync(false)
+		return
+	}
+	w.Window.Close()
+}
+
 func (w *ChatRoomCreateWindow) Update(ctx Context) bool {
-	w.EnsureWindow(chatRoomCreateW, ROWindowTitleHeight+chatRoomCreateContentH+ROWindowFooterHeight)
 	w.ctx = ctx
 	if !w.IsOpen() {
 		return false
 	}
+	if w.webOpen {
+		return w.updateWeb(ctx)
+	}
+	w.EnsureWindow(chatRoomCreateW, ROWindowTitleHeight+chatRoomCreateContentH+ROWindowFooterHeight)
 	if w.submitFromFocusedEnter(ctx) {
 		w.Publish(ctx)
 		return true
@@ -67,8 +91,33 @@ func (w *ChatRoomCreateWindow) Update(ctx Context) bool {
 	return consumed
 }
 
+// updateWeb services the DOM form: submissions arrive through the action
+// queue; Escape (which reaches the game only when no page input is
+// focused) cancels. Stays consumed while open so game shortcuts yield,
+// exactly like the canvas twin.
+func (w *ChatRoomCreateWindow) updateWeb(ctx Context) bool {
+	action, ok, cancelled := drainChatRoomCreateWebActions()
+	if cancelled {
+		w.Close()
+		return true
+	}
+	if ok {
+		if action.Title == "" {
+			return true
+		}
+		w.action = action
+		w.Close()
+		return true
+	}
+	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEscape) {
+		w.Close()
+		return true
+	}
+	return true
+}
+
 func (w *ChatRoomCreateWindow) Rebind(ctx Context) {
-	if !w.IsOpen() {
+	if w.webOpen || !w.IsOpen() {
 		return
 	}
 	w.ctx = ctx

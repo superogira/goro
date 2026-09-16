@@ -224,6 +224,22 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroChatRoomCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "crc:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroChatRoomAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "cr:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 		js.Global().Set("goroCharCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()

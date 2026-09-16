@@ -50,6 +50,7 @@ type uiAppReceiver interface {
 }
 
 type keyboardInputPreparer interface {
+	HandleKeyPress(input.KeyCode)
 	PrepareKeyInput(input.KeyCode, gpucontext.Modifiers)
 	PrepareTextInput(input.KeyCode) bool
 }
@@ -338,6 +339,7 @@ func Run(game Game, cfg config.WindowConfig, renderCfg config.RenderConfig) erro
 	defer widget.RegisterClipboardProvider(nil)
 	events := newFanoutEventSource(gg.EventSource())
 	if preparer, ok := game.(keyboardInputPreparer); ok {
+		events.handleKeyPress = preparer.HandleKeyPress
 		events.prepareKeyInput = preparer.PrepareKeyInput
 		events.prepareTextInput = preparer.PrepareTextInput
 	}
@@ -484,6 +486,8 @@ func powerPreference(name string) gputypes.PowerPreference {
 }
 
 type fanoutEventSource struct {
+	inputState           *input.State
+	handleKeyPress       func(input.KeyCode)
 	prepareKeyInput      func(input.KeyCode, gpucontext.Modifiers)
 	prepareTextInput     func(input.KeyCode) bool
 	keyPress             []func(gpucontext.Key, gpucontext.Modifiers)
@@ -506,16 +510,33 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 	keyCode := gpucontext.KeyUnknown
 	source.OnKeyPress(func(key gpucontext.Key, mods gpucontext.Modifiers) {
 		keyCode = key
+		repeated := false
+		if f.inputState != nil {
+			repeated = f.inputState.KeyCodeDown(key)
+			f.inputState.SetKeyCode(key, true)
+		}
+		if !repeated && f.handleKeyPress != nil {
+			f.handleKeyPress(key)
+		}
+		if f.keyConsumed(key) {
+			return
+		}
 		// Editing keys do not generate text events. Restore their destination
 		// before UI dispatch so the first Delete/Backspace is not lost.
 		if f.prepareKeyInput != nil {
 			f.prepareKeyInput(key, mods)
+		}
+		if f.keyConsumed(key) {
+			return
 		}
 		for _, fn := range f.keyPress {
 			fn(key, mods)
 		}
 	})
 	source.OnKeyRelease(func(key gpucontext.Key, mods gpucontext.Modifiers) {
+		if f.inputState != nil {
+			f.inputState.SetKeyCode(key, false)
+		}
 		if key == keyCode {
 			keyCode = gpucontext.KeyUnknown
 		}
@@ -524,8 +545,14 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 		}
 	})
 	source.OnTextInput(func(text string) {
-		// Let the active mode focus a text field or suppress shortcut text
-		// before either UI or game listeners receive it.
+		if f.inputState != nil {
+			f.inputState.AddTextInput(text)
+		}
+		if f.keyConsumed(keyCode) {
+			return
+		}
+		// Keep the raw snapshot available to input handlers, but let the
+		// active mode focus an editor or suppress text before UI dispatch.
 		if f.prepareTextInput != nil && f.prepareTextInput(keyCode) {
 			return
 		}
@@ -561,6 +588,9 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 	source.OnFocus(func(focused bool) {
 		if !focused {
 			keyCode = gpucontext.KeyUnknown
+			if f.inputState != nil {
+				f.inputState.ResetKeyboard()
+			}
 		}
 		for _, fn := range f.focus {
 			fn(focused)
@@ -596,6 +626,10 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 
 func (f *fanoutEventSource) OnGesture(fn func(gpucontext.GestureEvent)) {
 	f.gesture = append(f.gesture, fn)
+}
+
+func (f *fanoutEventSource) keyConsumed(code input.KeyCode) bool {
+	return f.inputState != nil && f.inputState.KeyCodeConsumed(code)
 }
 
 func (f *fanoutEventSource) OnKeyPress(fn func(gpucontext.Key, gpucontext.Modifiers)) {
@@ -646,25 +680,16 @@ func (f *fanoutEventSource) OnIMECompositionEnd(fn func(string)) {
 	f.imeCompositionEnd = append(f.imeCompositionEnd, fn)
 }
 
-func wireInput(events gpucontext.EventSource, state *input.State) {
+func wireInput(events *fanoutEventSource, state *input.State) {
+	// Keyboard snapshots are collected before default UI dispatch. Pointer
+	// events keep their existing listener order.
+	events.inputState = state
 	if state == nil {
 		return
 	}
-	events.OnKeyPress(func(key gpucontext.Key, _ gpucontext.Modifiers) {
-		state.SetKeyCode(key, true)
-	})
-	events.OnKeyRelease(func(key gpucontext.Key, _ gpucontext.Modifiers) {
-		state.SetKeyCode(key, false)
-	})
-	events.OnFocus(func(focused bool) {
-		if !focused {
-			state.ResetKeyboard()
-			// A press whose release lands in another window leaves the button
-			// stuck down; no later press can report JustPressed until it is
-			// cleared, killing every clickable UI after alt+tab.
-			state.ResetPointer()
-		}
-	})
+	// Keyboard snapshots, focus resets and text input are wired in
+	// newFanoutEventSource so Lua key consumption is respected; pointer
+	// events keep their existing listener order.
 	events.OnMouseMove(func(x, y float64) {
 		state.SetMousePosition(int(x+0.5), int(y+0.5))
 	})
@@ -686,19 +711,14 @@ func wireInput(events gpucontext.EventSource, state *input.State) {
 	// Two-finger gestures (pinch zoom, pan) arrive once per frame from the
 	// gesture recognizer; on desktop nothing registers until a second
 	// pointer exists, so mouse-driven camera control is untouched.
-	if gestureSource, ok := events.(gpucontext.GestureEventSource); ok {
-		gestureSeen := false
-		gestureSource.OnGesture(func(ev gpucontext.GestureEvent) {
-			if !gestureSeen && (ev.ZoomDelta != 1 || ev.TranslationDelta.X != 0 || ev.TranslationDelta.Y != 0) {
-				gestureSeen = true
-				glog.Infof("touch gesture active pointers=%d zoom=%.3f pan=%.1f,%.1f",
-					ev.NumPointers, ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
-			}
-			state.ApplyGesture(ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
-		})
-	}
-	events.OnTextInput(func(text string) {
-		state.AddTextInput(text)
+	gestureSeen := false
+	events.OnGesture(func(ev gpucontext.GestureEvent) {
+		if !gestureSeen && (ev.ZoomDelta != 1 || ev.TranslationDelta.X != 0 || ev.TranslationDelta.Y != 0) {
+			gestureSeen = true
+			glog.Infof("touch gesture active pointers=%d zoom=%.3f pan=%.1f,%.1f",
+				ev.NumPointers, ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
+		}
+		state.ApplyGesture(ev.ZoomDelta, ev.TranslationDelta.X, ev.TranslationDelta.Y)
 	})
 }
 

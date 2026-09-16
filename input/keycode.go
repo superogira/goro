@@ -10,6 +10,22 @@ func KeyCodeFromName(name string) (KeyCode, bool) {
 	return code, ok
 }
 
+// KeyCodeName is the layout-independent name used by keyboard callbacks.
+func KeyCodeName(code KeyCode) string {
+	if name, ok := keyNamesByCode[code]; ok {
+		return name
+	}
+	return "Unknown"
+}
+
+var keyNamesByCode = func() map[KeyCode]string {
+	names := make(map[KeyCode]string, len(keyCodesByName))
+	for name, code := range keyCodesByName {
+		names[code] = name
+	}
+	return names
+}()
+
 var keyCodesByName = map[string]KeyCode{
 	"KeyA": gpucontext.KeyA, "KeyB": gpucontext.KeyB, "KeyC": gpucontext.KeyC,
 	"KeyD": gpucontext.KeyD, "KeyE": gpucontext.KeyE, "KeyF": gpucontext.KeyF,

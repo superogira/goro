@@ -312,6 +312,7 @@ func TestLuaBotCanStartLongWalkFromPhysicalKey(t *testing.T) {
 	}
 	defer bot.close()
 
+	botKeyPressForTest(t, bot, keyW)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -443,6 +444,7 @@ func TestLuaBotHeldSpaceLootsNearbyItemsInDistanceOrder(t *testing.T) {
 	}
 	defer bot.close()
 
+	botKeyPressForTest(t, bot, space)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -499,6 +501,7 @@ func TestLuaBotHeldFightsNearbyEnemiesInDistanceOrder(t *testing.T) {
 	}
 	defer bot.close()
 
+	botKeyPressForTest(t, bot, keyF)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -696,6 +699,7 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 	defer bot.close()
 
 	inputState.SetKeyCode(tab, true)
+	botKeyPressForTest(t, bot, tab)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +712,25 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 
 	inputState.SetKeyCode(tab, false)
 	inputState.EndFrame()
+	for _, name := range []string{"ControlLeft", "ControlRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight"} {
+		modifier, ok := input.KeyCodeFromName(name)
+		if !ok {
+			t.Fatalf("%s was not recognized", name)
+		}
+		inputState.SetKeyCode(modifier, true)
+		for _, code := range []input.KeyCode{tab, enter} {
+			inputState.SetKeyCode(code, true)
+			botKeyPressForTest(t, bot, code)
+			if !inputState.KeyCodeJustPressed(code) || mode.scriptHighlight.id != 301 || mode.pendingSkill.skill.ID != skill.ID {
+				t.Fatalf("%s+%s changed skill targeting or consumed the shortcut", name, input.KeyCodeName(code))
+			}
+			inputState.SetKeyCode(code, false)
+			inputState.EndFrame()
+		}
+		inputState.SetKeyCode(modifier, false)
+	}
 	inputState.SetKeyCode(tab, true)
+	botKeyPressForTest(t, bot, tab)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -720,6 +742,7 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 	inputState.EndFrame()
 	inputState.SetKeyCode(shift, true)
 	inputState.SetKeyCode(tab, true)
+	botKeyPressForTest(t, bot, tab)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -731,6 +754,7 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 	inputState.SetKeyCode(shift, false)
 	inputState.EndFrame()
 	inputState.SetKeyCode(enter, true)
+	botKeyPressForTest(t, bot, enter)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -775,6 +799,7 @@ func TestWASDLuaCyclesFriendlySkillTargets(t *testing.T) {
 	pressTab := func() {
 		t.Helper()
 		inputState.SetKeyCode(tab, true)
+		botKeyPressForTest(t, bot, tab)
 		if err := bot.inputFrame(true); err != nil {
 			t.Fatal(err)
 		}
@@ -813,6 +838,7 @@ func TestWASDLuaLeavesUnrelatedTargetingKeysAlone(t *testing.T) {
 	defer bot.close()
 
 	inputState.SetKeyCode(enter, true)
+	botKeyPressForTest(t, bot, enter)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}
@@ -826,6 +852,7 @@ func TestWASDLuaLeavesUnrelatedTargetingKeysAlone(t *testing.T) {
 		skill: session.Skill{ID: 18, Type: skillTargetPlace, Level: 1, Range: 9},
 	}
 	inputState.SetKeyCode(tab, true)
+	botKeyPressForTest(t, bot, tab)
 	if err := bot.inputFrame(true); err != nil {
 		t.Fatal(err)
 	}

@@ -161,26 +161,17 @@ func (w *VendingWindow) Update(ctx Context, itemInfo *ItemWindows) bool {
 	if ctx.Input == nil || w.mode == vendingModeNone {
 		return false
 	}
-	if w.leftWindow.Update(ctx) {
+	consumed := w.leftWindow.Update(ctx)
+	if consumed {
 		w.leftWindow.Publish(ctx)
 	}
 	if w.rightWindow.Update(ctx) {
+		consumed = true
 		w.rightWindow.Publish(ctx)
 	}
-	// Escape on the vending windows closes the store: the setup sends a
-	// cancel, the own store sends a close (upstream). Both must yield
-	// first when another window is above — the embedded windows route
-	// through the manager's TopEscapeOverlay.
-	if w.mode != vendingModeNone && ctx.Input.JustPressed(input.KeyEscape) {
-		if top := topEscapeOverlay(ctx); top != nil && top != w.leftWindow.published && top != w.rightWindow.published {
-			return false
-		}
-		if w.mode == vendingModeSetup {
-			w.cancel(ctx)
-		} else {
-			w.closeOwnStore(ctx)
-		}
-		return true
+	// Preserve the shared windows' Escape result before checking pointer hover.
+	if w.mode == vendingModeNone || ctx.Input.JustPressed(input.KeyEscape) {
+		return consumed
 	}
 	if w.handlePointer(ctx, itemInfo) {
 		return true
@@ -188,7 +179,7 @@ func (w *VendingWindow) Update(ctx Context, itemInfo *ItemWindows) bool {
 	inside := w.inside(ctx.Input.MouseX, ctx.Input.MouseY)
 	w.leftWindow.Publish(ctx)
 	w.rightWindow.Publish(ctx)
-	return inside
+	return consumed || inside
 }
 
 func (w *VendingWindow) KeyboardShortcutsBlocked() bool {

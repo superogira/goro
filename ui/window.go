@@ -100,13 +100,24 @@ func Win(options ...WindowOption) widget.Widget {
 	if cfg.background != nil {
 		background = *cfg.background
 	}
-	return primitives.Box(children...).
+	box := primitives.Box(children...).
 		CrossAlign(primitives.CrossAxisStretch).
 		Width(cfg.width).
 		Height(cfg.height).
 		Background(background).
 		BorderStyle(1, rotheme.Default.Colors.WindowBorder).
 		Rounded(cfg.radius)
+	if cfg.onClose == nil {
+		return box
+	}
+	// windowFrame retains the title-bar close action for keyboard closing
+	// too, so Escape runs the same cleanup (cancel packets, teardown) as X.
+	return &windowFrame{BoxWidget: box, onClose: cfg.onClose}
+}
+
+type windowFrame struct {
+	*primitives.BoxWidget
+	onClose func()
 }
 
 func windowBodyColor(opacity float32) widget.Color {
@@ -134,11 +145,6 @@ func TitleButton(kind rotheme.IconButtonKind, onClick func()) WindowOption {
 			onClick: onClick,
 		})
 	}
-}
-
-// OnEscClose sets the callback invoked when Escape closes the window.
-func (w *Window) OnEscClose(fn func()) {
-	w.onEscClose = fn
 }
 
 func OnClose(onClose func()) WindowOption {
@@ -249,9 +255,8 @@ type Window struct {
 	background   *widget.Color
 	fullRedraw   bool
 	CloseOnEsc   bool
-	// onEscClose mirrors the Win(OnClose(...)) callback for the Escape
-	// path: closing via ESC must run the same cleanup (cancel packets,
-	// window-specific teardown) as the title-bar X.
+	// onEscClose overrides the windowFrame close action for the Escape
+	// path (cart/trade windows install their own teardown).
 	onEscClose func()
 	ctx        client.Context
 }
@@ -451,19 +456,13 @@ func (w *Window) Update(ctx client.Context) bool {
 		return true
 	}
 	if ctx.Input.JustPressed(input.KeyEscape) {
-		if !w.CloseOnEsc {
+		if !w.CloseOnEsc || !w.escapePressed(ctx) {
 			return false
-		}
-		// Only the topmost closeOnEsc overlay in the manager's stack may
-		// consume Escape; lower windows (trade under a shop, a settings
-		// window under a modal) pass it through (upstream).
-		if manager, ok := ctx.UIManager.(interface{ TopEscapeOverlay() widget.Widget }); ok {
-			if top := manager.TopEscapeOverlay(); top != nil && w.placed != top {
-				return false
-			}
 		}
 		if w.onEscClose != nil {
 			w.onEscClose()
+		} else if frame, ok := w.content.(*windowFrame); ok && frame.onClose != nil {
+			frame.onClose()
 		} else {
 			w.Close()
 		}
@@ -504,6 +503,12 @@ func topEscapeOverlay(ctx client.Context) widget.Widget {
 		return manager.TopEscapeOverlay()
 	}
 	return nil
+}
+
+// OnEscClose overrides the Escape close action for this window. Without
+// it, Escape falls back to the Win(OnClose(...)) frame action or Close.
+func (w *Window) OnEscClose(fn func()) {
+	w.onEscClose = fn
 }
 
 // escapePressed reports whether this window owns the current Escape

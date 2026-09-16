@@ -127,10 +127,25 @@ func (c *ChatConsole) PrepareTextInput(ctx client.Context, code input.KeyCode) b
 	return battle && space && !enter
 }
 
-// PrepareKeyInput restores classic chat for editing/navigation keys as well as
-// text. It only changes focus; the textfield still performs the edit itself.
+// PrepareKeyInput handles an unfocused Enter and restores classic chat for
+// editing/navigation keys. The textfield still performs edits itself.
 func (c *ChatConsole) PrepareKeyInput(ctx client.Context, code input.KeyCode, mods gpucontext.Modifiers) {
-	if c.Active() || ctx.Session != nil && ctx.Session.BattleMode || mods&(gpucontext.ModAlt|gpucontext.ModSuper) != 0 {
+	if c.Active() || mods&(gpucontext.ModAlt|gpucontext.ModSuper) != 0 {
+		return
+	}
+	if code == gpucontext.KeyEnter && ctx.Input != nil && ctx.Input.JustPressed(input.KeyEnter) {
+		// Focus immediately, before another key in the same native event batch.
+		// Do not let this Enter submit again after later text in the batch.
+		c.ctx = ctx
+		c.inputWidget()
+		c.setActive(true)
+		if ctx.Session == nil || !ctx.Session.BattleMode {
+			c.submit(ctx)
+		}
+		ctx.Input.ConsumeKeyCodePress(code)
+		return
+	}
+	if ctx.Session != nil && ctx.Session.BattleMode {
 		return
 	}
 	switch code {

@@ -150,6 +150,8 @@ type fbGeometry struct {
 	bpp              int
 	lineLength       int
 	xoffset, yoffset int
+	widthVirtual     int
+	heightVirtual    int
 	redBits          fbBitfield
 	greenBits        fbBitfield
 	blueBits         fbBitfield
@@ -230,7 +232,12 @@ func (p *fbdevPlatform) Init() error {
 	p.fbScale = fbScaleFromEnv()
 	logger().Info("fbdev: framebuffer ready",
 		"device", dev, "size", fmt.Sprintf("%dx%d", geo.width, geo.height),
+		"virtual", fmt.Sprintf("%dx%d", geo.widthVirtual, geo.heightVirtual),
+		"offsets", fmt.Sprintf("+%d+%d", geo.xoffset, geo.yoffset),
 		"bpp", geo.bpp, "line", geo.lineLength, "maplen", len(mem))
+	if os.Getenv("GOGPU_FB_PROBE") == "color" {
+		p.probeBufferColors()
+	}
 	p.startInput()
 	go p.cursorLoop()
 	return nil
@@ -370,6 +377,8 @@ func probeFBGeometry(f *os.File) (fbGeometry, error) {
 	}
 	geo.width = int(binary.LittleEndian.Uint32(varBuf[0:]))
 	geo.height = int(binary.LittleEndian.Uint32(varBuf[4:]))
+	geo.widthVirtual = int(binary.LittleEndian.Uint32(varBuf[8:]))
+	geo.heightVirtual = int(binary.LittleEndian.Uint32(varBuf[12:]))
 	geo.xoffset = int(binary.LittleEndian.Uint32(varBuf[16:]))
 	geo.yoffset = int(binary.LittleEndian.Uint32(varBuf[20:]))
 	geo.bpp = int(binary.LittleEndian.Uint32(varBuf[24:]))
@@ -464,6 +473,59 @@ func (w *fbdevWindow) SetModalFrameCallback(func())         {}
 func (w *fbdevWindow) RequestSize(width, height int)        {}
 func (w *fbdevWindow) StartDrag([]string, func(DragResult)) {}
 func (w *fbdevWindow) Destroy()                             {}
+
+// probeBufferColors paints each screen-sized chunk of the framebuffer
+// mapping a distinct solid color (red, green, blue, yellow) and holds for
+// a few seconds: whichever color the panel shows identifies the buffer
+// the display actually scans — these firmwares expose a multi-buffered
+// fb (yres_virtual > yres, panning via yoffset).
+func (p *fbdevPlatform) probeBufferColors() {
+	geo := p.geo
+	screen := geo.lineLength * geo.height
+	if screen <= 0 {
+		return
+	}
+	colors := [][3]byte{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}}
+	chunks := len(p.fbMem) / screen
+	if chunks > len(colors) {
+		chunks = len(colors)
+	}
+	for i := 0; i < chunks; i++ {
+		seg := p.fbMem[i*screen:]
+		if len(seg) > screen {
+			seg = seg[:screen]
+		}
+		fillFBColor(seg, geo, colors[i][0], colors[i][1], colors[i][2])
+	}
+	logger().Info("fbdev: color probe painted",
+		"chunks", chunks, "screen_bytes", screen,
+		"hold", "6s", "order", "red,green,blue,yellow")
+	time.Sleep(6 * time.Second)
+}
+
+// fillFBColor fills a framebuffer region with one color, honoring the
+// bitfield layout the driver reported.
+func fillFBColor(dst []byte, geo fbGeometry, r, g, b byte) {
+	switch geo.bpp {
+	case 32:
+		var pix uint32
+		if geo.redBits.length > 0 {
+			pix = (uint32(r) >> (8 - geo.redBits.length)) << geo.redBits.offset
+			pix |= (uint32(g) >> (8 - geo.greenBits.length)) << geo.greenBits.offset
+			pix |= (uint32(b) >> (8 - geo.blueBits.length)) << geo.blueBits.offset
+		} else {
+			pix = uint32(r)<<16 | uint32(g)<<8 | uint32(b)
+		}
+		for off := 0; off+4 <= len(dst); off += 4 {
+			binary.LittleEndian.PutUint32(dst[off:], pix)
+		}
+	case 16:
+		pix := uint16((uint32(r)>>3)<<11 | (uint32(g)>>2)<<5 | uint32(b)>>3)
+		for off := 0; off+2 <= len(dst); off += 2 {
+			binary.LittleEndian.PutUint16(dst[off:], pix)
+		}
+	}
+}
 
 // BlitPixels writes a presented software frame (RGBA or BGRA, row-major,
 // tightly packed) into the framebuffer, honoring offsets and line length.

@@ -10,9 +10,11 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   -o dist/rg35xx/GorORG35/goro .
 
 echo "== copying launcher + config =="
-cp rg35xx/GorORG35.sh dist/rg35xx/GorORG35.sh
+# tr -d '\r' guards against a CRLF checkout (core.autocrlf on Windows):
+# a CRLF shebang kills the launcher on the device before it can log.
+tr -d '\r' < rg35xx/GorORG35.sh > dist/rg35xx/GorORG35.sh
 chmod +x dist/rg35xx/GorORG35.sh
-cp rg35xx/goro.ini dist/rg35xx/GorORG35/goro.ini
+tr -d '\r' < rg35xx/goro.ini > dist/rg35xx/GorORG35/goro.ini
 
 echo "== done =="
 echo "package: dist/rg35xx/"

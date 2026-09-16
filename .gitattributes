@@ -1,0 +1,5 @@
+# Shell scripts must stay LF: the RG35XX launcher is executed on Linux,
+# where a CRLF shebang (#!/bin/bash\r) kills the script before it can
+# even redirect its own logs.
+*.sh text eol=lf
+*.ini text eol=lf

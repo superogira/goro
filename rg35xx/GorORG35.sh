@@ -62,6 +62,14 @@ done
 
 cd "$progdir/GorORG35"
 
+# Log survival: a hard GPU/kernel crash takes the page cache with it,
+# leaving a 0-byte logfile after the power cycle. A background syncer
+# forces everything written so far onto the SD card every 2 seconds.
+(
+  while :; do sync; sleep 2; done
+) &
+syncer=$!
+
 # --- 1) display diagnostic: paints fb0 in a loop for ~9s (cycling
 # colors), verifies writes survive read-back, and probes the
 # mode-setting ioctls. Watch the screen during this phase and check
@@ -72,6 +80,7 @@ if [ -x ./fbtest ] || [ -f ./fbtest ]; then
   ./fbtest .
   echo "fbtest exited: $?"
 fi
+sync
 
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
@@ -85,3 +94,13 @@ export GOGPU_FB_GLES=1
 export GOGPU_GLES_DEBUG_CLEAR=1
 ./goro -config goro.ini -data-dir . -graphics-api gles
 echo "goro exited: $?"
+sync
+
+# If the GPU driver or kernel oopsed, dmesg holds the fingerprints.
+echo "-- dmesg tail after goro exit:"
+dmesg 2>/dev/null | tail -40
+echo "-- still-running goro processes:"
+ps -ef 2>/dev/null | grep -v grep | grep goro || echo "  none"
+
+kill $syncer 2>/dev/null
+sync

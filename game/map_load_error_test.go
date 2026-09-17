@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -156,12 +157,20 @@ func TestMissingMapWarpRedirectsToLoginBeforeDrawing(t *testing.T) {
 		t.Fatalf("valid map did not enter world mode: %T", manager.mode)
 	}
 	world.startMapFadeOut(network.MapChange{MapName: "new_1-1.gat", X: 1, Y: 1}, time.Now().Add(-mapFadeOutDuration))
-	if err := manager.Update(); err != nil {
-		t.Fatal(err)
-	}
-	manager.FrameSubmitted()
-	if err := manager.Update(); err != nil {
-		t.Fatal(err)
+	// The map assets load on a background goroutine; let it finish between
+	// pumps, then drive the fade handoff (bounded — the test assets load in
+	// milliseconds).
+	for range 8 {
+		for world.mapLoad != nil && world.mapLoad.loading() {
+			runtime.Gosched()
+		}
+		if err := manager.Update(); err != nil {
+			t.Fatal(err)
+		}
+		if _, isWorld := manager.mode.(*WorldMode); !isWorld {
+			break
+		}
+		manager.FrameSubmitted()
 	}
 	login, ok := manager.mode.(*LoginMode)
 	if !ok || login.phase != loginPhaseAccount || !login.disconnectDialog.IsOpen() || ctx.World.GAT != nil {

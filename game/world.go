@@ -28,6 +28,8 @@ type WorldMode struct {
 	walkCooldownUntil time.Time
 	nextHeldWalkAt    time.Time
 	gamepadDirLogged  bool
+	mapLoad           *mapLoadState
+	mapLoadRSWSource  string
 	camera            followCamera
 	cameraShakeStart  time.Time
 	cameraShakeEnd    time.Time
@@ -554,67 +556,16 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 		}
 		return nil
 	}
-	playerStatus := ""
-	character := ctx.Session.SelectedCharacter()
-	visualCharacter := localPlayerVisualCharacter(ctx)
-	if view, status := loadPlayerHumanoidSpriteView(ctx.Resources, visualCharacter, ctx.Session.Sex, localPlayerIsAdmin(ctx)); view != nil {
-		m.playerView = view
-		playerStatus = status
-	} else {
-		playerStatus = status
-	}
-	if view, status := loadActorShadowSpriteView(ctx.Resources); view != nil {
-		m.shadowView = view
-		if status != "" {
-			playerStatus += " " + status
-		}
-	} else {
-		m.shadowViewMiss = true
-		glog.Warnf("actor shadow resources unavailable: %s", status)
-	}
 	m.cartViews = make(map[int]*spriteView)
 	m.cartViewMiss = make(map[int]struct{})
 	m.falconViews = make(map[int]*spriteView)
 	m.falconViewMiss = make(map[int]struct{})
 	m.falcons = make(map[uint32]*falconRenderState)
-	if view, status := loadCursorSpriteView(ctx.Resources); view != nil {
-		m.cursorView = view
-		if status != "" {
-			playerStatus += " " + status
-		}
-	} else {
-		m.cursorViewMiss = true
-		glog.Warnf("cursor resources unavailable: %s", status)
-	}
-	render.SetCursorMode(render.CursorModeHidden)
-	glog.Debugf("player sprite resources char_id=%d name=%s admin=%t job=%d visual_job=%d hair=%d weapon=%d shield=%d head_top=%d head_mid=%d head_low=%d body_pal=%d head_pal=%d hair_color=%d account_sex=%d %s", character.ID, character.Name, localPlayerIsAdmin(ctx), character.Job, visualCharacter.Job, character.Hair, character.Weapon, character.Shield, character.HeadTop, character.HeadMid, character.HeadLow, character.BodyPal, character.HeadPal, character.HairColor, ctx.Session.Sex, playerStatus)
-	m.rebindPersistentUI(ctx)
-	if ctx.World.MapName == "" {
-		return nil
-	}
-
-	if gnd, _, err := loadGND(ctx.Resources, ctx.World.MapName); err == nil {
-		ctx.World.GND = gnd
-	} else {
-		ctx.World.GND = nil
-	}
-	if rsw, rswSource, err := loadRSW(ctx.Resources, ctx.World.MapName); err == nil {
-		ctx.World.RSW = rsw
-		ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, rsw, defaultRSMLoadLimit)
-		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, rsw, ctx.World.RSM)
-		m.playMapBGM(ctx, rswSource)
-		prefetchMapSoundFiles(ctx.Resources, rsw)
-	} else {
-		ctx.World.RSW = nil
-		ctx.World.RSM = nil
-		ctx.World.RSMFail = 0
-		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, nil, nil)
-		m.playMapBGM(ctx, ctx.World.MapName)
-	}
-	// Server-driven digit displays load their sprite on first use; warm it
-	// with the rest of the map.
-	ctx.Resources.Prefetch(serverDigitSpritePrefetchGroups()...)
-	_ = ctx.Network.SendLoadEndAck()
+	// The heavy half of entering the map (sprite views, GND/RSW/RSM, texture
+	// prefetch, BGM) runs on a background goroutine while the loop renders
+	// the loading cover with a progress bar. Update finalizes (UI rebind,
+	// cursor mode) when the load lands.
+	m.startMapLoad(ctx)
 	return nil
 }
 
@@ -702,6 +653,23 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// goroutine; no-op until StartDeferredWebPack's fetch lands.
 	if ctx.Resources != nil {
 		ctx.Resources.PollDeferredWebPack()
+	}
+	// Background map load in flight: skip world logic; the loop only renders
+	// the loading cover. On completion, finalize the pieces that must run on
+	// the game goroutine (UI rebind, cursor mode) and surface load errors —
+	// the same frame then continues into normal world processing.
+	if m.mapLoad != nil {
+		if m.mapLoad.loading() {
+			return nil, nil
+		}
+		load := m.mapLoad
+		m.mapLoad = nil
+		m.mapLoadRSWSource = ""
+		if load.err != nil {
+			return newMapErrorMode(ctx, load.err, m.ui.console), nil
+		}
+		m.rebindPersistentUI(ctx)
+		render.SetCursorMode(render.CursorModeHidden)
 	}
 	if m.mapFade.phase == mapFadeOut {
 		if !m.mapFadeElapsed(now) {
@@ -1652,6 +1620,11 @@ func (m *WorldMode) requestNPCTalk(ctx client.Context, actor worldstate.Actor, s
 }
 
 func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
+	if m.mapLoad.loading() {
+		// World state is owned by the loader goroutine; render only the
+		// loading cover (background image + dim + progress bar).
+		return
+	}
 	render.SetWebLoading(false)
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
@@ -1703,6 +1676,13 @@ func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
 }
 
 func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
+	if m.mapLoad.loading() {
+		// Loading cover with progress: the fade system's background image
+		// when configured, plus the step-based progress bar.
+		drawLoadingScreen(screen, m.loadingBackground(ctx))
+		drawMapLoadProgress(screen, m.mapLoad)
+		return
+	}
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
@@ -1719,6 +1699,9 @@ func (m *WorldMode) FrameSubmitted() {
 }
 
 func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
+	if m.mapLoad.loading() {
+		return
+	}
 	if ctx.Config.Render.NoUI {
 		return
 	}

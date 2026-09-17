@@ -80,9 +80,13 @@ func (q *Queue) PollCompleted() uint64 {
 	return q.submissionIndex
 }
 
-// debugUBOWrites counts uniform-buffer writes logged under
+// debugBufWrites counts logged buffer writes per kind under
 // GOGPU_GLES_DEBUG_CLEAR=1.
-var debugUBOWrites uint32
+var debugBufWrites = map[string]*uint32{
+	"uniform": new(uint32),
+	"vertex":  new(uint32),
+	"index":   new(uint32),
+}
 
 // WriteBuffer writes data to a buffer immediately.
 func (q *Queue) WriteBuffer(buffer hal.Buffer, offset uint64, data []byte) error {
@@ -94,19 +98,32 @@ func (q *Queue) WriteBuffer(buffer hal.Buffer, offset uint64, data []byte) error
 		return nil
 	}
 
-	// Diagnostic: dump the first uniform-buffer uploads. If the "screen"
-	// uniform reads as zeroes, the vertex shader divides by zero and every
-	// vertex lands at NaN — clipped silently with no GL error, exactly the
-	// observed black-frame signature. 640.0f = 0x44000000, 480.0f = 0x43f00000.
-	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" && buf.target == gl.UNIFORM_BUFFER {
-		if n := atomic.AddUint32(&debugUBOWrites, 1); n <= 4 {
-			hexLen := len(data)
-			if hexLen > 32 {
-				hexLen = 32
+	// Diagnostic: dump the first uniform/vertex/index buffer uploads. The
+	// uniform stream was proven sane this way (screen=640x480 floats); the
+	// remaining unknown inputs for the black-swapchain mystery are vertex
+	// and index data. 640.0f = 0x44000000-style heads confirm float data.
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
+		kind := ""
+		limit := uint32(0)
+		switch buf.target {
+		case gl.UNIFORM_BUFFER:
+			kind, limit = "uniform", 4
+		case gl.ARRAY_BUFFER:
+			kind, limit = "vertex", 2
+		case gl.ELEMENT_ARRAY_BUFFER:
+			kind, limit = "index", 2
+		}
+		if kind != "" {
+			seq := atomic.AddUint32(debugBufWrites[kind], 1)
+			if seq <= limit {
+				hexLen := len(data)
+				if hexLen > 48 {
+					hexLen = 48
+				}
+				hal.Logger().Info("gles: buffer write",
+					"kind", kind, "seq", seq, "size", len(data), "offset", offset,
+					"head", fmt.Sprintf("% x", data[:hexLen]))
 			}
-			hal.Logger().Info("gles: uniform buffer write",
-				"seq", n, "size", len(data), "offset", offset,
-				"head", fmt.Sprintf("% x", data[:hexLen]))
 		}
 	}
 

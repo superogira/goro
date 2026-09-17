@@ -7,8 +7,10 @@ package gles
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 
@@ -1412,6 +1414,18 @@ func (c *SetVertexBufferCommand) Execute(ctx *gl.Context) {
 	if c.layout == nil {
 		return
 	}
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
+		if n := atomic.AddUint32(&debugAttribLogs, 1); n <= 8 {
+			var attrs strings.Builder
+			for _, attr := range c.layout.Attributes {
+				size, typ, _ := vertexFormatToGL(attr.Format)
+				fmt.Fprintf(&attrs, "loc%d:%dx0x%x+%d ", attr.ShaderLocation, size, typ, attr.Offset)
+			}
+			hal.Logger().Info("gles: vertex attribs bound",
+				"seq", n, "buffer", c.buffer.id, "stride", c.layout.ArrayStride,
+				"attrs", attrs.String())
+		}
+	}
 	stride := int32(c.layout.ArrayStride)
 	// Determine divisor from step mode: 0=per-vertex, 1=per-instance.
 	// Matches Rust wgpu-hal/src/gles/queue.rs vertex_attrib_divisor call.
@@ -1550,6 +1564,10 @@ func (c *DrawIndexedCommand) Execute(ctx *gl.Context) {
 // debugDrawTraced counts draws logged by debugTraceDraw; the count also
 // feeds the "draws issued so far" summary line.
 var debugDrawTraced uint32
+
+// debugAttribLogs counts vertex-attrib bindings logged under
+// GOGPU_GLES_DEBUG_CLEAR=1.
+var debugAttribLogs uint32
 
 // debugTraceDraw logs the first draws of the session under
 // GOGPU_GLES_DEBUG_CLEAR=1 — zero-vertex draws are silent on GL yet leave

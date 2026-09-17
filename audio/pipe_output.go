@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ebitengine/oto/v3"
+	"github.com/kivutar/goro/glog"
 )
 
 // audioPlayer abstracts the oto.Player surface used by BGM and SFX so the
@@ -56,7 +57,11 @@ func newPipeOutput(name string, rate int) *pipeOutput {
 			name: name,
 			rate: rate,
 			command: []string{
-				"mpv", "--no-video", "--really-quiet", "--gapless-audio=inf",
+				// --cache=no: without it mpv buffers the raw stream before
+				// starting playback — on the rg35xx the speaker only opened
+				// ~40-60s in, long after the game had moved on.
+				"mpv", "--no-video", "--really-quiet", "--cache=no",
+				"--gapless-audio=inf",
 				"--demuxer=rawaudio", "--demuxer-rawaudio-format=s16le",
 				fmt.Sprintf("--demuxer-rawaudio-rate=%d", rate),
 				"--demuxer-rawaudio-channels=stereo",
@@ -91,15 +96,20 @@ func (p *pipeOutput) NewPlayer(r io.Reader) audioPlayer {
 	player.cmd = cmd
 	player.stdin = stdin
 	player.started.Store(true)
+	glog.Infof("audio pipe player spawned name=%s pid=%d rate=%d", p.name, cmd.Process.Pid, p.rate)
 	go func() {
-		_, _ = io.Copy(stdin, &gainReader{r: r, volume: &player.volume})
+		_, copyErr := io.Copy(stdin, &gainReader{r: r, volume: &player.volume})
 		// EOF (a finished SFX sample) ends the stream; the player process
 		// exits on its own once stdin closes.
 		_ = stdin.Close()
+		if copyErr != nil {
+			glog.Warnf("audio pipe stream failed name=%s pid=%d: %v", p.name, cmd.Process.Pid, copyErr)
+		}
 	}()
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		player.finished.Store(true)
+		glog.Infof("audio pipe player exited name=%s pid=%d err=%v", p.name, cmd.Process.Pid, waitErr)
 		close(player.done)
 	}()
 	return player

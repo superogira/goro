@@ -85,6 +85,11 @@ sync
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
 export GOGPU_LOG=debug
+# The app context defines neither HOME nor XDG_CONFIG_HOME; without them
+# os.UserConfigDir() fails and goro logs "login ID save failed". Keep the
+# save file next to the app so it survives reboots on the SD card.
+export HOME="${HOME:-$progdir/GorORG35}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$progdir/GorORG35}"
 # GPU experiment: render through EGL/GLES on the Mali driver (libmali).
 # If the context comes up, frames go from seconds to GPU speed. Falls
 # back to the software path when unset.

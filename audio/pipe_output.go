@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -57,11 +58,11 @@ func newPipeOutput(name string, rate int) *pipeOutput {
 			name: name,
 			rate: rate,
 			command: []string{
-				// --cache=no: without it mpv buffers the raw stream before
-				// starting playback — on the rg35xx the speaker only opened
-				// ~40-60s in, long after the game had moved on.
-				"mpv", "--no-video", "--really-quiet", "--cache=no",
-				"--gapless-audio=inf",
+				// --ao=alsa skips mpv's output probing (pulse first, long
+				// timeout on this firmware); --cache=no killed every spawn
+				// with exit status 1 on the device's mpv build, so stay
+				// with the option set that provably opened the speaker.
+				"mpv", "--no-video", "--ao=alsa", "--gapless-audio=inf",
 				"--demuxer=rawaudio", "--demuxer-rawaudio-format=s16le",
 				fmt.Sprintf("--demuxer-rawaudio-rate=%d", rate),
 				"--demuxer-rawaudio-channels=stereo",
@@ -88,6 +89,10 @@ func (p *pipeOutput) NewPlayer(r io.Reader) audioPlayer {
 	if err != nil {
 		return nil
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil
+	}
 	player := &pipePlayer{done: make(chan struct{})}
 	player.volume.Store(1.0)
 	if err := cmd.Start(); err != nil {
@@ -97,6 +102,17 @@ func (p *pipeOutput) NewPlayer(r io.Reader) audioPlayer {
 	player.stdin = stdin
 	player.started.Store(true)
 	glog.Infof("audio pipe player spawned name=%s pid=%d rate=%d", p.name, cmd.Process.Pid, p.rate)
+	// mpv's own error text is the only way to see why a spawn dies; keep
+	// the first few stderr lines in the log.
+	var stderrLines atomic.Int32
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() && stderrLines.Load() < 3 {
+			glog.Warnf("audio pipe stderr name=%s pid=%d: %s", p.name, cmd.Process.Pid, scanner.Text())
+			stderrLines.Add(1)
+		}
+		_ = stderr.Close()
+	}()
 	go func() {
 		_, copyErr := io.Copy(stdin, &gainReader{r: r, volume: &player.volume})
 		// EOF (a finished SFX sample) ends the stream; the player process

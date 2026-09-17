@@ -98,6 +98,34 @@ ls /dev/snd 2>/dev/null || echo "  /dev/snd missing"
 echo "-- mixer state (first 60 lines):"
 amixer 2>/dev/null | head -60 || echo "  amixer unavailable"
 
+# mpv self-test: a 2s generated tone through mpv+ALSA right at launch —
+# an audible beep proves the whole chain works before the game even starts,
+# and the rc/timing/stderr in the log show what happens when it doesn't.
+if command -v mpv >/dev/null 2>&1; then
+  echo "-- mpv version: $(mpv --version 2>&1 | head -1)"
+  if python3 - >/dev/null 2>&1 <<'PYEOF'
+import math, struct, wave
+w = wave.open('/tmp/goro-tone.wav', 'w')
+w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
+w.writeframes(b''.join(struct.pack('<hh',
+    int(9000*math.sin(i*0.09)), int(9000*math.sin(i*0.09)))
+    for i in range(44100*2)))
+w.close()
+PYEOF
+  then
+    t0=$(date +%s)
+    cat /tmp/goro-tone.wav | timeout 8 mpv --no-video --ao=alsa - >/dev/null 2>/tmp/goro-mpv-test.log
+    rc=$?
+    t1=$(date +%s)
+    echo "-- mpv tone test rc=$rc elapsed=$((t1-t0))s (a beep should have played) stderr:"
+    head -5 /tmp/goro-mpv-test.log 2>/dev/null | sed 's/^/    /'
+  else
+    echo "-- python3 unavailable, tone test skipped"
+  fi
+else
+  echo "-- mpv not found in PATH"
+fi
+
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
 export GOGPU_LOG=info

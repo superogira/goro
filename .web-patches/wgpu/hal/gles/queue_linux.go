@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/hal"
 	"github.com/gogpu/wgpu/hal/gles/egl"
 	"github.com/gogpu/wgpu/hal/gles/gl"
@@ -141,22 +140,72 @@ func (q *Queue) WriteTexture(dst *hal.ImageCopyTexture, data []byte, layout *hal
 	}
 
 	_, format, dataType := textureFormatToGL(tex.format)
+	texelBytes := formatTexelBytes(tex.format)
 
 	q.glCtx.BindTexture(tex.target, tex.id)
 
 	if tex.target == gl.TEXTURE_2D {
-		// Set alignment to 1 for single-channel formats (R8) whose row stride
-		// may not be a multiple of the default 4-byte GL_UNPACK_ALIGNMENT.
-		if tex.format == gputypes.TextureFormatR8Unorm {
-			q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+		widthBytes := size.Width * texelBytes
+		var rowStride uint32
+		var offset uint64
+		if layout != nil {
+			if layout.BytesPerRow > 0 {
+				rowStride = layout.BytesPerRow
+			}
+			offset = layout.Offset
 		}
-		// Use TexSubImage2D to update existing texture data (Rust wgpu-hal pattern).
-		// TexImage2D reallocates storage on every call; TexSubImage2D updates in-place.
-		q.glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
-			0, 0, int32(size.Width), int32(size.Height), format, dataType,
-			unsafe.Pointer(&data[0]))
-		// Restore default alignment after upload.
-		if tex.format == gputypes.TextureFormatR8Unorm {
+		if rowStride == 0 {
+			rowStride = widthBytes
+		}
+		pixels := data
+		if offset > 0 {
+			if offset >= uint64(len(data)) {
+				return fmt.Errorf("gles: WriteTexture offset %d exceeds data %d", offset, len(data))
+			}
+			pixels = data[offset:]
+		}
+
+		switch {
+		case rowStride == widthBytes:
+			// Tight rows: only R8 needs the alignment relaxation.
+			if texelBytes == 1 {
+				q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+			}
+			q.glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
+				int32(dst.Origin.X), int32(dst.Origin.Y),
+				int32(size.Width), int32(size.Height), format, dataType,
+				unsafe.Pointer(&pixels[0]))
+			if texelBytes == 1 {
+				q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+			}
+		case rowStride%texelBytes == 0:
+			// Padded rows (wgpu aligns BytesPerRow; callers may pad further):
+			// GL_UNPACK_ROW_LENGTH (ES 3.0 core) makes TexSubImage2D skip the
+			// padding. Ignoring the stride skewed every non-aligned texture
+			// into horizontal streaks — sprite atlases on the rg35xx.
+			q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+			q.glCtx.PixelStorei(gl.UNPACK_ROW_LENGTH, int32(rowStride/texelBytes))
+			q.glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
+				int32(dst.Origin.X), int32(dst.Origin.Y),
+				int32(size.Width), int32(size.Height), format, dataType,
+				unsafe.Pointer(&pixels[0]))
+			q.glCtx.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
+			q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+		default:
+			// Unusual stride: repack row by row into a tight buffer.
+			tight := make([]byte, int(widthBytes)*int(size.Height))
+			for row := uint32(0); row < size.Height; row++ {
+				src := uint64(row) * uint64(rowStride)
+				if src+uint64(widthBytes) > uint64(len(pixels)) {
+					return fmt.Errorf("gles: WriteTexture row %d exceeds data", row)
+				}
+				copy(tight[int(row)*int(widthBytes):int(row+1)*int(widthBytes)], pixels[src:src+uint64(widthBytes)])
+			}
+			q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+			q.glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
+				int32(dst.Origin.X), int32(dst.Origin.Y),
+				int32(size.Width), int32(size.Height), format, dataType,
+				unsafe.Pointer(&tight[0]))
 			q.glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 		}
 	}

@@ -2324,7 +2324,11 @@ func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {
 	if err != nil {
 		return fmt.Errorf("draw fps overlay: %w", err)
 	}
-	x, y := uiTextBoxPosition(screen, box, cached)
+	// Bottom-right corner: clear of the top-left status HUD. Margins match
+	// the previous top-left inset.
+	margin := 6.0 * deviceScale
+	x := float64(screen.Bounds().Dx()) - float64(cached.width) - margin
+	y := float64(screen.Bounds().Dy()) - float64(cached.height) - margin
 	drawCachedOverlayImage(screen, cached, x, y)
 	return nil
 }

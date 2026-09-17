@@ -918,8 +918,20 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	var button gpucontext.Buttons
 	var key gpucontext.Key
 	switch code {
-	case btnLeft, btnSouth: // real mouse left / gamepad A
+	case btnLeft: // real mouse left button
 		button = gpucontext.ButtonsLeft
+	case btnSouth:
+		// A button: a short mouse click (menus and world UI keep working)
+		// plus a KeyF13 edge tagging it as a gamepad press — the world
+		// layer turns that into attack-nearest / pickup-nearest. The click
+		// auto-releases so a held A never turns into held-click walking.
+		p.pointerButton(gpucontext.ButtonsLeft, true)
+		p.dispatchKey(gpucontext.KeyF13, true)
+		go func() {
+			time.Sleep(80 * time.Millisecond)
+			p.dispatchKey(gpucontext.KeyF13, false)
+			p.pointerButton(gpucontext.ButtonsLeft, false)
+		}()
 	case btnRight, btnEast: // real mouse right / gamepad B
 		button = gpucontext.ButtonsRight
 	case btnMiddle, btnNorth: // real mouse middle / gamepad X

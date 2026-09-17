@@ -10,7 +10,6 @@ import (
 	"image"
 	"unsafe"
 
-	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/hal"
 	"github.com/gogpu/wgpu/hal/gles/gl"
 	"github.com/gogpu/wgpu/hal/gles/wgl"
@@ -105,17 +104,68 @@ func (q *Queue) WriteTexture(dst *hal.ImageCopyTexture, data []byte, layout *hal
 	defer q.ctx.Unlock()
 
 	_, format, dataType := textureFormatToGL(tex.format)
+	texelBytes := formatTexelBytes(tex.format)
 
 	glCtx.BindTexture(tex.target, tex.id)
 
 	if tex.target == gl.TEXTURE_2D {
-		if tex.format == gputypes.TextureFormatR8Unorm {
-			glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+		widthBytes := size.Width * texelBytes
+		var rowStride uint32
+		var offset uint64
+		if layout != nil {
+			if layout.BytesPerRow > 0 {
+				rowStride = layout.BytesPerRow
+			}
+			offset = layout.Offset
 		}
-		glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
-			0, 0, int32(size.Width), int32(size.Height), format, dataType,
-			unsafe.Pointer(&data[0]))
-		if tex.format == gputypes.TextureFormatR8Unorm {
+		if rowStride == 0 {
+			rowStride = widthBytes
+		}
+		pixels := data
+		if offset > 0 {
+			if offset >= uint64(len(data)) {
+				return fmt.Errorf("gles: WriteTexture offset %d exceeds data %d", offset, len(data))
+			}
+			pixels = data[offset:]
+		}
+
+		switch {
+		case rowStride == widthBytes:
+			if texelBytes == 1 {
+				glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+			}
+			glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
+				int32(dst.Origin.X), int32(dst.Origin.Y),
+				int32(size.Width), int32(size.Height), format, dataType,
+				unsafe.Pointer(&pixels[0]))
+			if texelBytes == 1 {
+				glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+			}
+		case rowStride%texelBytes == 0:
+			// Padded rows: GL_UNPACK_ROW_LENGTH makes TexSubImage2D skip the
+			// padding; ignoring the stride skews the image into streaks.
+			glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+			glCtx.PixelStorei(gl.UNPACK_ROW_LENGTH, int32(rowStride/texelBytes))
+			glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
+				int32(dst.Origin.X), int32(dst.Origin.Y),
+				int32(size.Width), int32(size.Height), format, dataType,
+				unsafe.Pointer(&pixels[0]))
+			glCtx.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
+			glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+		default:
+			tight := make([]byte, int(widthBytes)*int(size.Height))
+			for row := uint32(0); row < size.Height; row++ {
+				src := uint64(row) * uint64(rowStride)
+				if src+uint64(widthBytes) > uint64(len(pixels)) {
+					return fmt.Errorf("gles: WriteTexture row %d exceeds data", row)
+				}
+				copy(tight[int(row)*int(widthBytes):int(row+1)*int(widthBytes)], pixels[src:src+uint64(widthBytes)])
+			}
+			glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+			glCtx.TexSubImage2D(tex.target, int32(dst.MipLevel),
+				int32(dst.Origin.X), int32(dst.Origin.Y),
+				int32(size.Width), int32(size.Height), format, dataType,
+				unsafe.Pointer(&tight[0]))
 			glCtx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 		}
 	}

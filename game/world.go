@@ -1229,7 +1229,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	m.updateCompanionAI(ctx, now)
 	m.updateBot(ctx, now)
 
-	leftClick := !pointerBlocked && ctx.Input.MouseJustPressed(input.MouseButtonLeft)
+	// Handheld layer: d-pad walk + A-button context action. When A acts as
+	// a gamepad action, the companion mouse click it also produced must not
+	// trigger walk/attack handling on the same frame.
+	gamepadConsumed := m.updateGamepadControls(ctx, pointerBlocked, now)
+
+	leftClick := !pointerBlocked && !gamepadConsumed && ctx.Input.MouseJustPressed(input.MouseButtonLeft)
 	if leftClick {
 		// One-shot interactions must not be delayed by the short throttle used
 		// for repeated walk requests. Scheduling the held-click repeat here also

@@ -838,6 +838,20 @@ type (
 	CommandEncoderDescriptor  = hal.CommandEncoderDescriptor
 )
 
+// formatTexelBytes returns the bytes-per-texel size of a texture format for
+// row-stride math in WriteTexture.
+func formatTexelBytes(format gputypes.TextureFormat) uint32 {
+	switch format {
+	case gputypes.TextureFormatR8Unorm, gputypes.TextureFormatR8Snorm, gputypes.TextureFormatR8Uint:
+		return 1
+	case gputypes.TextureFormatRG8Unorm, gputypes.TextureFormatRG8Snorm, gputypes.TextureFormatRG8Uint,
+		gputypes.TextureFormatR16Float, gputypes.TextureFormatDepth16Unorm:
+		return 2
+	default:
+		return 4
+	}
+}
+
 // textureFormatToGL converts a WebGPU texture format to GL format info.
 func textureFormatToGL(format gputypes.TextureFormat) (internalFormat, dataFormat, dataType uint32) {
 	switch format {

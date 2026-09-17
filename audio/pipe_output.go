@@ -1,7 +1,6 @@
 package audio
 
 import (
-	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ebitengine/oto/v3"
 	"github.com/kivutar/goro/glog"
@@ -44,11 +44,18 @@ type otoOutput struct {
 func (o otoOutput) Name() string                      { return "oto" }
 func (o otoOutput) NewPlayer(r io.Reader) audioPlayer { return o.context.NewPlayer(r) }
 
-// pipeOutput streams raw PCM into an external player's stdin.
+// pipeOutput owns ONE external player process for its whole lifetime and
+// mixes every BGM/SFS voice in software before the pipe. The speaker device
+// on the rg35xx opens exclusively (no dmix), so simultaneous player
+// processes can never share it — a single stream must carry the whole mix.
 type pipeOutput struct {
 	name    string
 	rate    int
-	command []string // args[0] is the binary; "-" (stdin) is appended at spawn
+	command []string
+
+	startOnce sync.Once
+	mu        sync.Mutex
+	voices    map[*mixerVoice]struct{}
 }
 
 func newPipeOutput(name string, rate int) *pipeOutput {
@@ -57,11 +64,11 @@ func newPipeOutput(name string, rate int) *pipeOutput {
 		return &pipeOutput{
 			name: name,
 			rate: rate,
+			// Keep this list in sync with the launcher's raw-stream
+			// self-test. --gapless-audio=inf killed every spawn with
+			// exit status 1: mpv accepts only no|yes|weak there.
 			command: []string{
-				// Keep this list in sync with the launcher's raw-stream
-				// self-test. --gapless-audio=inf killed every spawn with
-				// exit status 1: mpv accepts only no|yes|weak there.
-				"mpv", "--no-video", "--ao=alsa",
+				"mpv", "--no-video", "--really-quiet", "--ao=alsa",
 				"--demuxer=rawaudio", "--demuxer-rawaudio-format=s16le",
 				fmt.Sprintf("--demuxer-rawaudio-rate=%d", rate),
 				"--demuxer-rawaudio-channels=stereo",
@@ -82,108 +89,136 @@ func newPipeOutput(name string, rate int) *pipeOutput {
 func (p *pipeOutput) Name() string { return p.name }
 
 func (p *pipeOutput) NewPlayer(r io.Reader) audioPlayer {
+	p.startOnce.Do(func() { p.startMaster() })
+	v := &mixerVoice{
+		owner:  p,
+		reader: r,
+		// One mix chunk (framesPerChunk*4 bytes), so every voice read
+		// aligns with the pump chunk size.
+		scratch: make([]byte, 2048*4),
+	}
+	v.active.Store(true)
+	v.volume.Store(1.0)
+	p.mu.Lock()
+	p.voices[v] = struct{}{}
+	p.mu.Unlock()
+	return v
+}
+
+// startMaster spawns the single player process and keeps it fed for the
+// rest of the session, holding the device open with silence when nothing
+// plays (which also makes BGM track changes gapless).
+func (p *pipeOutput) startMaster() {
+	p.voices = make(map[*mixerVoice]struct{})
 	args := append(append([]string(nil), p.command...), "-")
 	cmd := exec.Command(args[0], args[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil
+		glog.Warnf("audio master pipe failed name=%s: %v", p.name, err)
+		return
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil
-	}
-	player := &pipePlayer{done: make(chan struct{})}
-	player.volume.Store(1.0)
 	if err := cmd.Start(); err != nil {
-		return nil
+		glog.Warnf("audio master start failed name=%s: %v", p.name, err)
+		return
 	}
-	player.cmd = cmd
-	player.stdin = stdin
-	player.started.Store(true)
-	glog.Infof("audio pipe player spawned name=%s pid=%d rate=%d", p.name, cmd.Process.Pid, p.rate)
-	// mpv's own error text is the only way to see why a spawn dies; keep
-	// the first few stderr lines in the log.
-	var stderrLines atomic.Int32
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() && stderrLines.Load() < 3 {
-			glog.Warnf("audio pipe stderr name=%s pid=%d: %s", p.name, cmd.Process.Pid, scanner.Text())
-			stderrLines.Add(1)
-		}
-		_ = stderr.Close()
-	}()
-	go func() {
-		_, copyErr := io.Copy(stdin, &gainReader{r: r, volume: &player.volume})
-		// EOF (a finished SFX sample) ends the stream; the player process
-		// exits on its own once stdin closes.
-		_ = stdin.Close()
-		if copyErr != nil {
-			glog.Warnf("audio pipe stream failed name=%s pid=%d: %v", p.name, cmd.Process.Pid, copyErr)
-		}
-	}()
+	glog.Infof("audio master stream started name=%s pid=%d rate=%d", p.name, cmd.Process.Pid, p.rate)
 	go func() {
 		waitErr := cmd.Wait()
-		player.finished.Store(true)
-		glog.Infof("audio pipe player exited name=%s pid=%d err=%v", p.name, cmd.Process.Pid, waitErr)
-		close(player.done)
+		glog.Infof("audio master stream exited name=%s pid=%d err=%v", p.name, cmd.Process.Pid, waitErr)
 	}()
-	return player
+	go p.pump(stdin)
 }
 
-// pipePlayer is an audioPlayer backed by one external process. Raw streams
-// cannot pause or seek mid-flight, so Pause acts as a stop (the player is
-// discarded by the callers right after) and a later resume restarts.
-type pipePlayer struct {
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	volume    atomic.Value // float64
-	started   atomic.Bool
-	finished  atomic.Bool
-	done      chan struct{}
-	closeOnce sync.Once
-}
-func (p *pipePlayer) Play()  { p.started.Store(true) }
-func (p *pipePlayer) Pause() { _ = p.Close() }
-
-func (p *pipePlayer) IsPlaying() bool {
-	return p != nil && p.started.Load() && !p.finished.Load()
-}
-
-func (p *pipePlayer) SetVolume(volume float64) {
-	p.volume.Store(clampVolume(volume))
-}
-
-func (p *pipePlayer) Close() error {
-	if p == nil || p.cmd == nil {
-		return nil
-	}
-	p.closeOnce.Do(func() {
-		_ = p.stdin.Close()
-		_ = p.cmd.Process.Kill()
-	})
-	<-p.done
-	return nil
-}
-
-// gainReader multiplies the s16le samples it passes through by a live
-// volume factor; it keeps volume control working for players without a
-// runtime volume interface (aplay, and mpv started from a raw stream).
-type gainReader struct {
-	r      io.Reader
-	volume *atomic.Value
-}
-
-func (g *gainReader) Read(p []byte) (int, error) {
-	n, err := g.r.Read(p)
-	v, _ := g.volume.Load().(float64)
-	if n > 0 && v != 1.0 {
-		for i := 0; i+1 < n; i += 2 {
-			sample := int16(binary.LittleEndian.Uint16(p[i : i+2]))
-			scaled := int16(float64(sample) * v)
-			binary.LittleEndian.PutUint16(p[i:i+2], uint16(scaled))
+// pump writes realtime-paced mixed chunks into the player's stdin. Pacing
+// matters: an unpaced writer outruns playback and mpv balloons its cache
+// (150MB observed on the 1GB device before this fix).
+func (p *pipeOutput) pump(stdin io.WriteCloser) {
+	const framesPerChunk = 2048
+	chunk := make([]byte, framesPerChunk*4)
+	chunkDur := time.Duration(framesPerChunk) * time.Second / time.Duration(p.rate)
+	ticker := time.NewTicker(chunkDur)
+	defer ticker.Stop()
+	for range ticker.C {
+		p.mix(chunk)
+		if _, err := stdin.Write(chunk); err != nil {
+			glog.Warnf("audio master write failed name=%s: %v", p.name, err)
+			_ = stdin.Close()
+			return
 		}
 	}
-	return n, err
+}
+
+// mix renders one chunk: the sum of every active voice at its volume,
+// clipped to int16. Voices that run dry are finished and removed.
+func (p *pipeOutput) mix(chunk []byte) {
+	for i := range chunk {
+		chunk[i] = 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for v := range p.voices {
+		if !v.active.Load() || v.finished.Load() {
+			continue
+		}
+		n, err := io.ReadFull(v.reader, v.scratch[:len(chunk)])
+		vol, _ := v.volume.Load().(float64)
+		for i := 0; i+3 < n; i += 4 {
+			left := int32(int16(binary.LittleEndian.Uint16(v.scratch[i : i+2])))
+			right := int32(int16(binary.LittleEndian.Uint16(v.scratch[i+2 : i+4])))
+			baseL := int32(int16(binary.LittleEndian.Uint16(chunk[i : i+2])))
+			baseR := int32(int16(binary.LittleEndian.Uint16(chunk[i+2 : i+4])))
+			writeSample16(chunk[i:i+2], baseL+int32(float64(left)*vol))
+			writeSample16(chunk[i+2:i+4], baseR+int32(float64(right)*vol))
+		}
+		if err != nil || n < len(chunk) {
+			// One-shot sample drained: drop it from the mix.
+			v.finished.Store(true)
+			delete(p.voices, v)
+		}
+	}
+}
+
+func writeSample16(dst []byte, v int32) {
+	if v > 32767 {
+		v = 32767
+	} else if v < -32768 {
+		v = -32768
+	}
+	u := uint16(int16(v))
+	dst[0], dst[1] = byte(u), byte(u>>8)
+}
+
+// mixerVoice is one BGM or SFX source inside the pipeOutput mix.
+type mixerVoice struct {
+	owner    *pipeOutput
+	reader   io.Reader
+	scratch  []byte
+	active   atomic.Bool
+	finished atomic.Bool
+	volume   atomic.Value // float64
+}
+
+func (v *mixerVoice) Play()  { v.active.Store(true) }
+func (v *mixerVoice) Pause() { v.active.Store(false) }
+
+func (v *mixerVoice) IsPlaying() bool {
+	return v != nil && v.active.Load() && !v.finished.Load()
+}
+
+func (v *mixerVoice) SetVolume(volume float64) {
+	v.volume.Store(clampVolume(volume))
+}
+
+func (v *mixerVoice) Close() error {
+	if v == nil {
+		return nil
+	}
+	v.active.Store(false)
+	v.finished.Store(true)
+	v.owner.mu.Lock()
+	delete(v.owner.voices, v)
+	v.owner.mu.Unlock()
+	return nil
 }
 
 // resolveAudioBackend picks the output backend: an explicit name wins;

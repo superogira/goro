@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"time"
 
 	"github.com/kivutar/goro/res"
 )
@@ -102,18 +101,6 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	output := b.ensureOutput(defaultSampleRate)
 	if output == nil {
 		return "", fmt.Errorf("audio context unavailable")
-	}
-	if b.sfxOutput != nil {
-		output = b.sfxOutput
-	}
-	// Piped SFX each fork a process; map ambients retrigger every few
-	// seconds and burst on button mashing. Cap the spawn rate — a dropped
-	// click beats a stuttering game loop.
-	if _, isPipe := output.(*pipeOutput); isPipe {
-		if time.Since(b.sfxLastAt) < 250*time.Millisecond {
-			return "", nil
-		}
-		b.sfxLastAt = time.Now()
 	}
 	// Map ambient sounds retrigger every RSW cycle; re-reading and re-decoding
 	// the wav on the game goroutine each time is a visible stutter on slower

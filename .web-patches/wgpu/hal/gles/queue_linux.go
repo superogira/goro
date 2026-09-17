@@ -10,6 +10,7 @@ import (
 	"image"
 	"os"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -79,6 +80,10 @@ func (q *Queue) PollCompleted() uint64 {
 	return q.submissionIndex
 }
 
+// debugUBOWrites counts uniform-buffer writes logged under
+// GOGPU_GLES_DEBUG_CLEAR=1.
+var debugUBOWrites uint32
+
 // WriteBuffer writes data to a buffer immediately.
 func (q *Queue) WriteBuffer(buffer hal.Buffer, offset uint64, data []byte) error {
 	buf, ok := buffer.(*Buffer)
@@ -87,6 +92,22 @@ func (q *Queue) WriteBuffer(buffer hal.Buffer, offset uint64, data []byte) error
 	}
 	if len(data) == 0 {
 		return nil
+	}
+
+	// Diagnostic: dump the first uniform-buffer uploads. If the "screen"
+	// uniform reads as zeroes, the vertex shader divides by zero and every
+	// vertex lands at NaN — clipped silently with no GL error, exactly the
+	// observed black-frame signature. 640.0f = 0x44000000, 480.0f = 0x43f00000.
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" && buf.target == gl.UNIFORM_BUFFER {
+		if n := atomic.AddUint32(&debugUBOWrites, 1); n <= 4 {
+			hexLen := len(data)
+			if hexLen > 32 {
+				hexLen = 32
+			}
+			hal.Logger().Info("gles: uniform buffer write",
+				"seq", n, "size", len(data), "offset", offset,
+				"head", fmt.Sprintf("% x", data[:hexLen]))
+		}
 	}
 
 	q.glCtx.BindBuffer(buf.target, buf.id)

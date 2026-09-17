@@ -125,27 +125,29 @@ const (
 	btnRight  = 0x111
 	btnMiddle = 0x112
 
+	// Physical layout decoded from the user's presses on this ANBERNIC-keys
+	// device: face buttons occupy 0x130-0x133, then L1=0x134, R1=0x135,
+	// L2=0x136, R2=0x137, and 0x138 — the ninth key — is MENU (held 3.5s
+	// twice while testing). The standard BTN_TL/BTN_MODE numbering does
+	// NOT match this hardware.
 	btnSouth  = 0x130 // A
 	btnEast   = 0x131 // B
 	btnNorth  = 0x133 // X
-	btnWest   = 0x134 // Y
-	btnTL     = 0x135 // L1
-	btnTR     = 0x136 // R1
-	btnTL2    = 0x137 // L2
-	btnTR2    = 0x138 // R2
+	btnL1     = 0x134 // physical L1 (BTN_WEST slot on standard pads)
+	btnR1     = 0x135 // physical R1 (BTN_TL slot on standard pads)
+	btnL2     = 0x136 // physical L2 (BTN_TR slot on standard pads)
+	btnR2     = 0x137 // physical R2 (BTN_TL2 slot on standard pads)
+	btnMenu   = 0x138 // physical MENU (BTN_TR2 slot on standard pads)
 	btnSelect = 0x139
 	btnStart  = 0x13a
 	btnMode   = 0x13d
 	btnThumbl = 0x13b
 	btnThumbr = 0x13c
 
-	// btnExtra0 is the one non-gamepad code the ANBERNIC-keys device
-	// advertises (decoded from its KEY bitmap in /proc/bus/input/devices).
-	// BTN_SELECT (0x139) and BTN_MODE (0x13d) are absent from the caps,
-	// so SELECT/MENU must arrive as this code (or as KEY_ESC, see below).
-	// Tracked as a quit-combo button until its identity is confirmed.
-	btnExtra0 = 0x162
-	keyEsc    = 0x001
+	// btnSel0 is SELECT on this device — the one non-gamepad code the
+	// ANBERNIC-keys device advertises (from its /proc caps bitmap).
+	btnSel0 = 0x162
+	keyEsc  = 0x001
 
 	// Stick handling: RG35XX-style pads report 0..255 with center ~128.
 	stickCenter = 127.5
@@ -878,21 +880,21 @@ func (p *fbdevPlatform) quitWatcher() {
 		now := time.Now()
 		p.inputMu.Lock()
 		via := ""
-		if t0, ok := p.held[btnMode]; ok && now.Sub(t0) >= 1200*time.Millisecond {
-			via = "MENU"
-		} else if t0, ok := p.held[btnExtra0]; ok && now.Sub(t0) >= 1200*time.Millisecond {
-			via = "BTN 0x162"
+		if t0, ok := p.held[btnMenu]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+			via = "MENU(0x138)"
+		} else if t0, ok := p.held[btnSel0]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+			via = "SELECT(0x162)"
+		} else if t0, ok := p.held[btnMode]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+			via = "MODE(0x13d)"
 		} else if t0, ok := p.held[keyEsc]; ok && now.Sub(t0) >= 3000*time.Millisecond {
 			via = "ESC"
-		} else if t0, ok := p.held[btnSelect]; ok && now.Sub(t0) >= 3000*time.Millisecond {
-			via = "SELECT"
-		} else if ts, okS := p.held[btnSelect]; okS {
+		} else if ts, okS := p.held[btnSel0]; okS {
 			if tt, okT := p.held[btnStart]; okT &&
 				now.Sub(ts) >= 1200*time.Millisecond && now.Sub(tt) >= 1200*time.Millisecond {
 				via = "SELECT+START"
 			}
-		} else if tl, okL := p.held[btnTL]; okL {
-			if tr, okR := p.held[btnTR]; okR &&
+		} else if tl, okL := p.held[btnL1]; okL {
+			if tr, okR := p.held[btnR1]; okR &&
 				now.Sub(tl) >= 1500*time.Millisecond && now.Sub(tr) >= 1500*time.Millisecond {
 				via = "L1+R1"
 			}
@@ -918,18 +920,19 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		button = gpucontext.ButtonsRight
 	case btnMiddle, btnNorth: // real mouse middle / gamepad X
 		button = gpucontext.ButtonsMiddle
-	case btnWest: // Y
-		key = gpucontext.KeySpace
-	case btnTL:
+	case btnL1:
 		key = gpucontext.KeyF1
-		p.setHeld(btnTL, down)
-	case btnTR:
+		p.setHeld(btnL1, down)
+	case btnR1:
 		key = gpucontext.KeyF2
-		p.setHeld(btnTR, down)
-	case btnTL2:
+		p.setHeld(btnR1, down)
+	case btnL2:
 		key = gpucontext.KeyF3
-	case btnTR2:
+	case btnR2:
 		key = gpucontext.KeyF4
+	case btnMenu:
+		// Physical MENU (0x138 on this hardware) — quit watcher only.
+		p.setHeld(btnMenu, down)
 	case btnSelect:
 		key = gpucontext.KeyEscape
 		p.setHeld(btnSelect, down)
@@ -937,15 +940,13 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		key = gpucontext.KeyEnter
 		p.setHeld(btnStart, down)
 	case btnMode:
-		// MENU feeds the quit watcher only (see quitWatcher); it is not
-		// mapped to a game key.
+		// Standard BTN_MODE — not this hardware's MENU, kept for safety.
 		p.setHeld(btnMode, down)
-	case btnExtra0:
-		// Unknown-purpose button from the device's advertised caps — the
-		// SELECT/MENU candidate. Quit watcher only, and logged as unknown
-		// so the run log reveals it either way.
-		p.setHeld(btnExtra0, down)
-		p.logUnknownCode(btnExtra0, down)
+	case btnSel0:
+		// Physical SELECT (0x162 on this hardware) — Escape for the game
+		// and a quit-combo button for the watcher.
+		key = gpucontext.KeyEscape
+		p.setHeld(btnSel0, down)
 	case btnThumbl:
 		key = gpucontext.KeyTab
 	case btnThumbr:

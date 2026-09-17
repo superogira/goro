@@ -1724,24 +1724,41 @@ func (c *CopyTextureToBufferCommand) Execute(ctx *gl.Context) {
 	// Set tight pixel packing (no row alignment padding).
 	ctx.PixelStorei(gl.PACK_ALIGNMENT, 1)
 
-	// Read pixels from the bound FBO into a temporary CPU buffer.
+	// Read back as RGBA — the only combination guaranteed valid for 8-bit
+	// normalized FBOs. ReadPixels with GL_BGRA is implementation-defined;
+	// drivers that don't offer it fail with INVALID_OPERATION and leave the
+	// buffer zeroed (all-black screenshots). Byte order for BGRA textures
+	// is restored during the copy below.
 	tmpBuf := make([]byte, totalBytes)
 	ctx.ReadPixels(
 		int32(c.srcOrigin[0]), int32(c.srcOrigin[1]),
 		width, height,
-		gl.BGRA, gl.UNSIGNED_BYTE,
+		gl.RGBA, gl.UNSIGNED_BYTE,
 		unsafe.Pointer(&tmpBuf[0]),
 	)
+	swapBR := c.srcTexture.format == gputypes.TextureFormatBGRA8Unorm ||
+		c.srcTexture.format == gputypes.TextureFormatBGRA8UnormSrgb
 
 	// Copy the pixel data into the destination buffer's CPU-side storage.
 	// OpenGL reads bottom-to-top, but callers expect top-to-bottom order.
-	// Flip the rows during copy.
+	// Flip the rows during copy, swapping B/R per pixel for BGRA textures.
 	for row := int32(0); row < height; row++ {
 		// OpenGL row 0 = bottom. We want row 0 = top.
 		srcRow := (height - 1 - row)
 		srcStart := uint64(srcRow) * uint64(rowBytes)
 		dstStart := c.dstOffset + uint64(row)*uint64(rowBytes)
-		copy(c.dstBuffer.data[dstStart:dstStart+uint64(rowBytes)], tmpBuf[srcStart:srcStart+uint64(rowBytes)])
+		if !swapBR {
+			copy(c.dstBuffer.data[dstStart:dstStart+uint64(rowBytes)], tmpBuf[srcStart:srcStart+uint64(rowBytes)])
+			continue
+		}
+		for col := uint32(0); col < uint32(width); col++ {
+			src := srcStart + uint64(col)*4
+			dst := dstStart + uint64(col)*4
+			c.dstBuffer.data[dst+0] = tmpBuf[src+2]
+			c.dstBuffer.data[dst+1] = tmpBuf[src+1]
+			c.dstBuffer.data[dst+2] = tmpBuf[src+0]
+			c.dstBuffer.data[dst+3] = tmpBuf[src+3]
+		}
 	}
 
 	// Restore the previous FBO binding.

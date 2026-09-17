@@ -212,10 +212,14 @@ type fbdevPlatform struct {
 	held             map[uint16]time.Time
 	seenCodes        map[uint16]bool
 	keyTraces        map[string]int
-	buttons          gpucontext.Buttons
-	axes             map[uint16]int32
-	hatX, hatY       int
-	shift, ctrl, alt bool
+	// The firmware emits a SELECT (0x162) press right after every MENU
+	// (0x138) release. Swallow that echo so a MENU tap does not also open
+	// the in-game escape menu.
+	suppressSel0Until time.Time
+	buttons           gpucontext.Buttons
+	axes              map[uint16]int32
+	hatX, hatY        int
+	shift, ctrl, alt  bool
 }
 
 func newFBDevPlatform() PlatformManager {
@@ -938,14 +942,20 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		t0, menuHeld := p.held[btnMenu]
 		p.inputMu.Unlock()
 		p.setHeld(btnMenu, down)
-		if !down && menuHeld && time.Since(t0) < 500*time.Millisecond {
-			p.dispatchKey(gpucontext.KeyPrintScreen, true)
-			// Release shortly after so the key does not stay held; the
-			// press edge lands in the current event batch.
-			go func() {
-				time.Sleep(120 * time.Millisecond)
-				p.dispatchKey(gpucontext.KeyPrintScreen, false)
-			}()
+		if !down {
+			// Arm the SELECT-echo swallow window first, then handle the tap.
+			p.inputMu.Lock()
+			p.suppressSel0Until = time.Now().Add(250 * time.Millisecond)
+			p.inputMu.Unlock()
+			if menuHeld && time.Since(t0) < 500*time.Millisecond {
+				p.dispatchKey(gpucontext.KeyPrintScreen, true)
+				// Release shortly after so the key does not stay held; the
+				// press edge lands in the current event batch.
+				go func() {
+					time.Sleep(120 * time.Millisecond)
+					p.dispatchKey(gpucontext.KeyPrintScreen, false)
+				}()
+			}
 		}
 	case btnSelect:
 		key = gpucontext.KeyEscape
@@ -958,9 +968,16 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		p.setHeld(btnMode, down)
 	case btnSel0:
 		// Physical SELECT (0x162 on this hardware) — Escape for the game
-		// and a quit-combo button for the watcher.
-		key = gpucontext.KeyEscape
+		// and a quit-combo button for the watcher. The firmware echoes a
+		// SELECT press right after every MENU release; swallow that echo
+		// (still tracked as held for the quit combos).
 		p.setHeld(btnSel0, down)
+		p.inputMu.Lock()
+		echo := down && time.Now().Before(p.suppressSel0Until)
+		p.inputMu.Unlock()
+		if !echo {
+			key = gpucontext.KeyEscape
+		}
 	case btnThumbl:
 		key = gpucontext.KeyTab
 	case btnThumbr:

@@ -211,6 +211,12 @@ func (d *Device) CreateTexture(desc *TextureDescriptor) (hal.Texture, error) {
 
 	// Get GL format info
 	internalFormat, format, dataType := textureFormatToGL(desc.Format)
+	// Storage allocation only (data=nil below): GLES pairs the sized RGBA8
+	// internal format with GL_RGBA exclusively; BGRA8Unorm byte order is
+	// handled at upload/readback time.
+	if format == gl.BGRA {
+		format = gl.RGBA
+	}
 
 	// Allocate texture storage
 	switch target {

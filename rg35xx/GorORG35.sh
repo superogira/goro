@@ -101,6 +101,21 @@ amixer 2>/dev/null | head -60 || echo "  amixer unavailable"
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
 export GOGPU_LOG=info
+# ALSA: prefer the speaker codec (card 0) over the HDMI card (card 2)
+# whenever the audio library resolves the "default" device.
+export ALSA_CARD="${ALSA_CARD:-0}"
+# Watch whether goro actually opens a PCM stream while playing (bounded,
+# ~2 minutes of samples, a few hundred bytes).
+(
+  for i in 1 2 3 4 5 6; do
+    sleep 20
+    echo "-- pcm stream state (t+$((i*20))s):"
+    for c in /proc/asound/card0/pcm0p/sub0/hw_params /proc/asound/card2/pcm0p/sub0/hw_params; do
+      echo "  $c:"
+      sed 's/^/    /' "$c" 2>/dev/null || echo "    (closed)"
+    done
+  done
+) &
 # The app context defines neither HOME nor XDG_CONFIG_HOME; without them
 # os.UserConfigDir() fails and goro logs "login ID save failed". Keep the
 # user store on the SD card, in a dedicated dir: pointing XDG at the app

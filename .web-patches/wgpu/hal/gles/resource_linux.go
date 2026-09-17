@@ -157,7 +157,28 @@ func (s *Surface) createEGLWindowSurface(width, height uint32) error {
 	if s.isWayland {
 		return s.createWaylandEGLSurface(width, height)
 	}
+	if s.eglCtx.WindowKind() == egl.WindowKindFbdev {
+		return s.createFbdevEGLSurface()
+	}
 	return s.createX11EGLSurface()
+}
+
+// createFbdevEGLSurface creates an EGL window surface on the framebuffer
+// display. The windowHandle is a *fbdev_window {width, height} — the
+// native window type of the sunxi/Allwinner Mali stack.
+func (s *Surface) createFbdevEGLSurface() error {
+	attribs := []egl.EGLInt{egl.None}
+	eglSurface := egl.CreateWindowSurface(s.eglDisplay, s.eglCtx.Config(), egl.EGLNativeWindowType(s.windowHandle), &attribs[0])
+	if eglSurface == egl.NoSurface {
+		return fmt.Errorf("eglCreateWindowSurface failed for fbdev window 0x%x: error 0x%x", s.windowHandle, egl.GetError())
+	}
+	s.eglSurface = eglSurface
+
+	hal.Logger().Info("gles: fbdev EGL window surface created",
+		"eglSurface", fmt.Sprintf("0x%x", eglSurface),
+		"window", fmt.Sprintf("0x%x", s.windowHandle),
+	)
+	return nil
 }
 
 // createWaylandEGLSurface creates a wl_egl_window then an EGL window surface.

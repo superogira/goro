@@ -234,6 +234,8 @@ func (t SurfaceTargetUnsafe) halTarget() (hal.SurfaceTarget, error) {
 		kind = hal.SurfaceTargetWindowsHWND
 	case surfaceTargetXlibWindow:
 		kind = hal.SurfaceTargetXlibWindow
+	case surfaceTargetFbdevWindow:
+		kind = hal.SurfaceTargetFbdevWindow
 	case surfaceTargetWaylandSurface:
 		kind = hal.SurfaceTargetWaylandSurface
 	case surfaceTargetAndroidNativeWindow:

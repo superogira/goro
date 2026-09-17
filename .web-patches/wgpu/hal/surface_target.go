@@ -23,6 +23,7 @@ const (
 	SurfaceTargetWaylandSurface
 	SurfaceTargetAndroidNativeWindow
 	SurfaceTargetMetalLayer
+	SurfaceTargetFbdevWindow
 )
 
 // SurfaceTarget is the typed raw-window contract passed from core to HAL.
@@ -59,6 +60,8 @@ func (k SurfaceTargetKind) String() string {
 		return "Android native window"
 	case SurfaceTargetMetalLayer:
 		return "Metal layer"
+	case SurfaceTargetFbdevWindow:
+		return "fbdev window"
 	case SurfaceTargetInvalid:
 		return "invalid"
 	default:

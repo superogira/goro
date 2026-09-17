@@ -233,8 +233,8 @@ type Renderer struct {
 	deferredDestroysMu sync.Mutex
 
 	// PowerPreference for adapter selection
-	powerPreference gputypes.PowerPreference
-	forceSoftwareAdapter      bool
+	powerPreference      gputypes.PowerPreference
+	forceSoftwareAdapter bool
 
 	// Primary RenderTarget — backward compatibility for single-window API.
 	// TODO(lifecycle-phase3): remove once all callers use per-window surfaces.
@@ -431,6 +431,21 @@ func (r *Renderer) initAdapterDevice(surfaceHint *wgpu.Surface) error {
 // createSurface creates the wgpu Surface from the window handles.
 // Does not configure dimensions — call configureSurface after device is ready.
 func (r *Renderer) createSurface(ws *RenderTarget) error {
+	// fbdev with the Mali EGL stack: hand the GPU backend the native
+	// fbdev_window so GLES presents straight to the framebuffer.
+	if fw, ok := ws.platWindow.(interface {
+		FbdevEGLWindow() (window uintptr, ok bool)
+	}); ok {
+		if window, wok := fw.FbdevEGLWindow(); wok {
+			surface, err := r.instance.CreateSurfaceUnsafe(wgpu.SurfaceTargetFromFbdevWindow(window))
+			if err != nil {
+				return fmt.Errorf("gogpu: failed to create fbdev EGL surface: %w", err)
+			}
+			ws.surface = surface
+			ws.state = SurfaceReady
+			return nil
+		}
+	}
 	if hs, ok := ws.platWindow.(interface{ UseHeadlessSurface() bool }); ok && hs.UseHeadlessSurface() {
 		// fbdev: no native window to hand to a GPU backend — render into
 		// the headless software surface and read the pixels back.
@@ -918,10 +933,10 @@ func (ws *RenderTarget) present() (reconfigured, presented bool) {
 		}); ok {
 			if pixels, rerr := ws.surface.ReadPixels(); rerr != nil {
 				slog.Debug("gogpu: fbdev readback failed", "error", rerr)
-			// ReadPixels' contract is a tightly packed RGBA8 snapshot
-			// regardless of the surface format, so the sink's bgra flag
-			// must stay false — passing the surface format here swapped
-			// red and blue on fbdev panels.
+				// ReadPixels' contract is a tightly packed RGBA8 snapshot
+				// regardless of the surface format, so the sink's bgra flag
+				// must stay false — passing the surface format here swapped
+				// red and blue on fbdev panels.
 			} else if berr := sink.BlitPixels(pixels, int(ws.width), int(ws.height), false); berr != nil {
 				slog.Debug("gogpu: fbdev blit failed", "error", berr)
 			}

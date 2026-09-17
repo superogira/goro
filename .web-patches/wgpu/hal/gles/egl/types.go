@@ -227,6 +227,9 @@ const (
 	WindowKindWayland
 	// WindowKindSurfaceless represents surfaceless (headless) rendering.
 	WindowKindSurfaceless
+	// WindowKindFbdev represents rendering directly to the Linux
+	// framebuffer via the default EGL display (Allwinner/sunxi Mali).
+	WindowKindFbdev
 	// WindowKindUnknown represents unknown window system.
 	WindowKindUnknown
 )

@@ -107,6 +107,8 @@ func (i *Instance) CreateSurface(target hal.SurfaceTarget) (hal.Surface, error) 
 		targetWindowKind = egl.WindowKindX11
 	case hal.SurfaceTargetWaylandSurface:
 		targetWindowKind = egl.WindowKindWayland
+	case hal.SurfaceTargetFbdevWindow:
+		targetWindowKind = egl.WindowKindFbdev
 	default:
 		return nil, fmt.Errorf("gles: %w: got %s, backend requires Xlib window or Wayland surface", hal.ErrUnsupportedSurfaceTarget, target.Kind)
 	}

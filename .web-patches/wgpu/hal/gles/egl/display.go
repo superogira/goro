@@ -302,6 +302,14 @@ func getEGLDisplayForKind(nativeDisplay uintptr, windowKind WindowKind) (EGLDisp
 		}
 		return display, WindowKindSurfaceless, nil, nil
 
+	case WindowKindFbdev:
+		// sunxi/Mali fbdev: the default display IS the framebuffer.
+		display := GetDisplay(DefaultDisplay)
+		if display == NoDisplay {
+			return NoDisplay, WindowKindUnknown, nil, fmt.Errorf("eglGetDisplay(EGL_DEFAULT_DISPLAY) failed for fbdev")
+		}
+		return display, WindowKindFbdev, nil, nil
+
 	default:
 		return NoDisplay, WindowKindUnknown, nil, fmt.Errorf("unknown window system")
 	}

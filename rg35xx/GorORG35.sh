@@ -57,8 +57,9 @@ fi
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
 export GOGPU_LOG=debug
-# half-resolution render upscaled 2x by the fb blit: ~4x fewer pixels
-# for the software rasterizer (~13s -> ~3.5s per frame)
-export GOGPU_FB_SCALE=2
-./goro -config goro.ini -data-dir .
+# GPU experiment: render through EGL/GLES on the Mali driver (libmali).
+# If the context comes up, frames go from seconds to GPU speed. Falls
+# back to the software path when unset.
+export GOGPU_FB_GLES=1
+./goro -config goro.ini -data-dir . -graphics-api gles
 echo "goro exited: $?"

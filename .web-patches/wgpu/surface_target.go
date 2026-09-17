@@ -36,6 +36,7 @@ const (
 	surfaceTargetWaylandSurface
 	surfaceTargetAndroidNativeWindow
 	surfaceTargetMetalLayer
+	surfaceTargetFbdevWindow
 	surfaceTargetWebCanvasID
 )
 
@@ -101,6 +102,17 @@ func SurfaceTargetFromAndroidNativeWindow(window uintptr) SurfaceTargetUnsafe {
 	}
 }
 
+// SurfaceTargetFromFbdevWindow returns a raw fbdev EGL target for
+// Allwinner/sunxi-style Mali stacks: window is a *fbdev_window
+// {width, height} passed to eglCreateWindowSurface against the default
+// (framebuffer) EGL display.
+func SurfaceTargetFromFbdevWindow(window uintptr) SurfaceTargetUnsafe {
+	return SurfaceTargetUnsafe{
+		kind:         surfaceTargetFbdevWindow,
+		windowHandle: window,
+	}
+}
+
 // SurfaceTargetFromMetalLayer returns a raw CAMetalLayer* target.
 func SurfaceTargetFromMetalLayer(layer uintptr) SurfaceTargetUnsafe {
 	return SurfaceTargetUnsafe{
@@ -142,6 +154,10 @@ func (t SurfaceTargetUnsafe) validate() error {
 	case surfaceTargetMetalLayer:
 		if t.windowHandle == 0 {
 			return invalidSurfaceTarget("Metal layer is zero")
+		}
+	case surfaceTargetFbdevWindow:
+		if t.windowHandle == 0 {
+			return invalidSurfaceTarget("fbdev window is zero")
 		}
 	case surfaceTargetWebCanvasID:
 		// Zero intentionally selects the first canvas for compatibility.

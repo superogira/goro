@@ -188,7 +188,12 @@ type fbdevPlatform struct {
 	// varBuf is the raw fb_var_screeninfo from probing; panning with it
 	// at init activates the fb layer for scanout (StockOS leaves the
 	// layer off until an FBIOPAN/FBIOPUT touches the mode).
-	varBuf           [160]byte
+	varBuf [160]byte
+	// gles enables GPU rendering through EGL on the framebuffer (the
+	// sunxi Mali stack); eglWin backs eglCreateWindowSurface.
+	gles             bool
+	eglWin           fbdevEGLWindow
+	eglWinOK         bool
 	buttons          gpucontext.Buttons
 	axes             map[uint16]int32
 	hatX, hatY       int
@@ -235,6 +240,12 @@ func (p *fbdevPlatform) Init() error {
 	}
 	p.fbFile, p.fbMem, p.geo = f, mem, geo
 	p.fbScale = fbScaleFromEnv()
+	p.gles = os.Getenv("GOGPU_FB_GLES") == "1"
+	if p.gles {
+		w, h := p.surfaceSize()
+		p.eglWin = fbdevEGLWindow{Width: uint16(w), Height: uint16(h)}
+		p.eglWinOK = true
+	}
 	logger().Info("fbdev: framebuffer ready",
 		"device", dev, "size", fmt.Sprintf("%dx%d", geo.width, geo.height),
 		"virtual", fmt.Sprintf("%dx%d", geo.widthVirtual, geo.heightVirtual),
@@ -438,7 +449,22 @@ func (w *fbdevWindow) GetHandle() (instance, window uintptr) { return 0, 0 }
 
 // UseHeadlessSurface marks the window for the renderer: present goes
 // through the software surface and BlitPixels.
-func (w *fbdevWindow) UseHeadlessSurface() bool { return true }
+func (w *fbdevWindow) UseHeadlessSurface() bool { return !w.platform.gles }
+
+// FbdevEGLWindow returns the native fbdev_window for EGL when the GLES
+// path is enabled; ok is false in software mode.
+func (w *fbdevWindow) FbdevEGLWindow() (window uintptr, ok bool) {
+	if !w.platform.gles || !w.platform.eglWinOK {
+		return 0, false
+	}
+	return uintptr(unsafe.Pointer(&w.platform.eglWin)), true
+}
+
+// fbdevEGLWindow mirrors the sunxi Mali EGL native window: the driver
+// reads the width/height at surface creation.
+type fbdevEGLWindow struct {
+	Width, Height uint16
+}
 
 func (w *fbdevWindow) LogicalSize() (int, int) {
 	w2, h2 := w.platform.surfaceSize()
@@ -556,6 +582,10 @@ func fillFBColor(dst []byte, geo fbGeometry, r, g, b byte) {
 // the screen.
 func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) error {
 	p := w.platform
+	if p.gles {
+		// EGL presents straight to the framebuffer; no CPU blit.
+		return nil
+	}
 	geo := p.geo
 	if p.fbMem == nil {
 		return fmt.Errorf("fbdev: framebuffer not mapped")

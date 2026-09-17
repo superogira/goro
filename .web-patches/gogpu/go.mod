@@ -14,3 +14,5 @@ require (
 	github.com/go-webgpu/webgpu v0.5.5 // indirect
 	github.com/gogpu/naga v0.19.0 // indirect
 )
+
+replace github.com/gogpu/wgpu => ../wgpu

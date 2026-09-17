@@ -926,19 +926,22 @@ func (ws *RenderTarget) present() (reconfigured, presented bool) {
 		ds.Reset()
 	}
 	if err == nil {
-		// fbdev-style windows: copy the presented software frame into the
-		// framebuffer so it becomes visible.
-		if sink, ok := ws.platWindow.(interface {
-			BlitPixels(pixels []byte, width, height int, bgra bool) error
-		}); ok {
-			if pixels, rerr := ws.surface.ReadPixels(); rerr != nil {
-				slog.Debug("gogpu: fbdev readback failed", "error", rerr)
-				// ReadPixels' contract is a tightly packed RGBA8 snapshot
-				// regardless of the surface format, so the sink's bgra flag
-				// must stay false — passing the surface format here swapped
-				// red and blue on fbdev panels.
-			} else if berr := sink.BlitPixels(pixels, int(ws.width), int(ws.height), false); berr != nil {
-				slog.Debug("gogpu: fbdev blit failed", "error", berr)
+		// fbdev software windows: copy the presented software frame into
+		// the framebuffer so it becomes visible. GLES-mode fbdev windows
+		// present through eglSwapBuffers and must not read back.
+		if hs, isHeadless := ws.platWindow.(interface{ UseHeadlessSurface() bool }); !isHeadless || hs.UseHeadlessSurface() {
+			if sink, ok := ws.platWindow.(interface {
+				BlitPixels(pixels []byte, width, height int, bgra bool) error
+			}); ok {
+				if pixels, rerr := ws.surface.ReadPixels(); rerr != nil {
+					slog.Debug("gogpu: fbdev readback failed", "error", rerr)
+					// ReadPixels' contract is a tightly packed RGBA8 snapshot
+					// regardless of the surface format, so the sink's bgra flag
+					// must stay false — passing the surface format here swapped
+					// red and blue on fbdev panels.
+				} else if berr := sink.BlitPixels(pixels, int(ws.width), int(ws.height), false); berr != nil {
+					slog.Debug("gogpu: fbdev blit failed", "error", berr)
+				}
 			}
 		}
 		return false, true

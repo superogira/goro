@@ -61,5 +61,8 @@ export GOGPU_LOG=debug
 # If the context comes up, frames go from seconds to GPU speed. Falls
 # back to the software path when unset.
 export GOGPU_FB_GLES=1
+# diagnostic: floods every frame with magenta before the EGL swap —
+# if the panel shows magenta, present reaches the screen
+export GOGPU_GLES_DEBUG_CLEAR=1
 ./goro -config goro.ini -data-dir . -graphics-api gles
 echo "goro exited: $?"

@@ -8,6 +8,7 @@ package gles
 import (
 	"fmt"
 	"image"
+	"os"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -153,6 +154,16 @@ func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects [
 	}
 
 	surf.blitSwapchainToDefault()
+
+	// Diagnostic: flood the default framebuffer with magenta before the
+	// swap. If the panel shows magenta, the present path reaches the
+	// screen and any black output is a content problem instead.
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
+		q.glCtx.BindFramebuffer(gl.FRAMEBUFFER, 0)
+		q.glCtx.Disable(gl.SCISSOR_TEST)
+		q.glCtx.ClearColor(1, 0, 1, 1)
+		q.glCtx.Clear(gl.COLOR_BUFFER_BIT)
+	}
 
 	// Use damage-aware swap when the extension is available and rects provided.
 	if len(damageRects) > 0 && egl.HasSwapBuffersWithDamage() {

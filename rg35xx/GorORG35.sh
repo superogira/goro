@@ -10,7 +10,13 @@
 #   GorORG35/BGM/        loose BGM (classic RO layout, optional)
 #   GorORG35/clientinfo.xml  loose override for the server address (optional)
 progdir=$(cd "$(dirname "$0")" && pwd)
-exec >>"$progdir/GorORG35-logfile.txt" 2>&1
+# Rotate the previous run's logs instead of appending forever: the debug
+# levels used during bring-up grew these to megabytes per play session and
+# ate SD card space. Each launch keeps exactly one .old copy.
+for f in "$progdir/GorORG35-logfile.txt" "$progdir/GorORG35/goro.log"; do
+  [ -f "$f" ] && mv -f "$f" "$f.old"
+done
+exec >"$progdir/GorORG35-logfile.txt" 2>&1
 echo "=== goro launch $(date) ==="
 uname -a
 free -m 2>/dev/null | head -2
@@ -64,16 +70,14 @@ cd "$progdir/GorORG35"
 
 # Log survival: a hard GPU/kernel crash takes the page cache with it,
 # leaving a 0-byte logfile after the power cycle. A background syncer
-# forces everything written so far onto the SD card every 2 seconds.
+# forces everything written so far onto the SD card every 10 seconds —
+# often enough to survive a crash, rarely enough not to stall the game
+# with constant SD writes.
 (
-  while :; do sync; sleep 2; done
+  while :; do sync; sleep 10; done
 ) &
 syncer=$!
 
-# --- 1) display diagnostic: paints fb0 in a loop for ~9s (cycling
-# colors), verifies writes survive read-back, and probes the
-# mode-setting ioctls. Watch the screen during this phase and check
-# fbtest.log afterwards.
 # --- 1) display diagnostic (opt-in): create a marker file "fbtest.enabled"
 # next to this script to re-arm it; the panel and present path are proven
 # now, so it stays out of the normal boot.

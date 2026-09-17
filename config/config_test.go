@@ -402,3 +402,49 @@ func TestSavedLoginIDRejectsLineBreaksWithoutChangingConfig(t *testing.T) {
 		t.Fatal("invalid ID changed the existing config")
 	}
 }
+
+func TestLoadConfigSkipsUnreadableUserConfigStore(t *testing.T) {
+	isolateUserConfig(t)
+	// rg35xx app layout regression: XDG_CONFIG_HOME pointing at the app
+	// dir makes the store <app>/goro/goro.ini, where "goro" is the
+	// binary. Opening it fails with ENOTDIR, which must not kill startup.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	xdg, ok := os.LookupEnv("XDG_CONFIG_HOME")
+	if !ok {
+		t.Skip("os.UserConfigDir ignores XDG_CONFIG_HOME on this platform")
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "goro"), []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "goro.ini"), []byte("[window]\nwidth = 999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig([]string{"--config", filepath.Join(root, "goro.ini")})
+	if err != nil {
+		t.Fatalf("unreadable user store broke startup: %v", err)
+	}
+	if cfg.Window.Width != 999 {
+		t.Fatalf("width = %d, want 999", cfg.Window.Width)
+	}
+}
+
+func TestLoadConfigSingleDashConfigFlag(t *testing.T) {
+	isolateUserConfig(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "goro.ini")
+	if err := os.WriteFile(path, []byte("[window]\nwidth = 640\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig([]string{"-config", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Window.Width != 640 {
+		t.Fatalf("width = %d, want 640", cfg.Window.Width)
+	}
+	// The single-dash form must also fail loudly when the file is missing.
+	if _, err := LoadConfig([]string{"-config", filepath.Join(root, "missing.ini")}); err == nil {
+		t.Fatal("missing explicit config did not fail")
+	}
+}

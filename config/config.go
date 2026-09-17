@@ -306,11 +306,15 @@ func defaultConfig() Config {
 func configPathFromArgs(args []string) (string, bool) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--config" && i+1 < len(args) {
+		// The flag package accepts both "-config" and "--config", and the
+		// launcher uses the single-dash form.
+		if (arg == "-config" || arg == "--config") && i+1 < len(args) {
 			return args[i+1], true
 		}
-		if strings.HasPrefix(arg, "--config=") {
-			return strings.TrimPrefix(arg, "--config="), true
+		for _, prefix := range []string{"-config=", "--config="} {
+			if strings.HasPrefix(arg, prefix) {
+				return strings.TrimPrefix(arg, prefix), true
+			}
 		}
 	}
 	if _, err := os.Stat("goro.ini"); err == nil {
@@ -322,7 +326,12 @@ func configPathFromArgs(args []string) (string, bool) {
 func applyINIFile(cfg *Config, path string, explicit bool) error {
 	file, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) && !explicit {
+		// Optional layers (cwd goro.ini, the user settings store) must not
+		// kill startup when unreadable for any reason — ENOTDIR happens on
+		// the rg35xx app layout, where the store path <app>/goro/goro.ini
+		// collides with the goro binary. Only an explicitly requested file
+		// is worth failing over.
+		if !explicit {
 			return nil
 		}
 		return fmt.Errorf("open config %s: %w", path, err)

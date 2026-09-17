@@ -155,14 +155,17 @@ func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects [
 
 	surf.blitSwapchainToDefault()
 
-	// Diagnostic: flood the default framebuffer with magenta before the
-	// swap. If the panel shows magenta, the present path reaches the
-	// screen and any black output is a content problem instead.
+	// Diagnostic: magenta-marker mode. The bottom 40px strip is flooded
+	// magenta after the content blit — magenta on the panel proves the
+	// present path, and whatever shows above the strip is exactly what
+	// the swapchain blit delivered this frame.
 	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
 		q.glCtx.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		q.glCtx.Disable(gl.SCISSOR_TEST)
+		q.glCtx.Enable(gl.SCISSOR_TEST)
+		q.glCtx.Scissor(0, 0, int32(surf.fboWidth), 40)
 		q.glCtx.ClearColor(1, 0, 1, 1)
 		q.glCtx.Clear(gl.COLOR_BUFFER_BIT)
+		q.glCtx.Disable(gl.SCISSOR_TEST)
 	}
 
 	// Use damage-aware swap when the extension is available and rects provided.

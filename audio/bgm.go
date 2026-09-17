@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ebitengine/oto/v3"
 	mp3codec "github.com/godexture/codec-mp3"
@@ -30,6 +31,7 @@ type BGM struct {
 	resources  *res.Manager
 	context    *oto.Context
 	output     audioOutput
+	sfxOutput  audioOutput
 	backend    string
 	sampleRate int
 	player     audioPlayer
@@ -40,6 +42,7 @@ type BGM struct {
 	bgmVolume  float64
 	sfxVolume  float64
 	sfxPlayers []audioPlayer
+	sfxLastAt  time.Time
 	disabled   bool
 
 	// sfxCache holds decoded, context-rate PCM per source path so repeated
@@ -565,6 +568,14 @@ func (b *BGM) ensureOutput(preferredSampleRate int) audioOutput {
 		b.sampleRate = preferredSampleRate
 		b.output = newPipeOutput(name, preferredSampleRate)
 		glog.Infof("audio backend selected name=%s sample_rate=%d", b.output.Name(), preferredSampleRate)
+		// Short SFX would fork the full mpv player constantly (map ambients
+		// retrigger every few seconds); aplay is the cheap pipe for those.
+		if name == "mpv" {
+			if _, err := exec.LookPath("aplay"); err == nil {
+				b.sfxOutput = newPipeOutput("aplay", preferredSampleRate)
+				glog.Infof("audio sfx backend selected name=aplay sample_rate=%d", preferredSampleRate)
+			}
+		}
 		return b.output
 	}
 	context := b.ensureContext(preferredSampleRate)

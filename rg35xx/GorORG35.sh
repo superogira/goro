@@ -101,8 +101,11 @@ amixer 2>/dev/null | head -60 || echo "  amixer unavailable"
 # mpv self-test: a 2s generated tone through mpv+ALSA right at launch —
 # an audible beep proves the whole chain works before the game even starts,
 # and the rc/timing/stderr in the log show what happens when it doesn't.
+# The second test replays the same tone as a RAW stream through the exact
+# option set the game uses, so an option mpv rejects dies here, visibly.
 if command -v mpv >/dev/null 2>&1; then
   echo "-- mpv version: $(mpv --version 2>&1 | head -1)"
+  echo "-- aplay: $(command -v aplay || echo missing)"
   if python3 - >/dev/null 2>&1 <<'PYEOF'
 import math, struct, wave
 w = wave.open('/tmp/goro-tone.wav', 'w')
@@ -117,8 +120,16 @@ PYEOF
     cat /tmp/goro-tone.wav | timeout 8 mpv --no-video --ao=alsa - >/dev/null 2>/tmp/goro-mpv-test.log
     rc=$?
     t1=$(date +%s)
-    echo "-- mpv tone test rc=$rc elapsed=$((t1-t0))s (a beep should have played) stderr:"
-    head -5 /tmp/goro-mpv-test.log 2>/dev/null | sed 's/^/    /'
+    echo "-- mpv wav test rc=$rc elapsed=$((t1-t0))s (a beep should have played) stderr:"
+    head -c 400 /tmp/goro-mpv-test.log 2>/dev/null | tr '\r' '\n' | tail -3 | sed 's/^/    /'
+    # Raw-stream test with the game's exact option set (second beep).
+    tail -c +45 /tmp/goro-tone.wav | timeout 8 mpv --no-video --ao=alsa \
+      --demuxer=rawaudio --demuxer-rawaudio-format=s16le \
+      --demuxer-rawaudio-rate=44100 --demuxer-rawaudio-channels=stereo - \
+      >/dev/null 2>/tmp/goro-mpv-raw.log
+    rc=$?
+    echo "-- mpv raw test rc=$rc (a second beep should have played) stderr:"
+    head -c 600 /tmp/goro-mpv-raw.log 2>/dev/null | tr '\r' '\n' | grep -v '^$' | tail -5 | sed 's/^/    /'
   else
     echo "-- python3 unavailable, tone test skipped"
   fi

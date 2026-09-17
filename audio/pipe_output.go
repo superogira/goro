@@ -58,11 +58,10 @@ func newPipeOutput(name string, rate int) *pipeOutput {
 			name: name,
 			rate: rate,
 			command: []string{
-				// --ao=alsa skips mpv's output probing (pulse first, long
-				// timeout on this firmware); --cache=no killed every spawn
-				// with exit status 1 on the device's mpv build, so stay
-				// with the option set that provably opened the speaker.
-				"mpv", "--no-video", "--ao=alsa", "--gapless-audio=inf",
+				// Keep this list in sync with the launcher's raw-stream
+				// self-test. --gapless-audio=inf killed every spawn with
+				// exit status 1: mpv accepts only no|yes|weak there.
+				"mpv", "--no-video", "--ao=alsa",
 				"--demuxer=rawaudio", "--demuxer-rawaudio-format=s16le",
 				fmt.Sprintf("--demuxer-rawaudio-rate=%d", rate),
 				"--demuxer-rawaudio-channels=stereo",

@@ -14,9 +14,13 @@ import (
 	"github.com/gogpu/wgpu/hal/gles/gl"
 )
 
-// allocateSwapchainFBO creates a persistent swapchain framebuffer.
+// allocateSwapchainFBO creates a persistent swapchain framebuffer with a
+// texture-backed color attachment. The texture (not a renderbuffer) matches
+// the offscreen-FBO path that renders correctly on the Mali fbdev stack —
+// an RBO attachment rendered solid black there while clears landed, so the
+// attachment type is the experiment variable.
 // Must be called with the GL context current (caller holds AdapterContext lock).
-func allocateSwapchainFBO(glCtx *gl.Context, format gputypes.TextureFormat, width, height uint32) (fbo, colorRbo uint32, err error) {
+func allocateSwapchainFBO(glCtx *gl.Context, format gputypes.TextureFormat, width, height uint32) (fbo, colorTex uint32, err error) {
 	if glCtx == nil {
 		return 0, 0, fmt.Errorf("gles: allocateSwapchainFBO: nil gl context")
 	}
@@ -24,23 +28,27 @@ func allocateSwapchainFBO(glCtx *gl.Context, format gputypes.TextureFormat, widt
 		return 0, 0, hal.ErrZeroArea
 	}
 
-	internalFormat, _, _ := textureFormatToGL(format)
+	internalFormat, glFormat, glType := textureFormatToGL(format)
 
-	colorRbo = glCtx.GenRenderbuffers(1)
-	if colorRbo == 0 {
-		return 0, 0, fmt.Errorf("gles: glGenRenderbuffers returned 0")
+	colorTex = glCtx.GenTextures(1)
+	if colorTex == 0 {
+		return 0, 0, fmt.Errorf("gles: glGenTextures returned 0")
 	}
-	glCtx.BindRenderbuffer(gl.RENDERBUFFER, colorRbo)
-	glCtx.RenderbufferStorage(gl.RENDERBUFFER, internalFormat, int32(width), int32(height))
+	glCtx.BindTexture(gl.TEXTURE_2D, colorTex)
+	texImage2DAlloc(glCtx, internalFormat, int32(width), int32(height), glFormat, glType)
+	glCtx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	glCtx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	glCtx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	glCtx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	glCtx.BindTexture(gl.TEXTURE_2D, 0)
 
 	fbo = glCtx.GenFramebuffers(1)
 	if fbo == 0 {
-		glCtx.BindRenderbuffer(gl.RENDERBUFFER, 0)
-		glCtx.DeleteRenderbuffers(colorRbo)
+		glCtx.DeleteTextures(colorTex)
 		return 0, 0, fmt.Errorf("gles: glGenFramebuffers returned 0")
 	}
 	glCtx.BindFramebuffer(gl.FRAMEBUFFER, fbo)
-	glCtx.FramebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colorRbo)
+	glCtx.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTex, 0)
 
 	status := glCtx.CheckFramebufferStatus(gl.FRAMEBUFFER)
 
@@ -56,35 +64,34 @@ func allocateSwapchainFBO(glCtx *gl.Context, format gputypes.TextureFormat, widt
 	}
 
 	glCtx.BindFramebuffer(gl.FRAMEBUFFER, 0)
-	glCtx.BindRenderbuffer(gl.RENDERBUFFER, 0)
 
 	if status != gl.FRAMEBUFFER_COMPLETE {
 		glCtx.DeleteFramebuffers(fbo)
-		glCtx.DeleteRenderbuffers(colorRbo)
+		glCtx.DeleteTextures(colorTex)
 		return 0, 0, fmt.Errorf("gles: swapchain framebuffer incomplete (status 0x%x)", status)
 	}
 
 	hal.Logger().Debug("gles: allocated swapchain FBO",
 		"fbo", fbo,
-		"colorRbo", colorRbo,
+		"colorTex", colorTex,
 		"width", width,
 		"height", height,
 		"internalFormat", fmt.Sprintf("0x%x", internalFormat),
 	)
-	return fbo, colorRbo, nil
+	return fbo, colorTex, nil
 }
 
-// destroySwapchainFBO releases the swapchain framebuffer and its attachments.
-// Safe to call with zero handles or nil context.
-func destroySwapchainFBO(glCtx *gl.Context, fbo, colorRbo uint32) {
+// destroySwapchainFBO releases the swapchain framebuffer and its color
+// texture. Safe to call with zero handles or nil context.
+func destroySwapchainFBO(glCtx *gl.Context, fbo, colorTex uint32) {
 	if glCtx == nil {
 		return
 	}
 	if fbo != 0 {
 		glCtx.DeleteFramebuffers(fbo)
 	}
-	if colorRbo != 0 {
-		glCtx.DeleteRenderbuffers(colorRbo)
+	if colorTex != 0 {
+		glCtx.DeleteTextures(colorTex)
 	}
 }
 

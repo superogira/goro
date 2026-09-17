@@ -777,9 +777,13 @@ func (p *fbdevPlatform) readEvents(f *os.File) {
 			continue
 		}
 		for off := 0; off+24 <= n; off += 24 {
-			typ := binary.LittleEndian.Uint16(buf[off+8 : off+10])
-			code := binary.LittleEndian.Uint16(buf[off+10 : off+12])
-			value := int32(binary.LittleEndian.Uint32(buf[off+12 : off+16]))
+			// Field offsets inside the 24-byte event: timeval is 16 bytes
+			// on 64-bit, so type/code/value sit at 16/18/20 — reading them
+			// at the 32-bit-layout offsets (8/10/12) yields zeroes, which
+			// turned every event into a silent EV_SYN.
+			typ := binary.LittleEndian.Uint16(buf[off+16 : off+18])
+			code := binary.LittleEndian.Uint16(buf[off+18 : off+20])
+			value := int32(binary.LittleEndian.Uint32(buf[off+20 : off+24]))
 			switch typ {
 			case evTypeKey:
 				// Trace the first key events of the session: the physical

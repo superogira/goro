@@ -1509,7 +1509,7 @@ type DrawCommand struct {
 }
 
 func (c *DrawCommand) Execute(ctx *gl.Context) {
-	debugTraceDraw("arrays", c.vertexCount, c.instanceCount)
+	debugTraceDraw(ctx, "arrays", c.vertexCount, c.instanceCount)
 	mode := primitiveTopologyToGL(c.topology)
 	if c.instanceCount <= 1 {
 		ctx.DrawArrays(mode, int32(c.firstVertex), int32(c.vertexCount))
@@ -1529,7 +1529,7 @@ type DrawIndexedCommand struct {
 }
 
 func (c *DrawIndexedCommand) Execute(ctx *gl.Context) {
-	debugTraceDraw("indexed", c.indexCount, c.instanceCount)
+	debugTraceDraw(ctx, "indexed", c.indexCount, c.instanceCount)
 	indexType := uint32(gl.UNSIGNED_SHORT)
 	indexSize := uintptr(2)
 	if c.indexFormat == gputypes.IndexFormatUint32 {
@@ -1553,16 +1553,30 @@ var debugDrawTraced uint32
 
 // debugTraceDraw logs the first draws of the session under
 // GOGPU_GLES_DEBUG_CLEAR=1 — zero-vertex draws are silent on GL yet leave
-// the target untouched, which is exactly the failure mode this catches.
-func debugTraceDraw(kind string, count, instances uint32) {
+// the target untouched, and the live rasterizer state at draw time
+// (blend/depth/cull/program) narrows why issued draws leave a bound FBO
+// untouched or painted solid black.
+func debugTraceDraw(ctx *gl.Context, kind string, count, instances uint32) {
 	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") != "1" {
 		return
 	}
 	n := atomic.AddUint32(&debugDrawTraced, 1)
-	if n <= 12 {
-		hal.Logger().Info("gles: draw issued",
-			"kind", kind, "count", count, "instances", instances, "seq", n)
+	if n > 12 {
+		return
 	}
+	const (
+		pnCurrentProgram = 0x8B8D
+	)
+	var blend, depth, cull int32
+	ctx.GetIntegerv(gl.BLEND, &blend)
+	ctx.GetIntegerv(gl.DEPTH_TEST, &depth)
+	ctx.GetIntegerv(gl.CULL_FACE, &cull)
+	var prog int32
+	ctx.GetIntegerv(pnCurrentProgram, &prog)
+	hal.Logger().Info("gles: draw issued",
+		"kind", kind, "count", count, "instances", instances, "seq", n,
+		"blend", blend != 0, "depthTest", depth != 0, "cullFace", cull != 0,
+		"program", prog)
 }
 
 // CopyBufferCommand copies between buffers.

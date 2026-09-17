@@ -98,6 +98,14 @@ ls /dev/snd 2>/dev/null || echo "  /dev/snd missing"
 echo "-- mixer state (first 60 lines):"
 amixer 2>/dev/null | head -60 || echo "  amixer unavailable"
 
+# DNS check for the game server hostname (from clientinfo.xml): a missing
+# DDNS record shows up as "no such host" in the game with no other hint.
+host=$(sed -n 's/.*<address>\([^<]*\)<\/address>.*/\1/p' data/clientinfo.xml 2>/dev/null | head -1)
+if [ -n "$host" ]; then
+  echo "-- resolving clientinfo host '$host':"
+  getent hosts "$host" 2>/dev/null || echo "  FAILED: hostname does not resolve (DDNS expired/IP changed?)"
+fi
+
 # mpv self-test: a 2s generated tone through mpv+ALSA right at launch —
 # an audible beep proves the whole chain works before the game even starts,
 # and the rc/timing/stderr in the log show what happens when it doesn't.

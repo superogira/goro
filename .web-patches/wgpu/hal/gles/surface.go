@@ -7,6 +7,7 @@ package gles
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/hal"
@@ -42,6 +43,17 @@ func allocateSwapchainFBO(glCtx *gl.Context, format gputypes.TextureFormat, widt
 	glCtx.FramebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colorRbo)
 
 	status := glCtx.CheckFramebufferStatus(gl.FRAMEBUFFER)
+
+	// Diagnostic seed clear (GOGPU_GLES_DEBUG_CLEAR=1): flood the fresh FBO
+	// with green. The frame-1 probe then separates pass-targeting problems
+	// from clipped draws — green surviving means no render pass ever wrote
+	// this FBO; black means a pass cleared it but its draws rasterized
+	// nothing.
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
+		glCtx.Disable(gl.SCISSOR_TEST)
+		glCtx.ClearColor(0, 0.5, 0, 1)
+		glCtx.Clear(gl.COLOR_BUFFER_BIT)
+	}
 
 	glCtx.BindFramebuffer(gl.FRAMEBUFFER, 0)
 	glCtx.BindRenderbuffer(gl.RENDERBUFFER, 0)

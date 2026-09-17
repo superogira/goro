@@ -139,6 +139,14 @@ const (
 	btnThumbl = 0x13b
 	btnThumbr = 0x13c
 
+	// btnExtra0 is the one non-gamepad code the ANBERNIC-keys device
+	// advertises (decoded from its KEY bitmap in /proc/bus/input/devices).
+	// BTN_SELECT (0x139) and BTN_MODE (0x13d) are absent from the caps,
+	// so SELECT/MENU must arrive as this code (or as KEY_ESC, see below).
+	// Tracked as a quit-combo button until its identity is confirmed.
+	btnExtra0 = 0x162
+	keyEsc    = 0x001
+
 	// Stick handling: RG35XX-style pads report 0..255 with center ~128.
 	stickCenter = 127.5
 	stickRange  = 127.5
@@ -201,6 +209,7 @@ type fbdevPlatform struct {
 	// mis-mapped MENU button can never trap the user inside the app).
 	held             map[uint16]time.Time
 	seenCodes        map[uint16]bool
+	keyTraces        map[string]int
 	buttons          gpucontext.Buttons
 	axes             map[uint16]int32
 	hatX, hatY       int
@@ -718,12 +727,16 @@ func (p *fbdevPlatform) startInput() {
 	}
 }
 
-// readEvents parses one evdev device. input_event on 64-bit Linux:
-// {i64 sec, i64 usec, u16 type, u16 code, i32 value} = 16 bytes.
+// readEvents parses one evdev device. struct input_event on 64-bit Linux
+// is {i64 sec, i64 usec, u16 type, u16 code, i32 value} = 24 bytes — the
+// timeval alone is 16. evdev rejects reads smaller than one event with
+// EINVAL, so a 16-byte buffer silently drops every event on arm64 (the
+// 16-byte form only holds on 32-bit). The buffer fits several events so
+// one syscall drains the queue.
 func (p *fbdevPlatform) readEvents(f *os.File) {
-	var buf [16]byte
+	buf := make([]byte, 512)
 	for {
-		n, err := f.Read(buf[:])
+		n, err := f.Read(buf)
 		if p.isClosing() {
 			return
 		}
@@ -735,19 +748,42 @@ func (p *fbdevPlatform) readEvents(f *os.File) {
 			time.Sleep(4 * time.Millisecond)
 			continue
 		}
-		if n < 16 {
-			continue
-		}
-		typ := binary.LittleEndian.Uint16(buf[8:10])
-		code := binary.LittleEndian.Uint16(buf[10:12])
-		value := int32(binary.LittleEndian.Uint32(buf[12:16]))
-		switch typ {
-		case evTypeKey:
-			p.handleKey(code, value != 0)
-		case evTypeAbs:
-			p.handleAbs(code, value)
+		for off := 0; off+24 <= n; off += 24 {
+			typ := binary.LittleEndian.Uint16(buf[off+8 : off+10])
+			code := binary.LittleEndian.Uint16(buf[off+10 : off+12])
+			value := int32(binary.LittleEndian.Uint32(buf[off+12 : off+16]))
+			switch typ {
+			case evTypeKey:
+				// Trace the first key events of the session: the physical
+				// button → evdev code map, including codes that map to
+				// game keys and would otherwise stay silent. Autorepeat
+				// (value 2) is skipped.
+				if value != 2 {
+					if n := p.traceKeyEvent(f); n <= 40 {
+						logger().Info("fbdev: key event",
+							"code", fmt.Sprintf("0x%x (%d)", code, code),
+							"value", value)
+					}
+				}
+				p.handleKey(code, value != 0)
+			case evTypeAbs:
+				p.handleAbs(code, value)
+			}
 		}
 	}
+}
+
+// traceKeyEvent counts traced key events per device and reports the
+// running count; the caller logs while ≤ 40.
+func (p *fbdevPlatform) traceKeyEvent(f *os.File) int {
+	name := f.Name()
+	p.inputMu.Lock()
+	defer p.inputMu.Unlock()
+	if p.keyTraces == nil {
+		p.keyTraces = make(map[string]int)
+	}
+	p.keyTraces[name]++
+	return p.keyTraces[name]
 }
 
 func (p *fbdevPlatform) isClosing() bool {
@@ -805,6 +841,10 @@ func (p *fbdevPlatform) quitWatcher() {
 		via := ""
 		if t0, ok := p.held[btnMode]; ok && now.Sub(t0) >= 1200*time.Millisecond {
 			via = "MENU"
+		} else if t0, ok := p.held[btnExtra0]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+			via = "BTN 0x162"
+		} else if t0, ok := p.held[keyEsc]; ok && now.Sub(t0) >= 3000*time.Millisecond {
+			via = "ESC"
 		} else if t0, ok := p.held[btnSelect]; ok && now.Sub(t0) >= 3000*time.Millisecond {
 			via = "SELECT"
 		} else if ts, okS := p.held[btnSelect]; okS {
@@ -861,6 +901,12 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// MENU feeds the quit watcher only (see quitWatcher); it is not
 		// mapped to a game key.
 		p.setHeld(btnMode, down)
+	case btnExtra0:
+		// Unknown-purpose button from the device's advertised caps — the
+		// SELECT/MENU candidate. Quit watcher only, and logged as unknown
+		// so the run log reveals it either way.
+		p.setHeld(btnExtra0, down)
+		p.logUnknownCode(btnExtra0, down)
 	case btnThumbl:
 		key = gpucontext.KeyTab
 	case btnThumbr:
@@ -881,6 +927,11 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 				p.inputMu.Lock()
 				p.alt = down
 				p.inputMu.Unlock()
+			}
+			// KEY_ESC arrives on the gamepad device itself (its caps list
+			// code 1); a 3s hold quits — harmless for normal ESC taps.
+			if code == keyEsc {
+				p.setHeld(keyEsc, down)
 			}
 		}
 		if key == 0 || key == gpucontext.KeyUnknown {

@@ -216,20 +216,48 @@ func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects [
 // probeSwapchain reads back the whole swapchain FBO once and reports how
 // much of it is non-black, a 4x4 pixel grid across the surface, and the
 // pending GL error (which at this point includes any error the blit left).
+// It also dumps the live rasterizer state — a zero viewport or a stale
+// scissor box/writemask is exactly the kind of thing that leaves a bound
+// FBO untouched while draws are still issued.
 func (q *Queue) probeSwapchain(surf *Surface, frame uint32) {
+	// pname constants absent from the gl package's const set.
+	const (
+		pnViewport       = 0x0BA2
+		pnScissorBox     = 0x0C10
+		pnScissorTest    = 0x0C11
+		pnColorWritemask = 0x0C23
+		pnDrawFBO        = 0x8CA6
+	)
 	w, h := int(surf.fboWidth), int(surf.fboHeight)
 	if w <= 0 || h <= 0 {
 		return
 	}
 	glErr := q.glCtx.GetError()
+
+	var vp [4]int32
+	q.glCtx.GetIntegerv(pnViewport, &vp[0])
+	var sb [4]int32
+	q.glCtx.GetIntegerv(pnScissorBox, &sb[0])
+	var st int32
+	q.glCtx.GetIntegerv(pnScissorTest, &st)
+	var wm [4]int32
+	q.glCtx.GetIntegerv(pnColorWritemask, &wm[0])
+	var curFBO int32
+	q.glCtx.GetIntegerv(pnDrawFBO, &curFBO)
+
 	q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, surf.swapchainFBO)
+	fbStatus := q.glCtx.CheckFramebufferStatus(gl.FRAMEBUFFER)
 	buf := make([]byte, w*h*4)
 	q.glCtx.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&buf[0]))
 	readErr := q.glCtx.GetError()
 	nonBlack := 0
+	nonGreen := 0
 	for i := 0; i < len(buf); i += 4 {
 		if buf[i] != 0 || buf[i+1] != 0 || buf[i+2] != 0 {
 			nonBlack++
+			if !(buf[i] == 0 && buf[i+1] == 128 && buf[i+2] == 0) {
+				nonGreen++
+			}
 		}
 	}
 	var grid strings.Builder
@@ -246,7 +274,13 @@ func (q *Queue) probeSwapchain(surf *Surface, frame uint32) {
 		"glErrorAfterBlit", fmt.Sprintf("0x%x", glErr),
 		"glErrorAfterRead", fmt.Sprintf("0x%x", readErr),
 		"nonBlack", nonBlack,
+		"nonGreen", nonGreen,
 		"total", w*h,
+		"viewport", fmt.Sprintf("%dx%d+%d+%d", vp[2], vp[3], vp[0], vp[1]),
+		"scissor", fmt.Sprintf("%dx%d+%d+%d", sb[2], sb[3], sb[0], sb[1]),
+		"scissorTest", st != 0,
+		"colorWritemask", fmt.Sprintf("r%d g%d b%d a%d", wm[0], wm[1], wm[2], wm[3]),
+		"fboStatus", fmt.Sprintf("0x%x", fbStatus),
 		"grid", grid.String())
 	q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, 0)
 }

@@ -798,6 +798,7 @@ func (m *WorldMode) drawSceneActorOverlays(screen *render.Frame, ctx client.Cont
 	}
 	m.drawAttackFocusMarker(screen, ctx, now, entries)
 	m.drawScriptHighlightMarker(screen, ctx, now, entries)
+	entries = m.appendSimulatedVendingEntries(screen, ctx, entries)
 	m.drawVendingBoardLabels(screen, ctx, entries)
 	m.drawChatRoomBoardLabels(screen, ctx, entries)
 	m.drawSpeechBubbles(screen, entries, now)

@@ -137,6 +137,12 @@ func (g *Game) SuppressUI() bool {
 	return g.cfg.Login.DebugNoUI && g.modes.ModeName() == "world"
 }
 
+func (g *Game) HandleKeyPress(code input.KeyCode) {
+	if g.modes != nil {
+		g.modes.HandleKeyPress(g.modeContext(), code)
+	}
+}
+
 func (g *Game) PrepareTextInput(code input.KeyCode) bool {
 	return g.modes != nil && g.modes.PrepareTextInput(g.modeContext(), code)
 }

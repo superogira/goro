@@ -17,12 +17,21 @@ local last_attack_at = -math.huge
 local last_loot_at = -math.huge
 local skill_target_id = nil
 local skill_target_skill_id = nil
+local skill_input_handled = false
 
 local skill_target_enemy = 1
 local skill_target_self = 4
 local skill_target_friend = 16
 local skill_target_pet = 64
 local skill_target_homunculus = 128
+
+-- Leave modified shortcuts to the client. Shift remains available for
+-- movement and reverse target cycling with Shift+Tab.
+local function shortcut_modifier_down()
+	return goro.keyboard.is_down("ControlLeft") or goro.keyboard.is_down("ControlRight")
+		or goro.keyboard.is_down("AltLeft") or goro.keyboard.is_down("AltRight")
+		or goro.keyboard.is_down("MetaLeft") or goro.keyboard.is_down("MetaRight")
+end
 
 local function clear_target()
 	active_dx = 0
@@ -119,7 +128,7 @@ local function cycle_skill_target(pending, reverse)
 	end
 end
 
-local function handle_skill_target_input()
+local function handle_skill_target_input(code)
 	local pending = goro.pending_skill()
 	if pending == nil or pending.target ~= "actor" then
 		clear_skill_target()
@@ -129,17 +138,17 @@ local function handle_skill_target_input()
 		clear_skill_target()
 		skill_target_skill_id = pending.id
 	end
-	if goro.keyboard.was_pressed("Escape") then
+	if code == "Escape" then
 		clear_skill_target()
 		return false
 	end
-	if goro.keyboard.consume_press("Tab") then
+	if code == "Tab" and goro.keyboard.consume_press(code) then
 		local reverse = goro.keyboard.is_down("ShiftLeft")
 			or goro.keyboard.is_down("ShiftRight")
 		cycle_skill_target(pending, reverse)
 		return true
 	end
-	if skill_target_id ~= nil and goro.keyboard.consume_press("Enter") then
+	if code == "Enter" and skill_target_id ~= nil and goro.keyboard.consume_press(code) then
 		goro.use_pending_skill(skill_target_id)
 		clear_skill_target()
 		return true
@@ -218,13 +227,29 @@ function tick()
 	end
 end
 
-function input()
-	for _, code in ipairs(controls) do
-		goro.keyboard.consume_press(code)
+function keypress(code)
+	if shortcut_modifier_down() then
+		return
 	end
-	goro.keyboard.consume_press("Space")
-	goro.keyboard.consume_press("KeyF")
-	if handle_skill_target_input() then
+	for _, control in ipairs(controls) do
+		if code == control then
+			goro.keyboard.consume_press(code)
+			return
+		end
+	end
+	if code == "Space" or code == "KeyF" then
+		goro.keyboard.consume_press(code)
+		return
+	end
+	if handle_skill_target_input(code) then
+		skill_input_handled = true
+	end
+end
+
+function input()
+	handle_skill_target_input(nil)
+	if skill_input_handled then
+		skill_input_handled = false
 		fight_down = false
 		loot_down = false
 		attack_target_id = nil
@@ -233,8 +258,9 @@ function input()
 		return
 	end
 
-	fight_down = goro.keyboard.is_down("KeyF")
-	loot_down = goro.keyboard.is_down("Space")
+	local controls_enabled = not shortcut_modifier_down()
+	fight_down = controls_enabled and goro.keyboard.is_down("KeyF")
+	loot_down = controls_enabled and goro.keyboard.is_down("Space")
 	if not fight_down then
 		attack_target_id = nil
 	end
@@ -248,10 +274,12 @@ function input()
 
 	local dx = 0
 	local dy = 0
-	if goro.keyboard.is_down("KeyW") then dy = dy + 1 end
-	if goro.keyboard.is_down("KeyA") then dx = dx - 1 end
-	if goro.keyboard.is_down("KeyS") then dy = dy - 1 end
-	if goro.keyboard.is_down("KeyD") then dx = dx + 1 end
+	if controls_enabled then
+		if goro.keyboard.is_down("KeyW") then dy = dy + 1 end
+		if goro.keyboard.is_down("KeyA") then dx = dx - 1 end
+		if goro.keyboard.is_down("KeyS") then dy = dy - 1 end
+		if goro.keyboard.is_down("KeyD") then dx = dx + 1 end
+	end
 
 	if dx == 0 and dy == 0 then
 		if active_dx ~= 0 or active_dy ~= 0 then

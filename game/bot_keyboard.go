@@ -1,10 +1,39 @@
 package game
 
 import (
+	"strings"
+
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	lua "github.com/yuin/gopher-lua"
 )
+
+func (m *WorldMode) botKeyPress(ctx client.Context, code input.KeyCode) {
+	path := strings.TrimSpace(ctx.Config.Script.Path)
+	if path == "" || m.bot == nil || m.bot.path != path || m.bot.disabled {
+		return
+	}
+	if err := m.bot.keyPress(code); err != nil {
+		glog.Warnf("lua script keypress failed path=%q: %v", m.bot.path, err)
+		m.bot.close()
+		m.bot.disabled = true
+	}
+}
+
+func (b *luaBot) keyPress(code input.KeyCode) error {
+	if b == nil || b.state == nil {
+		return nil
+	}
+	fn := b.state.GetGlobal("keypress")
+	if fn == lua.LNil {
+		return nil
+	}
+	available := b.keyboardAvailable
+	b.keyboardAvailable = true
+	defer func() { b.keyboardAvailable = available }()
+	return b.state.CallByParam(lua.P{Fn: fn, NRet: 0, Protect: true}, lua.LString(input.KeyCodeName(code)))
+}
 
 func registerLuaKeyboardAPI(state *lua.LState, api *lua.LTable, ctx client.Context, bot *luaBot) {
 	available := func() bool {

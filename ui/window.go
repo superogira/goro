@@ -4,6 +4,7 @@ import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/input"
@@ -14,6 +15,7 @@ type WindowOption func(*windowConfig)
 
 type windowConfig struct {
 	title        string
+	titleSignal  state.ReadonlySignal[string]
 	closeButton  bool
 	titleButtons []windowTitleButton
 	content      widget.Widget
@@ -56,8 +58,15 @@ func Win(options ...WindowOption) widget.Widget {
 
 	children := make([]widget.Widget, 0, 3)
 	if cfg.titleBar {
+		var title widget.Widget = rotheme.Title(cfg.title)
+		if cfg.titleSignal != nil {
+			title = &windowTitleText{
+				TextWidget: rotheme.Title("").ContentSignal(cfg.titleSignal),
+				signal:     cfg.titleSignal,
+			}
+		}
 		titleContent := primitives.HBox(
-			rotheme.Title(cfg.title),
+			title,
 			primitives.Expanded(primitives.Box()),
 			windowTitleButtons(cfg.titleButtons, cfg.closeButton, cfg.onClose),
 		).
@@ -100,13 +109,38 @@ func Win(options ...WindowOption) widget.Widget {
 	if cfg.background != nil {
 		background = *cfg.background
 	}
-	return primitives.Box(children...).
+	box := primitives.Box(children...).
 		CrossAlign(primitives.CrossAxisStretch).
 		Width(cfg.width).
 		Height(cfg.height).
 		Background(background).
 		BorderStyle(1, rotheme.Default.Colors.WindowBorder).
 		Rounded(cfg.radius)
+	if cfg.onClose == nil {
+		return box
+	}
+	// windowFrame retains the title-bar close action for keyboard closing
+	// too, so Escape runs the same cleanup (cancel packets, teardown) as X.
+	return &windowFrame{BoxWidget: box, onClose: cfg.onClose}
+}
+
+// windowFrame retains the title-bar close action for keyboard closing
+// too, so Escape runs the same cleanup (cancel packets, teardown) as X.
+type windowFrame struct {
+	*primitives.BoxWidget
+	onClose func()
+}
+
+// Unlike a paint-only text binding, a title change also affects header layout.
+type windowTitleText struct {
+	*primitives.TextWidget
+	signal state.ReadonlySignal[string]
+}
+
+func (t *windowTitleText) Mount(ctx widget.Context) {
+	if scheduler := ctx.Scheduler(); scheduler != nil {
+		t.AddBinding(state.BindToSchedulerLayout(t.signal, t, scheduler))
+	}
 }
 
 func windowBodyColor(opacity float32) widget.Color {
@@ -118,6 +152,13 @@ func windowBodyColor(opacity float32) widget.Color {
 func Title(title string) WindowOption {
 	return func(cfg *windowConfig) {
 		cfg.title = title
+	}
+}
+
+// TitleSignal updates the title without rebuilding the header's controls.
+func TitleSignal(title state.ReadonlySignal[string]) WindowOption {
+	return func(cfg *windowConfig) {
+		cfg.titleSignal = title
 	}
 }
 
@@ -134,11 +175,6 @@ func TitleButton(kind rotheme.IconButtonKind, onClick func()) WindowOption {
 			onClick: onClick,
 		})
 	}
-}
-
-// OnEscClose sets the callback invoked when Escape closes the window.
-func (w *Window) OnEscClose(fn func()) {
-	w.onEscClose = fn
 }
 
 func OnClose(onClose func()) WindowOption {
@@ -203,7 +239,9 @@ func windowTitleButtons(buttons []windowTitleButton, closeButton bool, onClose f
 	for _, button := range buttons {
 		children = append(children, windowTitleIconButton(button.kind, button.onClick))
 	}
-	children = append(children, windowCloseButton(closeButton, onClose))
+	if closeButton || len(buttons) == 0 {
+		children = append(children, windowCloseButton(closeButton, onClose))
+	}
 	return primitives.HBox(children...).
 		Gap(windowTitleButtonGap).
 		CrossAlign(primitives.CrossAxisCenter)
@@ -249,9 +287,8 @@ type Window struct {
 	background   *widget.Color
 	fullRedraw   bool
 	CloseOnEsc   bool
-	// onEscClose mirrors the Win(OnClose(...)) callback for the Escape
-	// path: closing via ESC must run the same cleanup (cancel packets,
-	// window-specific teardown) as the title-bar X.
+	// onEscClose overrides the windowFrame close action for the Escape
+	// path (cart/trade windows install their own teardown).
 	onEscClose func()
 	ctx        client.Context
 }
@@ -451,19 +488,13 @@ func (w *Window) Update(ctx client.Context) bool {
 		return true
 	}
 	if ctx.Input.JustPressed(input.KeyEscape) {
-		if !w.CloseOnEsc {
+		if !w.CloseOnEsc || !w.escapePressed(ctx) {
 			return false
-		}
-		// Only the topmost closeOnEsc overlay in the manager's stack may
-		// consume Escape; lower windows (trade under a shop, a settings
-		// window under a modal) pass it through (upstream).
-		if manager, ok := ctx.UIManager.(interface{ TopEscapeOverlay() widget.Widget }); ok {
-			if top := manager.TopEscapeOverlay(); top != nil && w.placed != top {
-				return false
-			}
 		}
 		if w.onEscClose != nil {
 			w.onEscClose()
+		} else if frame, ok := w.content.(*windowFrame); ok && frame.onClose != nil {
+			frame.onClose()
 		} else {
 			w.Close()
 		}
@@ -504,6 +535,12 @@ func topEscapeOverlay(ctx client.Context) widget.Widget {
 		return manager.TopEscapeOverlay()
 	}
 	return nil
+}
+
+// OnEscClose overrides the Escape close action for this window. Without
+// it, Escape falls back to the Win(OnClose(...)) frame action or Close.
+func (w *Window) OnEscClose(fn func()) {
+	w.onEscClose = fn
 }
 
 // escapePressed reports whether this window owns the current Escape

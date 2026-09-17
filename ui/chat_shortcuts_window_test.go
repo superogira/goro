@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"path/filepath"
 	"testing"
 
 	uiapp "github.com/gogpu/ui/app"
@@ -16,9 +17,8 @@ import (
 
 func shortcutWindowTestContext(t *testing.T) Context {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("APPDATA", t.TempDir())
-	return Context{Input: input.NewState(), ScreenW: 800, ScreenH: 600, Config: config.Config{ChatShortcuts: config.ChatShortcuts{"/!"}}}
+	return Context{Input: input.NewState(), ScreenW: 800, ScreenH: 600,
+		Config: config.Config{ConfigPath: filepath.Join(t.TempDir(), "goro.ini"), ChatShortcuts: config.ChatShortcuts{"/!"}}}
 }
 
 func TestChatShortcutEditorSavesAndClears(t *testing.T) {
@@ -52,6 +52,37 @@ func TestChatShortcutEditorSavesAndClears(t *testing.T) {
 	}
 	if fresh.Command(ctx, -1) != "" || fresh.Command(ctx, 10) != "" {
 		t.Fatal("invalid slot was not ignored")
+	}
+}
+
+func TestChatShortcutEditorPersistsWithDefaultConfigPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg, err := config.LoadConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := Context{Config: cfg, Input: input.NewState(), Session: session.New(), ScreenW: 800, ScreenH: 600}
+	console := &ChatConsole{}
+	editor := &ChatShortcutsWindow{}
+	editor.Toggle(ctx, console, nil)
+	for _, command := range []string{"/", "/s", "/si", "/sit"} {
+		editor.setCommand(9, command)
+	}
+	editor.Close()
+	if len(console.messages) != 0 {
+		t.Fatalf("saving default-path shortcuts reported errors: %+v", console.messages)
+	}
+	// Character selection creates a fresh editor with the same startup Config.
+	fresh := &ChatShortcutsWindow{}
+	if got := fresh.Command(ctx, 9); got != "/sit" {
+		t.Fatalf("shortcut after character selection = %q, want /sit", got)
+	}
+	restarted, err := config.LoadConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.ChatShortcuts[9] != "/sit" {
+		t.Fatal("shortcut was not restored after restarting")
 	}
 }
 

@@ -18,6 +18,9 @@ func TestFanoutPreparesEditingKeysBeforeDispatch(t *testing.T) {
 			t.Fatal("key preparation lost the physical key or modifiers")
 		}
 		order = append(order, "prepare")
+		if !state.KeyCodeJustPressed(code) {
+			t.Fatal("key preparation ran before physical input was recorded")
+		}
 	}
 	filtered.OnKeyPress(func(gpucontext.Key, gpucontext.Modifiers) {
 		order = append(order, "ui")
@@ -80,7 +83,7 @@ func TestFanoutFiltersOnlyActiveShortcutText(t *testing.T) {
 	press(gpucontext.KeyLeftAlt, gpucontext.ModAlt)
 	press(gpucontext.KeyM, gpucontext.ModAlt)
 	typeText(",") // AZERTY physical M; glyph does not affect the binding.
-	if uiText != "" || state.TextInput() != "" {
+	if uiText != "" || state.TextInput() != "," {
 		t.Fatal("Alt shortcut inserted text into an editor")
 	}
 	if !state.KeyCodeJustPressed(gpucontext.KeyM) {
@@ -90,10 +93,16 @@ func TestFanoutFiltersOnlyActiveShortcutText(t *testing.T) {
 	state.EndFrame()
 	press(gpucontext.KeyM, gpucontext.ModAlt)
 	typeText(",")
-	if uiText != "" || state.TextInput() != "" || state.KeyCodeJustPressed(gpucontext.KeyM) {
+	if uiText != "" || state.TextInput() != "," || state.KeyCodeJustPressed(gpucontext.KeyM) {
 		t.Fatal("held shortcut leaked text or retriggered its press")
 	}
 	active = false // The active mode or focused form does not handle this key.
+	// The consumed press remains owned until release. A new press in the
+	// focused form must be delivered normally.
+	for _, fn := range source.keyRelease {
+		fn(gpucontext.KeyM, gpucontext.ModAlt)
+	}
+	press(gpucontext.KeyM, gpucontext.ModAlt)
 	typeText("µ")
 	active = true
 	press(gpucontext.Key2, gpucontext.ModAlt)
@@ -103,7 +112,7 @@ func TestFanoutFiltersOnlyActiveShortcutText(t *testing.T) {
 		fn(gpucontext.KeyM, gpucontext.ModAlt)
 	}
 	typeText("released")
-	if uiText != "µ™released" || state.TextInput() != uiText {
+	if uiText != "µ™released" || state.TextInput() != ",µ™released" {
 		t.Fatalf("non-shortcut text was lost: %q / %q", uiText, state.TextInput())
 	}
 	press(gpucontext.KeyM, gpucontext.ModAlt)
@@ -117,17 +126,111 @@ func TestFanoutFiltersOnlyActiveShortcutText(t *testing.T) {
 	}
 }
 
+func TestFanoutConsumedPressSuppressesUIAndTextUntilRelease(t *testing.T) {
+	source := &fanoutEventSource{}
+	filtered := newFanoutEventSource(source)
+	state := input.NewState()
+	wireInput(filtered, state)
+	claim := true
+	calls, prepared, uiKeys := 0, 0, 0
+	var uiText string
+	filtered.handleKeyPress = func(code input.KeyCode) {
+		calls++
+		if !state.KeyCodeDown(code) || !state.KeyCodeJustPressed(code) {
+			t.Fatal("handler did not receive the fresh physical press")
+		}
+		if claim && code == gpucontext.KeyW {
+			state.ConsumeKeyCodePress(code)
+		}
+	}
+	filtered.prepareKeyInput = func(input.KeyCode, gpucontext.Modifiers) { prepared++ }
+	filtered.prepareTextInput = func(input.KeyCode) bool { prepared++; return false }
+	filtered.OnKeyPress(func(gpucontext.Key, gpucontext.Modifiers) { uiKeys++ })
+	filtered.OnTextInput(func(text string) { uiText += text })
+	press := func(code gpucontext.Key, text string) {
+		for _, fn := range source.keyPress {
+			fn(code, 0)
+		}
+		for _, fn := range source.textInput {
+			fn(text)
+		}
+	}
+	press(gpucontext.KeyW, "z") // AZERTY: consume by position, not glyph.
+	press(gpucontext.KeyW, "z") // Native repeat within the same frame.
+	state.EndFrame()
+	press(gpucontext.KeyW, "z") // Repeat in a later frame.
+	if calls != 1 || prepared != 0 || uiKeys != 0 || uiText != "" || state.TextInput() != "z" {
+		t.Fatalf("consumed key leaked: calls=%d prepared=%d keys=%d text=%q", calls, prepared, uiKeys, uiText)
+	}
+	if !state.KeyCodeDown(gpucontext.KeyW) || state.JustPressed(input.KeyW) {
+		t.Fatal("consumption lost held state or left a native shortcut press")
+	}
+	press(gpucontext.KeyE, "é")
+	if calls != 2 || prepared != 2 || uiKeys != 1 || uiText != "é" {
+		t.Fatal("unconsumed key did not reach default key/text handling")
+	}
+	for _, fn := range source.keyRelease {
+		fn(gpucontext.KeyW, 0)
+	}
+	if state.KeyCodeDown(gpucontext.KeyW) || !state.KeyCodeJustReleased(gpucontext.KeyW) {
+		t.Fatal("consumed key did not release")
+	}
+	claim = false
+	press(gpucontext.KeyW, "z")
+	if calls != 3 || uiText != "éz" || !state.KeyCodeJustPressed(gpucontext.KeyW) {
+		t.Fatal("new unclaimed press inherited the old consumption")
+	}
+	for _, fn := range source.keyRelease {
+		fn(gpucontext.KeyW, 0)
+	}
+	claim = true
+	press(gpucontext.KeyW, "z")
+	for _, fn := range source.focus {
+		fn(false)
+		fn(true)
+	}
+	for _, fn := range source.textInput {
+		fn("漢字") // Committed text with no associated physical key.
+	}
+	if state.KeyCodeConsumed(gpucontext.KeyW) || uiText != "éz漢字" {
+		t.Fatal("focus loss retained consumption or lost unassociated text")
+	}
+}
+
+func TestFanoutPreparationCanConsumeOpeningEnter(t *testing.T) {
+	source := &fanoutEventSource{}
+	filtered := newFanoutEventSource(source)
+	state := input.NewState()
+	wireInput(filtered, state)
+	prepared := 0
+	filtered.prepareKeyInput = func(code input.KeyCode, _ gpucontext.Modifiers) {
+		prepared++
+		state.ConsumeKeyCodePress(code)
+	}
+	filtered.OnKeyPress(func(gpucontext.Key, gpucontext.Modifiers) {
+		t.Fatal("opening Enter also reached the newly focused field")
+	})
+	for _, fn := range source.keyPress {
+		fn(gpucontext.KeyEnter, 0)
+		fn(gpucontext.KeyEnter, 0)
+	}
+	if prepared != 1 || state.JustPressed(input.KeyEnter) {
+		t.Fatal("opening Enter was prepared twice or remained a game action")
+	}
+}
+
 func TestWireInputAltTabWithoutKeyRelease(t *testing.T) {
 	for _, name := range []string{"AltLeft", "AltRight"} {
 		t.Run(name, func(t *testing.T) {
-			events := &fanoutEventSource{}
+			source := &fanoutEventSource{}
+			events := newFanoutEventSource(source)
 			state := input.NewState()
 			wireInput(events, state)
 			alt, ok := input.KeyCodeFromName(name)
 			if !ok {
 				t.Fatalf("unknown key code %q", name)
 			}
-			for _, fn := range events.keyPress {
+			for _, fn := range source.keyPress {
 				fn(alt, gpucontext.ModAlt)
 				fn(gpucontext.KeyTab, gpucontext.ModAlt)
 			}
@@ -135,16 +238,16 @@ func TestWireInputAltTabWithoutKeyRelease(t *testing.T) {
 
 			// Alt is released in the other application, so Goro receives no
 			// key release between losing and regaining keyboard focus.
-			for _, fn := range events.focus {
+			for _, fn := range source.focus {
 				fn(false)
 			}
 			if state.Pressed(input.KeyAlt) || state.KeyCodeDown(alt) || state.Pressed(input.KeyTab) {
 				t.Fatal("keys remained held after focus loss")
 			}
-			for _, fn := range events.focus {
+			for _, fn := range source.focus {
 				fn(true)
 			}
-			for _, fn := range events.mousePress {
+			for _, fn := range source.mousePress {
 				fn(gpucontext.MouseButtonLeft, 400, 300)
 			}
 			if state.Pressed(input.KeyAlt) || !state.MouseJustPressed(input.MouseButtonLeft) {
@@ -152,13 +255,13 @@ func TestWireInputAltTabWithoutKeyRelease(t *testing.T) {
 			}
 
 			// Genuine Alt shortcuts must still work after returning.
-			for _, fn := range events.keyPress {
+			for _, fn := range source.keyPress {
 				fn(alt, gpucontext.ModAlt)
 			}
 			if !state.JustPressed(input.KeyAlt) || !state.KeyCodeJustPressed(alt) {
 				t.Fatal("fresh Alt press was not recognized")
 			}
-			for _, fn := range events.keyRelease {
+			for _, fn := range source.keyRelease {
 				fn(alt, 0)
 			}
 			if state.Pressed(input.KeyAlt) || !state.KeyCodeJustReleased(alt) {

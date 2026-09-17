@@ -49,6 +49,25 @@ Scripts may also define an optional global `input()` function. Goro calls it
 once per frame so keyboard edges can be handled without waiting for the slower
 bot tick.
 
+An optional `keypress(code)` callback runs on a fresh physical key press,
+before default UI and shortcut handling, when gameplay keyboard input is
+available. Focused chat, forms and modals take priority. Use
+`goro.keyboard.consume_press(code)` inside this callback to claim a key;
+its associated text and repeats will not reach the UI until it is released.
+Unconsumed keys retain their normal behavior, even when a script is loaded.
+
+```lua
+function keypress(code)
+	if code == "Space" then
+		goro.keyboard.consume_press(code)
+	end
+end
+
+function input()
+	-- Poll goro.keyboard.is_down("Space") here for continuous behavior.
+end
+```
+
 ### `goro.keyboard`
 
 The keyboard API uses layout-independent physical key names such as `"KeyW"`,
@@ -59,8 +78,8 @@ positions are ZQSD on an AZERTY keyboard.
 - `available()` reports whether keyboard input is available to the script. It is `false` while a UI control has keyboard focus.
 - `is_down(code)` reports held state.
 - `was_pressed(code)` and `was_released(code)` inspect edges without consuming them.
-- `consume_press(code)` consumes a press edge and returns whether one was available. Held state is unchanged.
-- `text()` returns the frame's layout-translated text input.
+- `consume_press(code)` consumes a press edge and returns whether one was available. Held state is unchanged. Use it in `keypress(code)` to intercept UI input; `input()` runs after UI event dispatch.
+- `text()` returns the frame's raw layout-translated text, including consumed keys, so scripts can implement their own text input. It is empty while UI owns the keyboard.
 
 The keyboard API only reports input. Movement, combat, prompts, and other
 behavior remain Lua policy built from the generic functions below.
@@ -387,6 +406,9 @@ keyboard-oriented control profile:
 - Hold the physical F key to attack a nearby enemy.
 - After arming an actor-targeted skill, use Tab or Shift+Tab to cycle valid
   targets and Enter to cast.
+
+Ctrl, Alt, and Super/Command combinations remain available to the client;
+holding these modifiers also pauses the profile's continuous controls.
 
 The profile is implemented entirely in Lua. The Go API only exposes generic
 keyboard state, movement, actions, target information, and highlighting

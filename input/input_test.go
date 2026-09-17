@@ -20,6 +20,47 @@ func TestFrameIDAdvancesOnlyAtEndFrame(t *testing.T) {
 	}
 }
 
+func TestConsumedKeyLifetime(t *testing.T) {
+	state := NewState()
+	code := gpucontext.KeySpace
+	state.SetKeyCode(code, true)
+	state.ConsumeKeyCodePress(code)
+	state.EndFrame()
+	state.SetKeyCode(code, true)
+	if !state.KeyCodeConsumed(code) {
+		t.Fatal("consumption did not survive a frame and native repeat")
+	}
+	state.SetKeyCode(code, false)
+	if state.KeyCodeConsumed(code) {
+		t.Fatal("released key remained consumed")
+	}
+	// An input snapshot can contain a press followed by a release before its
+	// frame handler consumes the edge. Do not carry that into the next press.
+	state.SetKeyCode(code, true)
+	state.SetKeyCode(code, false)
+	state.ConsumeKeyCodePress(code)
+	state.SetKeyCode(code, true)
+	if state.KeyCodeConsumed(code) || !state.KeyCodeJustPressed(code) {
+		t.Fatal("fresh press retained a previous press's consumption")
+	}
+	state.ConsumeKeyCodePress(code)
+	state.ResetKeyboard()
+	if state.KeyCodeConsumed(code) {
+		t.Fatal("focus reset retained consumption")
+	}
+}
+
+func TestPhysicalKeyNameRoundTrip(t *testing.T) {
+	for name, code := range keyCodesByName {
+		if got := KeyCodeName(code); got != name {
+			t.Fatalf("key %q round trip = %q", name, got)
+		}
+	}
+	if got := KeyCodeName(gpucontext.KeyUnknown); got != "Unknown" {
+		t.Fatalf("unknown key name = %q", got)
+	}
+}
+
 func TestResetKeyboard(t *testing.T) {
 	for _, heldAcrossFrame := range []bool{false, true} {
 		name := "pending presses"

@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 	"image"
-	"sort"
+	"slices"
 
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/state"
@@ -26,12 +26,13 @@ const (
 
 type IdentifyWindow struct {
 	Window
-	scrollY     state.Signal[float32]
-	selectedRow int
-	indexes     []uint16
-	snapshot    string
-	icons       map[identifyItemIconKey]image.Image
-	iconMiss    map[identifyItemIconKey]struct{}
+	scrollY  state.Signal[float32]
+	selected session.InventoryItem
+	indexes  []uint16
+	snapshot []session.InventoryItem
+	itemList itemDialogList
+	icons    map[identifyItemIconKey]image.Image
+	iconMiss map[identifyItemIconKey]struct{}
 }
 
 type identifyItemIconKey struct {
@@ -42,7 +43,7 @@ type identifyItemIconKey struct {
 func (w *IdentifyWindow) OpenList(ctx Context, list network.ItemIdentifyList) {
 	w.EnsureWindow(identifyWindowWidth, identifyWindowHeight)
 	w.indexes = append(w.indexes[:0], list.Indexes...)
-	w.selectedRow = -1
+	w.selected = session.InventoryItem{}
 	w.ensureScrollSignal().Set(0)
 	w.ClampScroll(ctx.Session)
 	if len(w.items(ctx.Session)) == 0 {
@@ -50,27 +51,9 @@ func (w *IdentifyWindow) OpenList(ctx Context, list network.ItemIdentifyList) {
 		w.Publish(ctx)
 		return
 	}
-	w.snapshot = w.identifySnapshot(ctx.Session)
+	w.snapshot = w.items(ctx.Session)
 	w.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
-}
-
-func (w *IdentifyWindow) ApplyAck(ctx Context, ack network.ItemIdentifyAck) {
-	w.EnsureWindow(identifyWindowWidth, identifyWindowHeight)
-	if ack.Success {
-		w.removeIndex(ack.Index)
-		w.ClampScroll(ctx.Session)
-		w.selectedRow = -1
-		if len(w.items(ctx.Session)) == 0 {
-			w.Close()
-		} else {
-			w.snapshot = w.identifySnapshot(ctx.Session)
-			w.SetContent(w.widgetTree(ctx))
-		}
-		w.Publish(ctx)
-		return
-	}
-	glog.Warnf("identify failed index=%d", ack.Index)
 }
 
 func (w *IdentifyWindow) Update(ctx Context) bool {
@@ -83,16 +66,12 @@ func (w *IdentifyWindow) Update(ctx Context) bool {
 		return true
 	}
 	w.ClampScroll(ctx.Session)
-	snapshot := w.identifySnapshot(ctx.Session)
-	if snapshot != w.snapshot {
+	snapshot := w.items(ctx.Session)
+	if !slices.Equal(snapshot, w.snapshot) {
 		w.snapshot = snapshot
 		w.SetContent(w.widgetTree(ctx))
 	}
 	consumed := w.Window.Update(ctx)
-	if !w.IsOpen() {
-		w.Publish(ctx)
-		return consumed
-	}
 	w.Publish(ctx)
 	return consumed
 }
@@ -134,17 +113,17 @@ func (w *IdentifyWindow) identifyTableWidget(ctx Context) *rotheme.TableViewWidg
 		identifyTableHeaderH,
 		"No unidentified equipment",
 		w.ensureScrollSignal(),
-		w.selectedRow,
+		w.selectedRow(items),
 		func(row int) {
-			w.selectedRow = row
+			w.selected = items[row]
 		},
 	)
 }
 
 func (w *IdentifyWindow) ClampScroll(s *session.Session) {
 	items := w.items(s)
-	if w.selectedRow >= len(items) {
-		w.selectedRow = -1
+	if w.selectedRow(items) < 0 {
+		w.selected = session.InventoryItem{}
 	}
 	scroll := w.ensureScrollSignal()
 	maxScroll := float32(maxInt(0, len(items)-identifyRows) * identifyRowH)
@@ -154,6 +133,19 @@ func (w *IdentifyWindow) ClampScroll(s *session.Session) {
 	case value > maxScroll:
 		scroll.Set(maxScroll)
 	}
+}
+
+func (w *IdentifyWindow) selectedRow(items []session.InventoryItem) int {
+	if w.selected.Index == 0 {
+		return -1
+	}
+	for row, item := range items {
+		// The displayed item may have been identified, removed or replaced.
+		if item == w.selected {
+			return row
+		}
+	}
+	return -1
 }
 
 func (w *IdentifyWindow) identifyTableRows(ctx Context, items []session.InventoryItem) []itemTableRow {
@@ -209,30 +201,19 @@ func (w *IdentifyWindow) markIconMiss(key identifyItemIconKey) {
 }
 
 func (w *IdentifyWindow) items(s *session.Session) []session.InventoryItem {
-	if s == nil {
-		return nil
-	}
-	items := make([]session.InventoryItem, 0, len(w.indexes))
-	for _, index := range w.indexes {
-		if item, ok := findInventoryItemByIndex(s, index); ok && !item.Identified && inventoryItemCanEquip(item) {
-			items = append(items, item)
-		}
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].Index < items[j].Index
-	})
-	return items
+	return w.itemList.get(s, w.indexes, true)
 }
 
 func (w *IdentifyWindow) identifySelected(ctx Context) {
-	items := w.items(ctx.Session)
-	if w.selectedRow < 0 || w.selectedRow >= len(items) {
+	if !w.IsOpen() {
 		return
 	}
-	w.identify(ctx, items[w.selectedRow])
-}
-
-func (w *IdentifyWindow) identify(ctx Context, item session.InventoryItem) {
+	items := w.items(ctx.Session)
+	if w.selectedRow(items) < 0 {
+		w.selected = session.InventoryItem{}
+		return
+	}
+	item := w.selected
 	if ctx.Network == nil {
 		glog.Warnf("identify failed: not connected")
 		return
@@ -241,10 +222,14 @@ func (w *IdentifyWindow) identify(ctx Context, item session.InventoryItem) {
 		glog.Warnf("identify failed: %v", err)
 		return
 	}
+	w.Close()
 	glog.Debugf("identify requested index=%d item=%d", item.Index, item.ItemID)
 }
 
 func (w *IdentifyWindow) cancel(ctx Context) {
+	if !w.IsOpen() {
+		return
+	}
 	if ctx.Network != nil {
 		if err := ctx.Network.SendItemIdentify(identifyCancelIndex); err != nil {
 			glog.Warnf("identify cancel failed: %v", err)
@@ -254,24 +239,11 @@ func (w *IdentifyWindow) cancel(ctx Context) {
 	w.Close()
 }
 
-func (w *IdentifyWindow) removeIndex(index uint16) {
-	for i, candidate := range w.indexes {
-		if candidate == index {
-			w.indexes = append(w.indexes[:i], w.indexes[i+1:]...)
-			return
-		}
-	}
-}
-
 func (w *IdentifyWindow) ensureScrollSignal() state.Signal[float32] {
 	if w.scrollY == nil {
 		w.scrollY = state.NewSignal[float32](0)
 	}
 	return w.scrollY
-}
-
-func (w *IdentifyWindow) identifySnapshot(s *session.Session) string {
-	return fmt.Sprintf("%v:%v", w.indexes, w.items(s))
 }
 
 func identifyTableHeight() float32 {

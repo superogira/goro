@@ -43,8 +43,24 @@ CGO_ENABLED=0 go build -tags nofakecgo .
 ./goro
 ```
 
-Configuration is loaded from `goro.ini` in the current directory when the file
-exists. Pass another file with `--config`:
+Configuration precedence, from highest to lowest:
+
+1. Command-line flags such as `--vsync=false`.
+2. The file explicitly supplied with `--config <path>`.
+3. `goro.ini` in the directory explicitly supplied with `--data-dir`, if it exists.
+4. `./goro.ini` in the working directory, if it exists.
+5. Built-in defaults.
+
+Goro only searches the locations above; it does not automatically read or write
+config files in system or per-user directories such as `/etc` or `$XDG_CONFIG_HOME`.
+A missing explicit `--config` file is an error.
+
+In-game settings, remembered login IDs, and chat shortcuts are saved to the
+`--config` file when supplied, otherwise to `--data-dir/goro.ini` when `--data-dir`
+is supplied, otherwise to `./goro.ini`. A missing data-directory or working-directory
+file is created when saving preferences.
+
+Example `goro.ini`:
 
 ```ini
 data_dir = /home/kivutar/Téléchargements/OldRO
@@ -320,6 +336,8 @@ Currently implemented (not a claim of complete reference-client parity):
    * Chat shortcuts (Alt+M editor, Alt+1..0 quick send)
    * Console
    * Minimap with player, NPC, party, and guild markers
+   * Classic world map with player/party locations and minimap previews
+   * Quest journal with descriptions, hunt progress, and time limits
    * Items with vertical category tabs
    * Equipment
    * Option

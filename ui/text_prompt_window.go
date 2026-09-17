@@ -1,12 +1,12 @@
 package ui
 
 import (
-	"github.com/kivutar/goro/input"
 	"strings"
 
 	"github.com/gogpu/ui/core/textfield"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/ui/rotheme"
 )
 
@@ -29,10 +29,12 @@ type TextPromptWindow struct {
 	maxLength   int
 	inputField  *textfield.Widget
 	action      TextPromptAction
+	// webOpen marks the DOM-panel twin as the active presentation (web
+	// build only); the canvas window is untouched in that mode.
+	webOpen bool
 }
 
 func (w *TextPromptWindow) Open(ctx Context, title, label, placeholder string, maxLength int) {
-	w.EnsureWindow(textPromptW, ROWindowTitleHeight+textPromptContentH+ROWindowFooterHeight)
 	w.ctx = ctx
 	w.title = title
 	w.label = label
@@ -41,16 +43,35 @@ func (w *TextPromptWindow) Open(ctx Context, title, label, placeholder string, m
 	w.maxLength = maxLength
 	w.inputField = nil
 	w.action = TextPromptAction{}
+	if textPromptWebSync(title, label, placeholder, maxLength, true) {
+		w.webOpen = true
+		w.open = true
+		return
+	}
+	w.EnsureWindow(textPromptW, ROWindowTitleHeight+textPromptContentH+ROWindowFooterHeight)
 	w.Window.Open(ctx, w.widgetTree(ctx))
-	w.focusInput()
 	w.Publish(ctx)
+	w.focusInput(ctx)
+}
+
+// Close hides whichever presentation is active.
+func (w *TextPromptWindow) Close() {
+	if w.webOpen {
+		w.webOpen = false
+		w.open = false
+		textPromptWebSync(w.title, w.label, w.placeholder, w.maxLength, false)
+		return
+	}
+	w.Window.Close()
 }
 
 func (w *TextPromptWindow) Update(ctx Context) bool {
-	w.EnsureWindow(textPromptW, ROWindowTitleHeight+textPromptContentH+ROWindowFooterHeight)
 	w.ctx = ctx
 	if !w.IsOpen() {
 		return false
+	}
+	if w.webOpen {
+		return w.updateWeb(ctx)
 	}
 	if w.submitFromFocusedEnter(ctx) {
 		w.Publish(ctx)
@@ -61,15 +82,37 @@ func (w *TextPromptWindow) Update(ctx Context) bool {
 	return consumed
 }
 
+// updateWeb services the DOM panel: typed submissions arrive through the
+// action queue; Escape (which reaches the game only when the page input
+// is not focused) cancels. Stays consumed while open so game shortcuts
+// yield, exactly like the canvas twin.
+func (w *TextPromptWindow) updateWeb(ctx Context) bool {
+	text, cancelled := drainTextPromptWebActions()
+	if cancelled {
+		w.Close()
+		return true
+	}
+	if text != "" {
+		w.action = TextPromptAction{Text: text, Submitted: true}
+		w.Close()
+		return true
+	}
+	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEscape) {
+		w.Close()
+		return true
+	}
+	return true
+}
+
 func (w *TextPromptWindow) Rebind(ctx Context) {
 	if !w.IsOpen() {
 		return
 	}
 	w.ctx = ctx
 	w.inputField = nil
-	w.SetContent(w.widgetTree(ctx))
-	w.focusInput()
-	w.Publish(ctx)
+	content := w.widgetTree(ctx)
+	w.RebindContent(ctx, content)
+	w.focusInput(ctx)
 }
 
 func (w *TextPromptWindow) PopAction() TextPromptAction {
@@ -83,7 +126,7 @@ func (w *TextPromptWindow) widgetTree(ctx Context) widget.Widget {
 		Title(w.title),
 		CloseButton(true),
 		OnClose(w.Close),
-		Size(textPromptW, ROWindowTitleHeight+textPromptContentH+ROWindowFooterHeight),
+		Size(float32(w.width), float32(w.height)),
 		Content(
 			primitives.Box(
 				rotheme.Label(w.label),
@@ -149,8 +192,13 @@ func (w *TextPromptWindow) submitFromFocusedEnter(ctx Context) bool {
 	return true
 }
 
-func (w *TextPromptWindow) focusInput() {
-	if w.inputField != nil {
+func (w *TextPromptWindow) focusInput(ctx Context) {
+	if w.inputField == nil {
+		return
+	}
+	if wc := windowWidgetContext(ctx); wc != nil {
+		wc.RequestFocus(w.inputField)
+	} else {
 		w.inputField.SetFocused(true)
 	}
 }

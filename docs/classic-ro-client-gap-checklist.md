@@ -34,20 +34,22 @@ The Ninja skill exceptions and server option combinations were also checked
 against `~/src/eathena/src/map/status.c` and rAthena. No new packets or
 duplicated stealth state are needed.
 
-### Quest journal and markers
+### Quest journal
 
-- [ ] Parse the 2008 quest list packets (`0x02B1` through `0x02B5` and relevant updates).
-- [ ] Store active quest state, descriptions, objectives, and hunt progress in the session.
-- [ ] Implement the quest list and quest detail UI.
-- [ ] Handle quest activation/state acknowledgement (`0x02B6`).
-- [ ] Handle quest removal and state updates (`0x02B7` where applicable).
-- [ ] Display quest NPC markers in the world.
-- [ ] Display quest markers and objective dots on the minimap.
-- [ ] Preserve the existing quest EXP console notifications.
-- [ ] Add packet, session-state, UI, and marker regression tests.
+- [x] Parse the 2008 quest list packets (`0x02B1` through `0x02B5` and relevant updates).
+- [x] Store character-owned quest state, objectives, and hunt progress; load descriptions from `questid2display.txt`.
+- [x] Implement the quest list and quest detail UI (`Alt+U`, Active/Inactive/All tabs).
+- [x] Send quest activation changes (`0x02B6`) and wait for server acknowledgement (`0x02B7`).
+- [x] Handle quest removal/completion (`0x02B4`) and state updates (`0x02B7`).
+- [x] Preserve the existing quest EXP console notifications.
+- [x] Add packet, resource, session-state, and journal UI regression tests.
 
-See [the packet audit](packet-coverage-20080910.md), especially the currently
-untracked `0x02B1`-`0x02B7` family.
+See [the quest journal notes](quest-journal.md) for scope, protocol references,
+and a manual test using the local rAthena server. Quest NPC markers and automatic
+quest/objective minimap overlays are outside our 2008 scope, not unfinished
+journal work. rAthena's `clif_quest_show_event` only sends the NPC marker packet
+(`0x0446`) for `PACKETVER >= 20090218`. Existing server compass markers remain
+supported independently.
 
 ### Legacy mail
 
@@ -190,7 +192,7 @@ invalid maps, entry/warp redirects, the error dialog, and explicit login retry.
 
 ### Minimap details
 
-- [ ] Add quest and guide-direction markers as part of the quest implementation.
+- [ ] Verify guide-direction marker parity against the 2008 client using the existing server compass support.
 - [x] Party-member minimap markers already exist.
 - [x] Same-map guild-member markers already exist.
 - [x] Server compass markers already exist.
@@ -198,6 +200,19 @@ invalid maps, entry/warp redirects, the error dialog, and explicit login retry.
 Party-name hover belongs to the 2007 world-map feature, not to the small HUD
 minimap. The latter only needs the existing coloured party markers for 2008
 parity.
+
+### World map (2008)
+
+- [x] Load the original `worldmap.bmp` and `mapPosTable.txt` from client data.
+- [x] Open with Ctrl + the physical key left of 1, and close with the same shortcut or Escape.
+- [x] Mark the current map with a star and highlight maps containing online party members.
+- [x] Show a hovered map's minimap and party-member names; show known same-map positions in the preview.
+- [x] Toggle map names using the title-bar magnifying glass.
+- [x] Add resource, shortcut, scaling, input, lifecycle, and idle-redraw regression tests.
+- [ ] Verify the full interaction visually in game, including party members on other maps.
+
+The 2008-09-10 Sakray executable references both original assets, and OldRO
+contains them. See [world map notes](world-map.md) for references and scope.
 
 ### Graphics options and small rendering details
 
@@ -227,8 +242,6 @@ These are intentionally unchecked, but they are not yet approved implementation
 work. First establish that the feature belongs to the 2008 client and that the
 OldRO data contains the required assets/tables.
 
-- [ ] Validate whether the world map UI and its map-position tables belong in the selected 2008 client profile.
-- [ ] If valid, implement the world map, current-map/player indicator, party markers with names on hover, and per-map minimap inset.
 - [ ] Validate skill/global cooldown packets for `20080910` before adding cooldown gating or shortcut overlays.
 - [ ] Validate whether the status-icon clock-wedge display is appropriate for 2008; Goro already has tooltips and a duration bar.
 - [ ] Validate party-booking packets `0x0802` and `0x0806`; they appear newer and should not be pulled into the 2008 backlog by default.

@@ -176,6 +176,78 @@ func hudWebInstallHooks() {
 		}
 		return nil
 	}))
+	js.Global().Set("goroTextPromptAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "tprompt:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroConfirmAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "cfm:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroFriendsAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "fw:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroFriendSetupAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "fs:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroPartySetupAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "ps:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroWhisperAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "wh:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroChatRoomCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "crc:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroPartyCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "pcr:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
+	js.Global().Set("goroChatRoomAction", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 && args[0].Type() == js.TypeString {
+			hudWebActionQueue.Lock()
+			hudWebActionQueue.actions = append(hudWebActionQueue.actions, "cr:"+args[0].String())
+			hudWebActionQueue.Unlock()
+		}
+		return nil
+	}))
 		js.Global().Set("goroCharCreateAction", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 1 && args[0].Type() == js.TypeString {
 			hudWebActionQueue.Lock()

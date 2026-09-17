@@ -14,7 +14,12 @@ import (
 )
 
 func (m *WorldMode) drawVendingBoardLabels(screen *render.Frame, ctx client.Context, entries []sceneActorDrawEntry) {
+	if vendingBoardsWebAvailable() {
+		m.syncVendingBoardsWeb(entries)
+		return
+	}
 	icon := m.vendingShopIcon(ctx.Resources)
+	bounds := make(map[uint32]vendingBoardBounds, len(entries))
 	for _, entry := range entries {
 		if !actorHasVending(entry.actor) {
 			continue
@@ -22,10 +27,48 @@ func (m *WorldMode) drawVendingBoardLabels(screen *render.Frame, ctx client.Cont
 		label := sanitizeActorName(entry.actor.VendingName)
 		labelY := actorSpriteTopY(entry.screenY, entry.scale) - boardLabelGap - boardLabelHeight(label)
 		drawBoardLabel(screen, entry.actor.VendingName, entry.screenX, labelY, icon)
+		if box, ok := boardLabelBounds(label, entry.screenX, labelY); ok {
+			bounds[entry.actor.ID] = box
+		}
+	}
+	// Hover and click hit-testing read these drawn bounds: recomputing them
+	// from world state drifts (sprite anchor + local body scale).
+	m.vendingBoardBounds = bounds
+}
+
+// syncVendingBoardsWeb hands the board list to the page instead of drawing
+// on the canvas; hit-testing keeps working through the captured bounds.
+func (m *WorldMode) syncVendingBoardsWeb(entries []sceneActorDrawEntry) {
+	boards := make([]vendingBoardWebEntry, 0, len(entries))
+	bounds := make(map[uint32]vendingBoardBounds, len(entries))
+	for _, entry := range entries {
+		if !actorHasVending(entry.actor) {
+			continue
+		}
+		label := sanitizeActorName(entry.actor.VendingName)
+		if label == "" {
+			continue
+		}
+		labelY := actorSpriteTopY(entry.screenY, entry.scale) - boardLabelGap - boardLabelHeight(label)
+		boards = append(boards, vendingBoardWebEntry{
+			id:    entry.actor.ID,
+			x:     entry.screenX - float64(boardLabelW)/2,
+			y:     labelY,
+			title: label,
+		})
+		if box, ok := boardLabelBounds(label, entry.screenX, labelY); ok {
+			bounds[entry.actor.ID] = box
+		}
+	}
+	m.vendingBoardBounds = bounds
+	if sig := vendingBoardsSignature(boards); sig != m.vendingBoardsSig {
+		m.vendingBoardsSig = sig
+		vendingBoardsWebSync(boards)
 	}
 }
 
 func (m *WorldMode) drawChatRoomBoardLabels(screen *render.Frame, ctx client.Context, entries []sceneActorDrawEntry) {
+	bounds := make(map[uint32]vendingBoardBounds, len(entries))
 	for _, entry := range entries {
 		if !actorHasChatRoom(entry.actor) {
 			continue
@@ -38,7 +81,14 @@ func (m *WorldMode) drawChatRoomBoardLabels(screen *render.Frame, ctx client.Con
 			labelY -= boardLabelHeight(vendingLabel) + boardLabelGap
 		}
 		drawBoardLabel(screen, label, entry.screenX, labelY, icon)
+		if box, ok := boardLabelBounds(label, entry.screenX, labelY); ok {
+			bounds[entry.actor.ID] = box
+		}
 	}
+	// Hover and click hit-testing read these drawn bounds: recomputing them
+	// from world state drifts, because the draw path anchors the sprite and
+	// scales the local player's body while the projection shortcut does not.
+	m.chatBoardBounds = bounds
 }
 
 func chatRoomBoardLabel(actor worldstate.Actor) string {
@@ -197,7 +247,7 @@ func (m *WorldMode) hoveredVendingBoard(ctx client.Context, projection sceneProj
 		if actor.ID == 0 || isLocalActor(ctx, actor.ID) || !actorHasVending(actor) {
 			continue
 		}
-		bounds, ok := vendingBoardActorBounds(ctx, projection, actor, now)
+		bounds, ok := m.vendingBoardHitBounds(ctx, projection, actor, now)
 		if !ok || !bounds.contains(float64(mouseX), float64(mouseY)) {
 			continue
 		}
@@ -210,6 +260,16 @@ func (m *WorldMode) hoveredVendingBoard(ctx client.Context, projection sceneProj
 		}
 	}
 	return best, bestDistance < math.Inf(1)
+}
+
+// vendingBoardHitBounds prefers the bounds captured while drawing the
+// board this frame and falls back to the projection shortcut before the
+// first draw (and in tests).
+func (m *WorldMode) vendingBoardHitBounds(ctx client.Context, projection sceneProjection, actor worldstate.Actor, now time.Time) (vendingBoardBounds, bool) {
+	if bounds, ok := m.vendingBoardBounds[actor.ID]; ok {
+		return bounds, true
+	}
+	return vendingBoardActorBounds(ctx, projection, actor, now)
 }
 
 func (m *WorldMode) hoveredChatRoomBoard(ctx client.Context, projection sceneProjection, mouseX, mouseY int, now time.Time) (worldstate.Actor, bool) {
@@ -225,7 +285,7 @@ func (m *WorldMode) hoveredChatRoomBoard(ctx client.Context, projection scenePro
 		if actor.ID == 0 || isLocalActor(ctx, actor.ID) || !actorHasChatRoom(actor) {
 			continue
 		}
-		bounds, ok := m.chatRoomBoardActorBounds(ctx, projection, actor, now)
+		bounds, ok := m.chatRoomBoardHitBounds(ctx, projection, actor, now)
 		if !ok || !bounds.contains(float64(mouseX), float64(mouseY)) {
 			continue
 		}
@@ -269,6 +329,16 @@ func (m *WorldMode) chatRoomBoardActorBounds(ctx client.Context, projection scen
 	return boardLabelBounds(label, float64(point.x), topY)
 }
 
+// chatRoomBoardHitBounds prefers the bounds captured while drawing the
+// board this frame and falls back to the projection shortcut before the
+// first draw (and in tests).
+func (m *WorldMode) chatRoomBoardHitBounds(ctx client.Context, projection sceneProjection, actor worldstate.Actor, now time.Time) (vendingBoardBounds, bool) {
+	if bounds, ok := m.chatBoardBounds[actor.ID]; ok {
+		return bounds, true
+	}
+	return m.chatRoomBoardActorBounds(ctx, projection, actor, now)
+}
+
 func boardLabelBounds(label string, centerX, topY float64) (vendingBoardBounds, bool) {
 	label = sanitizeActorName(label)
 	if label == "" {
@@ -287,6 +357,45 @@ func boardLabelHeight(label string) float64 {
 		return 0
 	}
 	return boardLabelH
+}
+
+// simulatedVendingBoardIDBase keeps load-test boards out of the server's
+// actor id space; they are never clickable because hit-testing walks the
+// real world actors.
+const simulatedVendingBoardIDBase = 900000000
+
+// appendSimulatedVendingEntries feeds the load test: n synthetic boards
+// laid out in a grid around the local player, flowing through the exact
+// same canvas/DOM draw path as real ones.
+func (m *WorldMode) appendSimulatedVendingEntries(screen *render.Frame, ctx client.Context, entries []sceneActorDrawEntry) []sceneActorDrawEntry {
+	count := vendingBoardsSimRequested()
+	if count <= 0 || screen == nil {
+		return entries
+	}
+	refX, refY, scale := float64(screen.Bounds().Dx())/2, float64(screen.Bounds().Dy())/2, 1.0
+	for _, entry := range entries {
+		if ctx.Session != nil && entry.actor.ID == ctx.Session.CharID {
+			refX, refY, scale = entry.screenX, entry.screenY, entry.scale
+			break
+		}
+	}
+	const cols = 6
+	for i := 0; i < count; i++ {
+		col := i % cols
+		row := i / cols
+		actor := worldstate.Actor{
+			ID:          simulatedVendingBoardIDBase + uint32(i),
+			Vending:     true,
+			VendingName: fmt.Sprintf("Simulated Shop %d - Fine Potions, Fly Wings, Red Potions, Awakening", i+1),
+		}
+		entries = append(entries, sceneActorDrawEntry{
+			actor:   actor,
+			screenX: refX + float64((col-(cols-1)/2)*170),
+			screenY: refY + float64(row*48-240),
+			scale:   scale,
+		})
+	}
+	return entries
 }
 
 func trimBoardLabel(label string, maxWidth int) string {

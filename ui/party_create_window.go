@@ -29,11 +29,21 @@ type PartyCreateWindow struct {
 	itemDivision uint8
 	nameField    *textfield.Widget
 	action       PartyCreateWindowAction
+	// webOpen marks the DOM-panel twin as the active presentation (web
+	// build only); the canvas window is untouched in that mode.
+	webOpen bool
 }
 
 func (w *PartyCreateWindow) Open(ctx Context) {
-	w.EnsureWindow(partyCreateW, ROWindowTitleHeight+partyCreateContentH+ROWindowFooterHeight)
 	w.ctx = ctx
+	if partyCreateWebSync(true) {
+		// The DOM twin owns the presentation; the form values live in the
+		// page, which resets them on every open.
+		w.webOpen = true
+		w.open = true
+		return
+	}
+	w.EnsureWindow(partyCreateW, ROWindowTitleHeight+partyCreateContentH+ROWindowFooterHeight)
 	w.name = ""
 	w.itemPickup = 0
 	w.itemDivision = 0
@@ -43,12 +53,26 @@ func (w *PartyCreateWindow) Open(ctx Context) {
 	w.Publish(ctx)
 }
 
+// Close hides whichever presentation is active.
+func (w *PartyCreateWindow) Close() {
+	if w.webOpen {
+		w.webOpen = false
+		w.open = false
+		partyCreateWebSync(false)
+		return
+	}
+	w.Window.Close()
+}
+
 func (w *PartyCreateWindow) Update(ctx Context) bool {
-	w.EnsureWindow(partyCreateW, ROWindowTitleHeight+partyCreateContentH+ROWindowFooterHeight)
 	w.ctx = ctx
 	if !w.IsOpen() {
 		return false
 	}
+	if w.webOpen {
+		return w.updateWeb(ctx)
+	}
+	w.EnsureWindow(partyCreateW, ROWindowTitleHeight+partyCreateContentH+ROWindowFooterHeight)
 	if w.submitFromFocusedEnter(ctx) {
 		w.Publish(ctx)
 		return true
@@ -58,8 +82,33 @@ func (w *PartyCreateWindow) Update(ctx Context) bool {
 	return consumed
 }
 
+// updateWeb services the DOM form: submissions arrive through the action
+// queue; Escape (which reaches the game only when no page input is
+// focused) cancels. Stays consumed while open so game shortcuts yield,
+// exactly like the canvas twin.
+func (w *PartyCreateWindow) updateWeb(ctx Context) bool {
+	action, ok, cancelled := drainPartyCreateWebActions()
+	if cancelled {
+		w.Close()
+		return true
+	}
+	if ok {
+		if action.Name == "" {
+			return true
+		}
+		w.action = action
+		w.Close()
+		return true
+	}
+	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEscape) {
+		w.Close()
+		return true
+	}
+	return true
+}
+
 func (w *PartyCreateWindow) Rebind(ctx Context) {
-	if !w.IsOpen() {
+	if w.webOpen || !w.IsOpen() {
 		return
 	}
 	w.ctx = ctx

@@ -355,9 +355,13 @@ func pickupApproachCell(ctx client.Context, item worldstate.FloorItem) (int, int
 }
 
 func (m *WorldMode) drawGroundItems(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time) {
-	for _, entry := range m.collectSceneItemEntries(screen, ctx, projection, now) {
-		m.drawGroundItemShadowEntry3D(screen, projection, entry)
-		m.drawGroundItemEntry3D(screen, projection, entry)
+	items := m.collectSceneItemEntries(screen, ctx, projection, now)
+	for _, entry := range sortedSceneDrawEntries(nil, items) {
+		if entry.itemShadowIndex >= 0 {
+			m.drawGroundItemShadowEntry3D(screen, projection, items[entry.itemShadowIndex])
+		} else {
+			m.drawGroundItemEntry3D(screen, projection, items[entry.itemIndex])
+		}
 	}
 }
 

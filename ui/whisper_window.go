@@ -20,6 +20,23 @@ const (
 	whisperMessagePadY    = 6
 )
 
+var (
+	whisperColorIncoming = widget.RGBA8(181, 222, 239, 255)
+	whisperColorOutgoing = widget.RGBA8(255, 255, 120, 255)
+)
+
+// whisperKind classifies a chat line for the DOM twin's coloring.
+func whisperKind(line whisperWindowLine) string {
+	switch line.color {
+	case whisperColorIncoming:
+		return "in"
+	case whisperColorOutgoing:
+		return "out"
+	default:
+		return "err"
+	}
+}
+
 type WhisperWindowAction struct {
 	Target  string
 	Message string
@@ -55,6 +72,18 @@ func (w *WhisperWindow) open(ctx Context, target string) {
 	w.SetBackground(widget.RGBA8(0, 0, 0, 0))
 	w.SetFullRedraw(true)
 	w.ctx = ctx
+	if whisperWebEnabled() {
+		// DOM twin active: the group syncs every frame; no canvas window.
+		// (explicit Window.open: this type's own open method shadows it)
+		if !strings.EqualFold(w.target, target) {
+			w.target = target
+			w.lines = nil
+			w.input = ""
+			w.inputField = nil
+		}
+		w.Window.open = true
+		return
+	}
 	if !strings.EqualFold(w.target, target) {
 		w.target = target
 		w.lines = nil
@@ -106,11 +135,11 @@ func (w *WhisperWindow) PopAction() WhisperWindowAction {
 }
 
 func (w *WhisperWindow) AddIncoming(ctx Context, sender, message string) {
-	w.addLine(ctx, fmt.Sprintf("%s : %s", strings.TrimSpace(sender), strings.TrimSpace(message)), widget.RGBA8(181, 222, 239, 255))
+	w.addLine(ctx, fmt.Sprintf("%s : %s", strings.TrimSpace(sender), strings.TrimSpace(message)), whisperColorIncoming)
 }
 
 func (w *WhisperWindow) AddOutgoing(ctx Context, message string) {
-	w.addLine(ctx, fmt.Sprintf("me : %s", strings.TrimSpace(message)), widget.RGBA8(255, 255, 120, 255))
+	w.addLine(ctx, fmt.Sprintf("me : %s", strings.TrimSpace(message)), whisperColorOutgoing)
 }
 
 func (w *WhisperWindow) AddError(ctx Context, message string) {
@@ -240,6 +269,11 @@ func (w *WhisperWindow) submitFromFocusedEnter(ctx Context) bool {
 }
 
 func (w *WhisperWindow) refresh(ctx Context) {
+	if whisperWebEnabled() {
+		// The DOM twin owns the presentation; publishing here would flash
+		// a canvas window on top of it.
+		return
+	}
 	w.SetContent(w.widgetTree(ctx))
 	w.Publish(ctx)
 }

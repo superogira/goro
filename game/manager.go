@@ -58,6 +58,14 @@ func (m *Manager) ModeName() string {
 	return m.mode.Name()
 }
 
+func (m *Manager) HandleKeyPress(ctx client.Context, code input.KeyCode) {
+	if handler, ok := m.mode.(interface {
+		HandleKeyPress(client.Context, input.KeyCode)
+	}); ok {
+		handler.HandleKeyPress(ctx, code)
+	}
+}
+
 func (m *Manager) PrepareTextInput(ctx client.Context, code input.KeyCode) bool {
 	if filter, ok := m.mode.(interface {
 		PrepareTextInput(client.Context, input.KeyCode) bool

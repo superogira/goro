@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 	"image"
-	"sort"
+	"slices"
 
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/state"
@@ -26,20 +26,21 @@ const (
 
 type CardCompositionWindow struct {
 	Window
-	scrollY     state.Signal[float32]
-	selectedRow int
-	cardIndex   uint16
-	indexes     []uint16
-	snapshot    string
-	icons       map[identifyItemIconKey]image.Image
-	iconMiss    map[identifyItemIconKey]struct{}
+	scrollY   state.Signal[float32]
+	selected  session.InventoryItem
+	cardIndex uint16
+	indexes   []uint16
+	snapshot  []session.InventoryItem
+	itemList  itemDialogList
+	icons     map[identifyItemIconKey]image.Image
+	iconMiss  map[identifyItemIconKey]struct{}
 }
 
 func (w *CardCompositionWindow) OpenList(ctx Context, cardIndex uint16, list network.ItemCompositionList) {
 	w.EnsureWindow(cardCompositionWindowWidth, cardCompositionWindowHeight)
 	w.cardIndex = cardIndex
 	w.indexes = append(w.indexes[:0], list.Indexes...)
-	w.selectedRow = -1
+	w.selected = session.InventoryItem{}
 	w.ensureScrollSignal().Set(0)
 	w.ClampScroll(ctx.Session)
 	if len(w.items(ctx.Session)) == 0 {
@@ -47,7 +48,7 @@ func (w *CardCompositionWindow) OpenList(ctx Context, cardIndex uint16, list net
 		w.Publish(ctx)
 		return
 	}
-	w.snapshot = w.snapshotString(ctx.Session)
+	w.snapshot = w.items(ctx.Session)
 	w.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
 }
@@ -70,8 +71,8 @@ func (w *CardCompositionWindow) Update(ctx Context) bool {
 		return false
 	}
 	w.ClampScroll(ctx.Session)
-	snapshot := w.snapshotString(ctx.Session)
-	if snapshot != w.snapshot {
+	snapshot := w.items(ctx.Session)
+	if !slices.Equal(snapshot, w.snapshot) {
 		w.snapshot = snapshot
 		w.SetContent(w.widgetTree(ctx))
 	}
@@ -121,32 +122,32 @@ func (w *CardCompositionWindow) tableWidget(ctx Context) *rotheme.TableViewWidge
 		cardCompositionTableHeaderH,
 		"No items",
 		w.ensureScrollSignal(),
-		w.selectedRow,
+		w.selectedRow(items),
 		func(row int) {
-			w.selectedRow = row
+			w.selected = items[row]
 		},
 	)
 }
 
 func (w *CardCompositionWindow) composeSelected(ctx Context) {
 	items := w.items(ctx.Session)
-	if w.selectedRow < 0 || w.selectedRow >= len(items) {
+	if w.selectedRow(items) < 0 {
+		w.selected = session.InventoryItem{}
 		return
 	}
 	if ctx.Network == nil {
 		glog.Warnf("card composition failed: not connected")
 		return
 	}
-	equipIndex := items[w.selectedRow].Index
-	if err := ctx.Network.SendItemComposition(w.cardIndex, equipIndex); err != nil {
+	if err := ctx.Network.SendItemComposition(w.cardIndex, w.selected.Index); err != nil {
 		glog.Warnf("card composition failed: %v", err)
 	}
 }
 
 func (w *CardCompositionWindow) ClampScroll(s *session.Session) {
 	items := w.items(s)
-	if w.selectedRow >= len(items) {
-		w.selectedRow = -1
+	if w.selectedRow(items) < 0 {
+		w.selected = session.InventoryItem{}
 	}
 	scroll := w.ensureScrollSignal()
 	maxScroll := float32(maxInt(0, len(items)-cardCompositionRows) * cardCompositionRowH)
@@ -158,20 +159,21 @@ func (w *CardCompositionWindow) ClampScroll(s *session.Session) {
 	}
 }
 
-func (w *CardCompositionWindow) items(s *session.Session) []session.InventoryItem {
-	if s == nil {
-		return nil
+func (w *CardCompositionWindow) selectedRow(items []session.InventoryItem) int {
+	if w.selected.Index == 0 {
+		return -1
 	}
-	items := make([]session.InventoryItem, 0, len(w.indexes))
-	for _, index := range w.indexes {
-		if item, ok := findInventoryItemByIndex(s, index); ok {
-			items = append(items, item)
+	for row, item := range items {
+		// An inventory slot can be reused before the table is refreshed.
+		if item == w.selected {
+			return row
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].Index < items[j].Index
-	})
-	return items
+	return -1
+}
+
+func (w *CardCompositionWindow) items(s *session.Session) []session.InventoryItem {
+	return w.itemList.get(s, w.indexes, false)
 }
 
 func (w *CardCompositionWindow) cardItemID(s *session.Session) uint16 {
@@ -227,10 +229,6 @@ func (w *CardCompositionWindow) markIconMiss(key identifyItemIconKey) {
 		w.iconMiss = make(map[identifyItemIconKey]struct{})
 	}
 	w.iconMiss[key] = struct{}{}
-}
-
-func (w *CardCompositionWindow) snapshotString(s *session.Session) string {
-	return fmt.Sprintf("%d:%v:%v", w.cardIndex, w.indexes, w.items(s))
 }
 
 func (w *CardCompositionWindow) ensureScrollSignal() state.Signal[float32] {

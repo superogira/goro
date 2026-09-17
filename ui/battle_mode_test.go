@@ -106,10 +106,10 @@ func TestClassicConsoleEditsImmediatelyAfterMapClick(t *testing.T) {
 			}
 			ctx.Input.EndFrame()
 			ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
-			// Key preparation precedes both UI dispatch and input-state updates.
+			// Physical state is recorded before preparation and UI dispatch.
+			ctx.Input.SetKeyCode(tc.code, true)
 			console.PrepareKeyInput(ctx, tc.code, 0)
 			app.Window().HandleEvent(event.NewKeyEvent(event.KeyPress, tc.key, 0, event.ModNone))
-			ctx.Input.SetKeyCode(tc.code, true)
 			console.UpdateInput(ctx)
 			if !console.Active() || console.currentInput() != tc.want || console.inputField.CursorPosition() != tc.cursor {
 				t.Fatalf("first edit: text=%q cursor=%d active=%v", console.currentInput(), console.inputField.CursorPosition(), console.Active())
@@ -139,9 +139,11 @@ func TestConsoleEnterAfterMapClick(t *testing.T) {
 			}
 			ctx.Input.EndFrame()
 			ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
-			console.PrepareKeyInput(ctx, gpucontext.KeyEnter, 0)
-			app.Window().HandleEvent(event.NewKeyEvent(event.KeyPress, event.KeyEnter, 0, event.ModNone))
 			ctx.Input.SetKeyCode(gpucontext.KeyEnter, true)
+			console.PrepareKeyInput(ctx, gpucontext.KeyEnter, 0)
+			if !ctx.Input.KeyCodeConsumed(gpucontext.KeyEnter) {
+				app.Window().HandleEvent(event.NewKeyEvent(event.KeyPress, event.KeyEnter, 0, event.ModNone))
+			}
 			console.UpdateInput(ctx)
 			if battle {
 				if ctx.Session.NoShift || console.currentInput() != "/ns" || !console.Active() {
@@ -236,9 +238,14 @@ func TestConsoleEnterAndTextInOneFrame(t *testing.T) {
 	for _, battle := range []bool{false, true} {
 		console, ctx, app := battleModeConsole(t)
 		ctx.Session.BattleMode = battle
-		console.PrepareKeyInput(ctx, gpucontext.KeyEnter, 0)
-		app.Window().HandleEvent(event.NewKeyEvent(event.KeyPress, event.KeyEnter, 0, event.ModNone))
 		ctx.Input.SetKeyCode(gpucontext.KeyEnter, true)
+		console.PrepareKeyInput(ctx, gpucontext.KeyEnter, 0)
+		if !console.Active() || app.Window().Context().FocusedWidget() != console.inputField {
+			t.Fatal("opening Enter did not immediately give the editor keyboard priority")
+		}
+		if !ctx.Input.KeyCodeConsumed(gpucontext.KeyEnter) {
+			app.Window().HandleEvent(event.NewKeyEvent(event.KeyPress, event.KeyEnter, 0, event.ModNone))
+		}
 		typeConsoleText(console, ctx, app, gpucontext.KeyH, "hello")
 		console.UpdateInput(ctx)
 		if console.currentInput() != "hello" || !console.Active() || console.hasPendingSubmit {

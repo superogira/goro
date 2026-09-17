@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,25 +10,9 @@ import (
 func isolateUserConfig(t *testing.T) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	// os.UserConfigDir ignores XDG_CONFIG_HOME on Windows and reads
-	// %AppData%; without this the tests below write into the developer's
-	// real goro.ini.
-	if runtime.GOOS == "windows" {
-		t.Setenv("AppData", t.TempDir())
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp := t.TempDir()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(cwd); err != nil {
-			t.Fatal(err)
-		}
-	})
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 }
 
 func TestLoadConfigReadsINIAndCLIOverrides(t *testing.T) {
@@ -184,15 +167,10 @@ func TestLoadConfigRejectsInvalidLogLevel(t *testing.T) {
 	}
 }
 
-func TestLoadConfigReadsUserConfig(t *testing.T) {
+func TestLoadConfigReadsDataDirConfig(t *testing.T) {
 	isolateUserConfig(t)
-	path, err := UserConfigPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goro.ini")
 	if err := os.WriteFile(path, []byte(`
 [window]
 fullscreen = true
@@ -216,24 +194,18 @@ itemsnap = true
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadConfig(nil)
+	cfg, err := LoadConfig([]string{"--data-dir", dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.Window.Fullscreen || cfg.Audio.BGMVolume != 0.10 || cfg.Audio.SFXVolume != 0.20 || cfg.Render.VSync || !cfg.Render.FPS || !cfg.Render.AsyncUI || !cfg.Render.UIProfile || !cfg.Gameplay.NoShift || cfg.Gameplay.NoCtrl || !cfg.Gameplay.LessEffects || !cfg.Gameplay.SnapTargets || !cfg.Gameplay.SnapItems {
-		t.Fatalf("user config not loaded: %#v", cfg)
+		t.Fatalf("data directory config not loaded: %#v", cfg)
 	}
 }
 
 func TestSaveUserSettingsPreservesUnrelatedINI(t *testing.T) {
 	isolateUserConfig(t)
-	path, err := UserConfigPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(t.TempDir(), "goro.ini")
 	initial := `data_dir = /tmp/OldRO
 
 [login]
@@ -246,7 +218,11 @@ fullscreen = false
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writtenPath, err := SaveUserSettings(UserSettings{
+	cfg, err := LoadConfig([]string{"--config", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writtenPath, err := cfg.SaveUserSettings(UserSettings{
 		Fullscreen:  true,
 		VSync:       false,
 		FPS:         true,
@@ -290,28 +266,45 @@ fullscreen = false
 	}
 }
 
-func TestSavedVSyncOverridesINIAndCLIOverridesSavedVSync(t *testing.T) {
-	for _, explicitConfig := range []bool{false, true} {
-		name := "local"
-		if explicitConfig {
-			name = "explicit"
-		}
+func TestSavedVSyncRoundTripAndCLIOverride(t *testing.T) {
+	for _, name := range []string{"local", "data-dir", "explicit", "both"} {
 		t.Run(name, func(t *testing.T) {
 			isolateUserConfig(t)
-			path := "goro.ini"
-			var args []string
-			if explicitConfig {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "goro.ini")
+			args := []string{"--data-dir", dir}
+			if name == "local" {
+				var err error
+				path, err = filepath.Abs("goro.ini")
+				if err != nil {
+					t.Fatal(err)
+				}
+				args = nil
+			} else if name != "data-dir" {
 				path = filepath.Join(t.TempDir(), "custom.ini")
 				args = []string{"--config", path}
+				if name == "both" {
+					args = append(args, "--data-dir", dir)
+					if err := os.WriteFile(filepath.Join(dir, "goro.ini"), []byte("[render]\nvsync = false\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			for _, saved := range []bool{true, false} {
 				if err := os.WriteFile(path, []byte("[render]\nvsync = "+formatINIValueBool(!saved)+"\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := SaveUserSettings(UserSettings{VSync: saved}); err != nil {
+				cfg, err := LoadConfig(args)
+				if err != nil {
 					t.Fatal(err)
 				}
-				cfg, err := LoadConfig(args)
+				if cfg.ConfigPath != path {
+					t.Fatalf("save path = %q, want %q", cfg.ConfigPath, path)
+				}
+				if _, err := cfg.SaveUserSettings(UserSettings{VSync: saved}); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err = LoadConfig(args)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -329,22 +322,33 @@ func TestSavedVSyncOverridesINIAndCLIOverridesSavedVSync(t *testing.T) {
 					}
 				}
 			}
+			if name == "both" {
+				data, err := os.ReadFile(filepath.Join(dir, "goro.ini"))
+				if err != nil || string(data) != "[render]\nvsync = false\n" {
+					t.Fatalf("save changed lower-priority file: %q, %v", data, err)
+				}
+			}
 		})
 	}
 }
 
 func TestSavedLoginIDRoundTripAndSettingsPreservation(t *testing.T) {
 	isolateUserConfig(t)
+	args := []string{"--data-dir", t.TempDir()}
+	cfg, err := LoadConfig(args)
+	if err != nil {
+		t.Fatal(err)
+	}
 	settings := UserSettings{BGMVolume: 0.33, SFXVolume: 0.44, VSync: true}
-	if _, err := SaveUserSettings(settings); err != nil {
+	if _, err := cfg.SaveUserSettings(settings); err != nil {
 		t.Fatal(err)
 	}
 	// Quoting must preserve the ID literally, including spaces and INI punctuation.
 	username := ` "Test;#=ID" `
-	if _, err := SaveLoginID(username, true); err != nil {
+	if _, err := cfg.SaveLoginID(username, true); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadConfig(nil)
+	cfg, err = LoadConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,20 +361,20 @@ func TestSavedLoginIDRoundTripAndSettingsPreservation(t *testing.T) {
 	if cfg.Audio.BGMVolume != 0.33 || cfg.Audio.SFXVolume != 0.44 || !cfg.Render.VSync {
 		t.Fatal("saving the login ID changed other settings")
 	}
-	if _, err := SaveUserSettings(settings); err != nil {
+	if _, err := cfg.SaveUserSettings(settings); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = LoadConfig([]string{"--username", "explicit-id"})
+	cfg, err = LoadConfig(append(append([]string(nil), args...), "--username", "explicit-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.Login.KeepID || cfg.Login.SavedUsername != username || cfg.Login.Username != "explicit-id" {
 		t.Fatalf("settings save or CLI override changed the remembered ID: %+v", cfg.Login)
 	}
-	if _, err := SaveLoginID(username, false); err != nil {
+	if _, err := cfg.SaveLoginID(username, false); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = LoadConfig(nil)
+	cfg, err = LoadConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +385,11 @@ func TestSavedLoginIDRoundTripAndSettingsPreservation(t *testing.T) {
 
 func TestSavedLoginIDRejectsLineBreaksWithoutChangingConfig(t *testing.T) {
 	isolateUserConfig(t)
-	path, err := SaveLoginID("original", true)
+	cfg, err := LoadConfig([]string{"--data-dir", t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := cfg.SaveLoginID("original", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +398,7 @@ func TestSavedLoginIDRejectsLineBreaksWithoutChangingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, username := range []string{"id\n[render]\nvsync=false", "id\rname", "id\x00name"} {
-		if _, err := SaveLoginID(username, true); err == nil {
+		if _, err := cfg.SaveLoginID(username, true); err == nil {
 			t.Fatalf("accepted invalid ID %q", username)
 		}
 	}

@@ -23,7 +23,7 @@ func roTitleBar(child widget.Widget) *roTitleBarWidget {
 
 func (w *roTitleBarWidget) Layout(ctx widget.Context, constraints geometry.Constraints) geometry.Size {
 	constraints = constraints.TightenHeight(ROWindowTitleHeight)
-	size := w.child.Layout(ctx, constraints)
+	size := widget.LayoutChild(w.child, ctx, constraints)
 	size.Height = ROWindowTitleHeight
 	size = constraints.Constrain(size)
 	w.child.(interface{ SetBounds(geometry.Rect) }).SetBounds(geometry.NewRect(0, 0, size.Width, size.Height))

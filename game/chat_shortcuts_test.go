@@ -1,6 +1,7 @@
 package game
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/gogpu/gpucontext"
@@ -17,9 +18,8 @@ import (
 
 func chatShortcutTestContext(t *testing.T) client.Context {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("APPDATA", t.TempDir())
-	return client.Context{Input: input.NewState(), Session: session.New(), ScreenW: 800, ScreenH: 600}
+	return client.Context{Input: input.NewState(), Session: session.New(), ScreenW: 800, ScreenH: 600,
+		Config: config.Config{ConfigPath: filepath.Join(t.TempDir(), "goro.ini")}}
 }
 
 func TestChatShortcutWindowToggleAndBlocking(t *testing.T) {

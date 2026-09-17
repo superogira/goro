@@ -93,6 +93,7 @@ func (m *WorldMode) drawROCursor(screen *render.Frame, ctx client.Context, proje
 	}
 	render.SetCursorMode(render.CursorModeHidden)
 	action := m.cursorDesiredAction(ctx, projection, now)
+	m.updateChatBoardTip(ctx, projection, now)
 	magnetX, magnetY := m.cursorMagnetOffset(ctx, projection, action, now)
 	state := m.cursorState()
 	state.draw(screen, ctx, action, now, magnetX, magnetY)

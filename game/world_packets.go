@@ -51,6 +51,9 @@ func (m *WorldMode) handleNetworkPackets(ctx client.Context, now time.Time) (Mod
 // result stops the current frame when the packet changes modes or starts a map
 // transition.
 func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, now time.Time) (Mode, bool) {
+	if m.handleQuestPacket(ctx, pkt) {
+		return nil, false
+	}
 	if m.handleMailPacket(ctx, pkt, now) {
 		return nil, false
 	}
@@ -435,7 +438,9 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	} else if ok {
 		glog.Debugf("item identify ack index=%d success=%v", identifyAck.Index, identifyAck.Success)
 		applyItemIdentifyAck(ctx, identifyAck)
-		m.ui.identifyWindow.ApplyAck(ctx, identifyAck)
+		if !identifyAck.Success {
+			glog.Warnf("identify failed index=%d", identifyAck.Index)
+		}
 		m.ui.inventoryBag.ClampScroll(ctx.Session)
 		return nil, false
 	}

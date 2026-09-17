@@ -75,6 +75,7 @@ type State struct {
 	prevKeyCodes      map[KeyCode]bool
 	justKeyCodes      map[KeyCode]bool
 	justKeyCodeUps    map[KeyCode]bool
+	consumedKeyCodes  map[KeyCode]bool
 	buttons           map[MouseButton]bool
 	prevMouse         map[MouseButton]bool
 	justMouse         map[MouseButton]bool
@@ -119,6 +120,7 @@ func NewState() *State {
 		prevKeyCodes:      make(map[KeyCode]bool),
 		justKeyCodes:      make(map[KeyCode]bool),
 		justKeyCodeUps:    make(map[KeyCode]bool),
+		consumedKeyCodes:  make(map[KeyCode]bool),
 		buttons:           make(map[MouseButton]bool),
 		prevMouse:         make(map[MouseButton]bool),
 		justMouse:         make(map[MouseButton]bool),
@@ -196,6 +198,7 @@ func (s *State) ResetKeyboard() {
 	clear(s.prevKeyCodes)
 	clear(s.justKeyCodes)
 	clear(s.justKeyCodeUps)
+	clear(s.consumedKeyCodes)
 	s.textInput = s.textInput[:0]
 }
 
@@ -207,6 +210,9 @@ func (s *State) SetKey(key Key, pressed bool) {
 }
 
 func (s *State) SetKeyCode(code KeyCode, pressed bool) {
+	if !pressed || !s.keyCodes[code] {
+		delete(s.consumedKeyCodes, code)
+	}
 	if pressed && !s.keyCodes[code] {
 		s.justKeyCodes[code] = true
 	}
@@ -296,19 +302,25 @@ func (s *State) KeyCodeJustReleased(code KeyCode) bool {
 }
 
 // ConsumeKeyCodePress reports a new physical key press once and prevents
-// other physical-key consumers from acting on the same edge. Held state and
-// layout-translated text input are left unchanged.
+// other consumers from acting on the same edge. Consumption lasts until release
+// so native dispatch can also suppress repeats and associated text. Held state
+// and text already collected in the snapshot are left unchanged.
 func (s *State) ConsumeKeyCodePress(code KeyCode) bool {
 	if !s.KeyCodeJustPressed(code) {
 		return false
 	}
 	delete(s.justKeyCodes, code)
+	s.consumedKeyCodes[code] = true
 	s.prevKeyCodes[code] = s.keyCodes[code]
 	if key, ok := legacyKeyForCode(code); ok {
 		delete(s.justKeys, key)
 		s.prev[key] = s.keys[key]
 	}
 	return true
+}
+
+func (s *State) KeyCodeConsumed(code KeyCode) bool {
+	return s.consumedKeyCodes[code]
 }
 
 func (s *State) MousePressed(button MouseButton) bool {

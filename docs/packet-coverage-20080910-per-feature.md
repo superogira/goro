@@ -104,7 +104,8 @@
 
   Quest / Instances
 
-  - [ ] Quest state ack: 0x02B6
+  - [x] Quest list, objectives, add/remove and hunt progress: 0x02B1-0x02B5
+  - [x] Quest activation request and acknowledgement: 0x02B6, 0x02B7
   - [ ] Memorial dungeon command: 0x02CF
   - [x] Server-owned NPC progress bar start/completion/cancel: 0x02F0, 0x02F1, 0x02F2
 

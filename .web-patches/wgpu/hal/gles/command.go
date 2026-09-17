@@ -1578,10 +1578,34 @@ func (c *DrawIndexedCommand) Execute(ctx *gl.Context) {
 	offset := uintptr(c.firstIndex) * indexSize
 	mode := primitiveTopologyToGL(c.topology)
 
+	if c.baseVertex != 0 {
+		// Batched vertex pools address their vertices through BaseVertex;
+		// drawing without it reads the pool head instead (stretched/black
+		// world geometry on Mali). ES 3.2 exposes the base-vertex draws as
+		// core.
+		if c.instanceCount <= 1 {
+			if ctx.DrawElementsBaseVertex(mode, int32(c.indexCount), indexType, offset, c.baseVertex) {
+				return
+			}
+		} else if ctx.DrawElementsInstancedBaseVertex(mode, int32(c.indexCount), indexType, offset, int32(c.instanceCount), c.baseVertex) {
+			return
+		}
+		debugMissingBaseVertex()
+	}
 	if c.instanceCount <= 1 {
 		ctx.DrawElements(mode, int32(c.indexCount), indexType, offset)
 	} else {
 		ctx.DrawElementsInstanced(mode, int32(c.indexCount), indexType, offset, int32(c.instanceCount))
+	}
+}
+
+// debugMissingBaseVertexWarned keeps the missing-entry-point warning to a
+// single line per session.
+var debugMissingBaseVertexWarned atomic.Bool
+
+func debugMissingBaseVertex() {
+	if !debugMissingBaseVertexWarned.Swap(true) {
+		slog.Warn("gles: glDrawElementsBaseVertex unavailable; indexed draws with BaseVertex will render incorrectly")
 	}
 }
 

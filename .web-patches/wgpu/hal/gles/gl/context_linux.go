@@ -45,6 +45,7 @@ var (
 	cifVoid9TexImg   types.CallInterface // void fn(uint32, int32, int32, int32, int32, int32, uint32, uint32, void*)
 	cifVoid4Draw     types.CallInterface // void fn(uint32, int32, int32, int32)
 	cifVoid5DrawElem types.CallInterface // void fn(uint32, int32, uint32, void*, int32)
+	cifVoid6DrawBV   types.CallInterface // void fn(uint32, int32, uint32, void*, int32, int32) - DrawElementsInstancedBaseVertex
 	cifPtr1          types.CallInterface // void* fn(uint32)
 	cifPtr2UU        types.CallInterface // void* fn(uint32, uint32)
 	cifVoid7ReadPx   types.CallInterface // void fn(int32, int32, int32, int32, uint32, uint32, void*)
@@ -340,6 +341,21 @@ func initCommonCallInterfaces() error {
 		return err
 	}
 
+	// void fn(uint32, int32, uint32, void*, int32, int32) - DrawElementsInstancedBaseVertex
+	err = ffi.PrepareCallInterface(&cifVoid6DrawBV, types.DefaultCall,
+		types.VoidTypeDescriptor,
+		[]*types.TypeDescriptor{
+			types.UInt32TypeDescriptor,
+			types.SInt32TypeDescriptor,
+			types.UInt32TypeDescriptor,
+			types.PointerTypeDescriptor,
+			types.SInt32TypeDescriptor,
+			types.SInt32TypeDescriptor,
+		})
+	if err != nil {
+		return err
+	}
+
 	// void fn(int32, int32, int32, int32, uint32, uint32, void*) - ReadPixels
 	err = ffi.PrepareCallInterface(&cifVoid7ReadPx, types.DefaultCall,
 		types.VoidTypeDescriptor,
@@ -547,6 +563,11 @@ type Context struct {
 	glDrawElementsInstanced unsafe.Pointer
 	glVertexAttribDivisor   unsafe.Pointer
 
+	// Base-vertex draws (desktop GL 3.2+ / ES 3.2+): required to honor the
+	// wgpu DrawIndexed BaseVertex field, which batched vertex pools rely on.
+	glDrawElementsBaseVertex          unsafe.Pointer
+	glDrawElementsInstancedBaseVertex unsafe.Pointer
+
 	// Compute shaders (GL 4.3+ / ES 3.1+)
 	glDispatchCompute         unsafe.Pointer
 	glDispatchComputeIndirect unsafe.Pointer
@@ -749,6 +770,10 @@ func (c *Context) Load(getProcAddr ProcAddressFunc, isGLES ...bool) error {
 	c.glDrawArraysInstanced = getProcAddr("glDrawArraysInstanced")
 	c.glDrawElementsInstanced = getProcAddr("glDrawElementsInstanced")
 	c.glVertexAttribDivisor = getProcAddr("glVertexAttribDivisor")
+
+	// Base-vertex draws (optional on ES 3.1; ES 3.2 exposes them as core)
+	c.glDrawElementsBaseVertex = getProcAddr("glDrawElementsBaseVertex")
+	c.glDrawElementsInstancedBaseVertex = getProcAddr("glDrawElementsInstancedBaseVertex")
 
 	// Compute shaders (optional - may be nil on older GL versions)
 	c.glDispatchCompute = getProcAddr("glDispatchCompute")
@@ -1818,6 +1843,42 @@ func (c *Context) DrawElementsInstanced(mode uint32, count int32, typ uint32, in
 		unsafe.Pointer(&instanceCount),
 	}
 	_, _ = ffi.CallFunction(&cifVoid5DrawElem, c.glDrawElementsInstanced, nil, args[:])
+}
+
+// DrawElementsBaseVertex adds basevertex to every fetched index before it
+// addresses the vertex pool — the GL side of the wgpu DrawIndexed
+// BaseVertex field. Returns false when the driver lacks the entry point.
+func (c *Context) DrawElementsBaseVertex(mode uint32, count int32, typ uint32, indices uintptr, baseVertex int32) bool {
+	if c.glDrawElementsBaseVertex == nil {
+		return false
+	}
+	args := [5]unsafe.Pointer{
+		unsafe.Pointer(&mode),
+		unsafe.Pointer(&count),
+		unsafe.Pointer(&typ),
+		unsafe.Pointer(&indices),
+		unsafe.Pointer(&baseVertex),
+	}
+	_, _ = ffi.CallFunction(&cifVoid5DrawElem, c.glDrawElementsBaseVertex, nil, args[:])
+	return true
+}
+
+// DrawElementsInstancedBaseVertex is the instanced variant of the above.
+// Returns false when the driver lacks the entry point.
+func (c *Context) DrawElementsInstancedBaseVertex(mode uint32, count int32, typ uint32, indices uintptr, instanceCount int32, baseVertex int32) bool {
+	if c.glDrawElementsInstancedBaseVertex == nil {
+		return false
+	}
+	args := [6]unsafe.Pointer{
+		unsafe.Pointer(&mode),
+		unsafe.Pointer(&count),
+		unsafe.Pointer(&typ),
+		unsafe.Pointer(&indices),
+		unsafe.Pointer(&instanceCount),
+		unsafe.Pointer(&baseVertex),
+	}
+	_, _ = ffi.CallFunction(&cifVoid6DrawBV, c.glDrawElementsInstancedBaseVertex, nil, args[:])
+	return true
 }
 
 // --- Compute Shaders ---

@@ -150,6 +150,11 @@ type Context struct {
 	glDrawElementsInstanced uintptr
 	glVertexAttribDivisor   uintptr
 
+	// Base-vertex draws (desktop GL 3.2+ / ES 3.2+): required to honor the
+	// wgpu DrawIndexed BaseVertex field, which batched vertex pools rely on.
+	glDrawElementsBaseVertex           uintptr
+	glDrawElementsInstancedBaseVertex  uintptr
+
 	// Compute shaders (GL 4.3+ / ES 3.1+)
 	glDispatchCompute         uintptr
 	glDispatchComputeIndirect uintptr
@@ -319,6 +324,10 @@ func (c *Context) Load(getProcAddr ProcAddressFunc) error {
 	c.glDrawArraysInstanced = getProcAddr("glDrawArraysInstanced")
 	c.glDrawElementsInstanced = getProcAddr("glDrawElementsInstanced")
 	c.glVertexAttribDivisor = getProcAddr("glVertexAttribDivisor")
+
+	// Base-vertex draws (optional on ES 3.1; ES 3.2 exposes them as core)
+	c.glDrawElementsBaseVertex = getProcAddr("glDrawElementsBaseVertex")
+	c.glDrawElementsInstancedBaseVertex = getProcAddr("glDrawElementsInstancedBaseVertex")
 
 	// Compute shaders (optional - may be nil on older GL versions)
 	c.glDispatchCompute = getProcAddr("glDispatchCompute")
@@ -982,6 +991,29 @@ func (c *Context) DrawArraysInstanced(mode uint32, first, count, instanceCount i
 func (c *Context) DrawElementsInstanced(mode uint32, count int32, typ uint32, indices uintptr, instanceCount int32) {
 	syscall.SyscallN(c.glDrawElementsInstanced, uintptr(mode), uintptr(count),
 		uintptr(typ), indices, uintptr(instanceCount))
+}
+
+// DrawElementsBaseVertex adds basevertex to every index fetched before it
+// addresses the vertex pool — the GL side of the wgpu DrawIndexed
+// BaseVertex field. Returns false when the driver lacks the entry point.
+func (c *Context) DrawElementsBaseVertex(mode uint32, count int32, typ uint32, indices uintptr, baseVertex int32) bool {
+	if c.glDrawElementsBaseVertex == 0 {
+		return false
+	}
+	syscall.SyscallN(c.glDrawElementsBaseVertex, uintptr(mode), uintptr(count),
+		uintptr(typ), indices, uintptr(baseVertex))
+	return true
+}
+
+// DrawElementsInstancedBaseVertex is the instanced variant of the above.
+// Returns false when the driver lacks the entry point.
+func (c *Context) DrawElementsInstancedBaseVertex(mode uint32, count int32, typ uint32, indices uintptr, instanceCount int32, baseVertex int32) bool {
+	if c.glDrawElementsInstancedBaseVertex == 0 {
+		return false
+	}
+	syscall.SyscallN(c.glDrawElementsInstancedBaseVertex, uintptr(mode), uintptr(count),
+		uintptr(typ), indices, uintptr(instanceCount), uintptr(baseVertex))
+	return true
 }
 
 // --- Compute Shaders ---

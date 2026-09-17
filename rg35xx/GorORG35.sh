@@ -34,6 +34,13 @@ for f in /sys/class/graphics/fb0/virtual_size /sys/class/graphics/fb0/bits_per_p
 done
 ls -la /dev/disp /dev/fb0 2>/dev/null
 
+# GPU / SDL runtime: the smooth apps here (clock, ROCreader) render via
+# SDL2 with hardware acceleration — record what the device actually has.
+echo "-- /usr/lib GPU/SDL libs:"
+ls /usr/lib/ 2>/dev/null | grep -iE 'SDL|EGL|GLES|mali|gbm|\.so' | grep -iE 'SDL|EGL|GLES|mali|gbm' | head -20
+ls /lib/ 2>/dev/null | grep -iE 'EGL|GLES|mali' | head -10
+echo "  board: $(head -1 /mnt/vendor/oem/board.ini 2>/dev/null)"
+
 cd "$progdir/GorORG35"
 
 # --- 1) display diagnostic: paints fb0 in a loop for ~25s (cycling

@@ -27,6 +27,7 @@ type WorldMode struct {
 	mail              mailState
 	walkCooldownUntil time.Time
 	nextHeldWalkAt    time.Time
+	gamepadDirLogged  bool
 	camera            followCamera
 	cameraShakeStart  time.Time
 	cameraShakeEnd    time.Time

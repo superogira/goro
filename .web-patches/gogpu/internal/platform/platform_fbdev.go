@@ -1150,13 +1150,18 @@ func (p *fbdevPlatform) handleAbs(code uint16, value int32) {
 
 // queueHatKeys posts key events for a d-pad axis change. Caller holds inputMu.
 func (p *fbdevPlatform) queueHatKeys(oldVal, newVal int, negKey, posKey gpucontext.Key) {
+	// Mirror dispatchKey's event shape, including the window ID — without
+	// it the app drops the event on a window that does not exist and the
+	// d-pad goes dead everywhere while A/clicks keep working. dispatchKey
+	// itself cannot be used here: it re-locks inputMu (deadlock).
+	wid := p.windowID()
 	mods := p.mods()
 	post := func(key gpucontext.Key, down bool) {
 		typ := EventKeyUp
 		if down {
 			typ = EventKeyDown
 		}
-		p.events.Push(Event{Type: typ, Key: key, Mods: mods})
+		p.events.Push(Event{Type: typ, WindowID: wid, Key: key, Mods: mods})
 	}
 	if (oldVal < 0) != (newVal < 0) {
 		post(negKey, newVal < 0)

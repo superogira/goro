@@ -20,10 +20,12 @@ import (
 const (
 	// gamepadActionRange bounds the A-button attack/pickup search in tiles.
 	gamepadActionRange = 9.0
-	// gamepadWalkLeadTiles is how far ahead of the player a d-pad walk
-	// request aims; the server pathfinds, so a longer lead means fewer
-	// requests for the same distance.
-	gamepadWalkLeadTiles = 4
+	// gamepadWalkScreenLead is how far ahead of the player's screen
+	// position a d-pad walk aims, in pixels. The world target comes from
+	// projecting that point back through the camera, so the walk direction
+	// is exactly the direction shown on screen regardless of the isometric
+	// camera rotation or zoom.
+	gamepadWalkScreenLead = 160.0
 )
 
 // updateGamepadControls runs the handheld input layer each world frame. It
@@ -70,7 +72,7 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 		}
 	}
 	if bestDistance <= gamepadActionRange {
-		glog.Debugf("gamepad a attack target id=%d name=%q distance=%.1f player=%d,%d", bestActor.ID, bestActor.Name, bestDistance, playerX, playerY)
+		glog.Infof("gamepad a attack target id=%d name=%q distance=%.1f player=%d,%d", bestActor.ID, bestActor.Name, bestDistance, playerX, playerY)
 		m.requestAttack(ctx, bestActor, "gamepad a")
 		return true
 	}
@@ -85,7 +87,7 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 		}
 	}
 	if bestItemDistance <= gamepadActionRange {
-		glog.Debugf("gamepad a pickup target id=%d item_id=%d distance=%.1f player=%d,%d", bestItem.ID, bestItem.ItemID, bestItemDistance, playerX, playerY)
+		glog.Infof("gamepad a pickup target id=%d item_id=%d distance=%.1f player=%d,%d", bestItem.ID, bestItem.ItemID, bestItemDistance, playerX, playerY)
 		m.clearLockedAttack()
 		m.clearAttackFocus()
 		m.requestPickup(ctx, bestItem, "gamepad a")
@@ -95,7 +97,9 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 }
 
 // updateGamepadWalk issues walk requests toward the held d-pad direction.
-// Two held axes combine into a diagonal.
+// The direction is interpreted in screen space and projected through the
+// camera, so "up" always walks toward the top of the screen. Two held axes
+// combine into a diagonal.
 func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, now time.Time) {
 	if pointerBlocked {
 		return
@@ -114,30 +118,39 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 		dy++
 	}
 	if dx == 0 && dy == 0 {
+		m.gamepadDirLogged = false
 		return
+	}
+	// One info line per held direction: proves on the device that the d-pad
+	// reaches the world layer (or not) without debug-level logging.
+	if !m.gamepadDirLogged {
+		m.gamepadDirLogged = true
+		glog.Infof("gamepad walk direction active dir=%d,%d", dx, dy)
 	}
 	if !m.walkReady(now) || (!m.nextHeldWalkAt.IsZero() && now.Before(m.nextHeldWalkAt)) {
 		return
 	}
 	m.nextHeldWalkAt = now.Add(heldWalkRepeatInterval)
 
+	screenW, screenH := ctx.ScreenSize()
+	projection := m.sceneProjection(ctx, screenW, screenH, now)
 	playerX, playerY := currentPlayerCell(ctx, now)
-	for lead := gamepadWalkLeadTiles; lead >= 1; lead-- {
-		targetX, targetY := playerX+dx*lead, playerY+dy*lead
-		if !m.gamepadWalkTarget(ctx, targetX, targetY) {
-			continue
-		}
-		m.cancelAttackIntent()
-		m.requestWalk(ctx, targetX, targetY, "gamepad walk")
+	terrainZ := terrainHeightAt(ctx.World, float64(playerX), float64(playerY))
+	point := projection.Project(cellCenter(float64(playerX)), cellCenter(float64(playerY)), terrainZ)
+	screenX := math.Min(math.Max(float64(point.x)+float64(dx)*gamepadWalkScreenLead, 0), float64(screenW-1))
+	screenY := math.Min(math.Max(float64(point.y)+float64(dy)*gamepadWalkScreenLead, 0), float64(screenH-1))
+	targetX, targetY, ok := clickedWalkTarget(ctx, projection, int(screenX), int(screenY))
+	if !ok || playerAtWalkTarget(ctx.World.Player, targetX, targetY, now) {
 		return
 	}
-}
-
-// gamepadWalkTarget reports whether a d-pad walk destination is a tile the
-// client believes is walkable.
-func (m *WorldMode) gamepadWalkTarget(ctx client.Context, x, y int) bool {
-	if ctx.World == nil || ctx.World.GAT == nil {
-		return walkTargetInBounds(ctx, x, y)
+	// Walking elsewhere is the cancel gesture for in-flight actions, same
+	// as a ground click: stop chasing a pickup target and drop the attack
+	// intent so combat auto-repeat ends.
+	m.pendingPickup = pickupIntent{}
+	m.cancelAttackIntent()
+	if shouldUseTurnOnlyGroundClick(ctx) {
+		m.requestChangeDirection(ctx, targetX, targetY, "gamepad walk")
+		return
 	}
-	return ctx.World.GAT.InBounds(x, y) && ctx.World.GAT.Walkable(x, y)
+	m.requestWalk(ctx, targetX, targetY, "gamepad walk")
 }

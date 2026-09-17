@@ -570,9 +570,16 @@ func (w *fbdevWindow) BlitPixels(pixels []byte, width, height int, bgra bool) er
 	}
 	srcRow := width * 4
 	dstBase := geo.yoffset*geo.lineLength + geo.xoffset*geo.bpp/8
-	for y := 0; y < height && y*stepY < geo.height; y++ {
-		src := pixels[y*srcRow : y*srcRow+srcRow]
-		row := p.fbMem[dstBase+y*stepY*geo.lineLength:]
+	// Iterate DESTINATION rows: with stepY > 1 the old source-row loop
+	// only wrote every stepY-th fb row, leaving the skipped rows showing
+	// whatever was there before (fbtest's red, on the device).
+	for dy := 0; dy < geo.height; dy++ {
+		sy := dy / stepY
+		if sy >= height {
+			break
+		}
+		src := pixels[sy*srcRow : sy*srcRow+srcRow]
+		row := p.fbMem[dstBase+dy*geo.lineLength:]
 		switch geo.bpp {
 		case 32:
 			if stepX == 1 {

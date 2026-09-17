@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -268,6 +269,7 @@ type runner struct {
 	fpsDisplay           float64
 	frameMSDisplay       float64
 	fpsText              string
+	memText              string
 	quit                 func()
 	cpuProfile           *os.File
 	fullscreen           bool
@@ -2295,9 +2297,53 @@ func (r *runner) updateFPSCounter(now time.Time) {
 	r.fpsFrames = 0
 	r.fpsStarted = now
 	r.fpsText = fmt.Sprintf("FPS %.1f  %.2f ms", r.fpsDisplay, r.frameMSDisplay)
+	if mem := processMemoryText(); mem != "" {
+		r.memText = mem
+	}
 	if webFPSReady() {
 		SetWebFPS(r.fpsText)
 	}
+}
+
+// processMemoryText reports the process's own resident and swap usage from
+// /proc/self/status ("MEM 123M SWAP 4M"). Empty on platforms without procfs
+// (windows), which disables the second overlay line there.
+func processMemoryText() string {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return ""
+	}
+	rssKb, swapKb := -1, 0
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("VmRSS:")) {
+			rssKb = procStatusKb(line[len("VmRSS:"):])
+		} else if bytes.HasPrefix(line, []byte("VmSwap:")) {
+			swapKb = procStatusKb(line[len("VmSwap:"):])
+		}
+	}
+	if rssKb < 0 {
+		return ""
+	}
+	return fmt.Sprintf("MEM %dM SWAP %dM", rssKb/1024, swapKb/1024)
+}
+
+// procStatusKb parses the numeric field of a Vm* line ("  123456 kB").
+func procStatusKb(field []byte) int {
+	value := 0
+	for _, b := range field {
+		if b >= '0' && b <= '9' {
+			value = value*10 + int(b-'0')
+			continue
+		}
+		if b == ' ' || b == '\t' {
+			if value > 0 {
+				break // trailing spaces after the number
+			}
+			continue
+		}
+		break
+	}
+	return value
 }
 
 func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {
@@ -2324,13 +2370,43 @@ func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {
 	if err != nil {
 		return fmt.Errorf("draw fps overlay: %w", err)
 	}
-	// Bottom-right corner: clear of the top-left status HUD. Margins match
-	// the previous top-left inset.
+	// Bottom-right corner: clear of the top-left status HUD. The optional
+	// memory line stacks directly beneath the FPS line, both anchored at
+	// the same right margin.
 	margin := 6.0 * deviceScale
-	x := float64(screen.Bounds().Dx()) - float64(cached.width) - margin
-	y := float64(screen.Bounds().Dy()) - float64(cached.height) - margin
-	drawCachedOverlayImage(screen, cached, x, y)
+	memCached, memErr := r.memoryOverlayImage(provider, deviceScale)
+	if memErr != nil {
+		return fmt.Errorf("draw memory overlay: %w", memErr)
+	}
+	stackHeight := float64(cached.height)
+	if memCached.image != nil {
+		stackHeight += float64(memCached.height)
+	}
+	fpsX := float64(screen.Bounds().Dx()) - float64(cached.width) - margin
+	fpsY := float64(screen.Bounds().Dy()) - stackHeight - margin
+	drawCachedOverlayImage(screen, cached, fpsX, fpsY)
+	if memCached.image != nil {
+		memX := float64(screen.Bounds().Dx()) - float64(memCached.width) - margin
+		memY := fpsY + float64(cached.height)
+		drawCachedOverlayImage(screen, memCached, memX, memY)
+	}
 	return nil
+}
+
+// memoryOverlayImage rasterizes the process memory line for the FPS overlay;
+// a zero image when the platform has no procfs or sampling has not produced
+// a value yet.
+func (r *runner) memoryOverlayImage(provider gpucontext.DeviceProvider, deviceScale float64) (cachedOverlayImage, error) {
+	if r.memText == "" {
+		return cachedOverlayImage{}, nil
+	}
+	box := UITextBoxCommand{
+		Text:   r.memText,
+		X:      6,
+		Y:      6,
+		Anchor: UITextBoxAnchorTopLeft,
+	}
+	return r.cachedTextBoxImage(provider, box, deviceScale)
 }
 
 // On-screen fullscreen toggle geometry (logical px). The button sits in the

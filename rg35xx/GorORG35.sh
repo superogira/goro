@@ -41,12 +41,31 @@ ls /usr/lib/ 2>/dev/null | grep -iE 'SDL|EGL|GLES|mali|gbm|\.so' | grep -iE 'SDL
 ls /lib/ 2>/dev/null | grep -iE 'EGL|GLES|mali' | head -10
 echo "  board: $(head -1 /mnt/vendor/oem/board.ini 2>/dev/null)"
 
+# Input arbitration: who else holds the evdev nodes? An exclusive
+# EVIOCGRAB by a system daemon (gptokeyb-style) silently swallows every
+# button event before goro can read it.
+echo "-- processes holding /dev/input/event*:"
+for fdpath in /proc/[0-9]*/fd/*; do
+  target=$(readlink "$fdpath" 2>/dev/null)
+  case "$target" in
+    /dev/input/event*)
+      pid=$(echo "$fdpath" | cut -d/ -f3)
+      echo "  $target <- pid $pid ($(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' '))"
+      ;;
+  esac
+done
+echo "-- running processes:"
+ps -ef 2>/dev/null || ls /proc/[0-9]*/cmdline 2>/dev/null | while read c; do
+  pid=$(echo "$c" | cut -d/ -f3)
+  echo "  $pid: $(tr '\0' ' ' < "$c" 2>/dev/null)"
+done
+
 cd "$progdir/GorORG35"
 
-# --- 1) display diagnostic: paints fb0 in a loop for ~25s (cycling
-# red/green/blue/yellow/white every 5s), verifies writes survive
-# read-back, and probes the mode-setting ioctls. Watch the screen
-# during this phase and check fbtest.log afterwards.
+# --- 1) display diagnostic: paints fb0 in a loop for ~9s (cycling
+# colors), verifies writes survive read-back, and probes the
+# mode-setting ioctls. Watch the screen during this phase and check
+# fbtest.log afterwards.
 if [ -x ./fbtest ] || [ -f ./fbtest ]; then
   chmod +x ./fbtest 2>/dev/null
   echo "-- running fbtest (~9s, watch the screen for colors) --"

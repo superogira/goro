@@ -8,6 +8,8 @@ package gles
 import (
 	"context"
 	"log/slog"
+	"os"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -1507,6 +1509,7 @@ type DrawCommand struct {
 }
 
 func (c *DrawCommand) Execute(ctx *gl.Context) {
+	debugTraceDraw("arrays", c.vertexCount, c.instanceCount)
 	mode := primitiveTopologyToGL(c.topology)
 	if c.instanceCount <= 1 {
 		ctx.DrawArrays(mode, int32(c.firstVertex), int32(c.vertexCount))
@@ -1526,6 +1529,7 @@ type DrawIndexedCommand struct {
 }
 
 func (c *DrawIndexedCommand) Execute(ctx *gl.Context) {
+	debugTraceDraw("indexed", c.indexCount, c.instanceCount)
 	indexType := uint32(gl.UNSIGNED_SHORT)
 	indexSize := uintptr(2)
 	if c.indexFormat == gputypes.IndexFormatUint32 {
@@ -1540,6 +1544,24 @@ func (c *DrawIndexedCommand) Execute(ctx *gl.Context) {
 		ctx.DrawElements(mode, int32(c.indexCount), indexType, offset)
 	} else {
 		ctx.DrawElementsInstanced(mode, int32(c.indexCount), indexType, offset, int32(c.instanceCount))
+	}
+}
+
+// debugDrawTraced counts draws logged by debugTraceDraw; the count also
+// feeds the "draws issued so far" summary line.
+var debugDrawTraced uint32
+
+// debugTraceDraw logs the first draws of the session under
+// GOGPU_GLES_DEBUG_CLEAR=1 — zero-vertex draws are silent on GL yet leave
+// the target untouched, which is exactly the failure mode this catches.
+func debugTraceDraw(kind string, count, instances uint32) {
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") != "1" {
+		return
+	}
+	n := atomic.AddUint32(&debugDrawTraced, 1)
+	if n <= 12 {
+		hal.Logger().Info("gles: draw issued",
+			"kind", kind, "count", count, "instances", instances, "seq", n)
 	}
 }
 

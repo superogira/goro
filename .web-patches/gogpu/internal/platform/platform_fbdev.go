@@ -715,6 +715,7 @@ func (p *fbdevPlatform) startInput() {
 			logger().Info("fbdev: input device open failed", "device", d, "err", err.Error())
 			continue
 		}
+		p.probeEvdevGrab(f, d)
 		p.inputMu.Lock()
 		p.inputs = append(p.inputs, f)
 		p.inputMu.Unlock()
@@ -727,6 +728,23 @@ func (p *fbdevPlatform) startInput() {
 	}
 }
 
+// probeEvdevGrab tests whether another process holds an exclusive
+// EVIOCGRAB on the device: grabbing ourselves succeeds only when nobody
+// else has. An EBUSY answer names the reason no events ever reach us.
+// The grab is released immediately either way.
+func (p *fbdevPlatform) probeEvdevGrab(f *os.File, device string) {
+	const eviocGrab = 0x4590 // _IO('E', 0x90), dir=none size=0
+	grab := int32(1)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), eviocGrab, uintptr(unsafe.Pointer(&grab))); errno != 0 {
+		logger().Info("fbdev: grab probe — device already grabbed by another process",
+			"device", device, "errno", errno.Error())
+		return
+	}
+	release := int32(0)
+	unix.Syscall(unix.SYS_IOCTL, f.Fd(), eviocGrab, uintptr(unsafe.Pointer(&release)))
+	logger().Info("fbdev: grab probe — device not grabbed (events should broadcast)", "device", device)
+}
+
 // readEvents parses one evdev device. struct input_event on 64-bit Linux
 // is {i64 sec, i64 usec, u16 type, u16 code, i32 value} = 24 bytes — the
 // timeval alone is 16. evdev rejects reads smaller than one event with
@@ -735,10 +753,20 @@ func (p *fbdevPlatform) startInput() {
 // one syscall drains the queue.
 func (p *fbdevPlatform) readEvents(f *os.File) {
 	buf := make([]byte, 512)
+	reads := 0
+	loggedErrs := map[string]bool{}
 	for {
 		n, err := f.Read(buf)
 		if p.isClosing() {
 			return
+		}
+		reads++
+		if reads <= 5 || (err != nil && !loggedErrs[err.Error()]) {
+			if err != nil {
+				loggedErrs[err.Error()] = true
+			}
+			logger().Info("fbdev: evdev read outcome",
+				"device", f.Name(), "read", reads, "n", n, "err", errString(err))
 		}
 		if err != nil {
 			if err.Error() == "EOF" {
@@ -790,6 +818,13 @@ func (p *fbdevPlatform) isClosing() bool {
 	p.inputMu.Lock()
 	defer p.inputMu.Unlock()
 	return p.closing
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // setHeld records press/release of a quit-combo button.

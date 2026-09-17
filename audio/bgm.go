@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,15 +29,17 @@ const maxPCM16 = 32767
 type BGM struct {
 	resources  *res.Manager
 	context    *oto.Context
+	output     audioOutput
+	backend    string
 	sampleRate int
-	player     *oto.Player
+	player     audioPlayer
 	table      map[string]string
 	current    string
 	playerID   int
 	enabled    bool
 	bgmVolume  float64
 	sfxVolume  float64
-	sfxPlayers []*oto.Player
+	sfxPlayers []audioPlayer
 	disabled   bool
 
 	// sfxCache holds decoded, context-rate PCM per source path so repeated
@@ -48,13 +51,14 @@ type BGM struct {
 	sfxCacheTick  int64
 }
 
-func NewBGM(resources *res.Manager, enabled bool, bgmVolume, sfxVolume float64, disabled bool) *BGM {
+func NewBGM(resources *res.Manager, enabled bool, bgmVolume, sfxVolume float64, disabled bool, backend string) *BGM {
 	return &BGM{
 		resources: resources,
 		enabled:   enabled && !disabled,
 		bgmVolume: clampVolume(bgmVolume),
 		sfxVolume: clampVolume(sfxVolume),
 		disabled:  disabled,
+		backend:   backend,
 	}
 }
 
@@ -113,8 +117,11 @@ func (b *BGM) PlayMap(mapName string) (string, error) {
 	}
 	if sameAudioPath(path, b.current) && b.player != nil {
 		if !b.player.IsPlaying() {
-			glog.Debugf("bgm resume existing id=%d path=%s", b.playerID, b.current)
-			b.player.Play()
+			// External PCM players cannot resume mid-stream; restart.
+			glog.Debugf("bgm restart existing id=%d path=%s", b.playerID, b.current)
+			if err := b.Play(path); err != nil {
+				return b.current, err
+			}
 		} else {
 			glog.Debugf("bgm keep existing id=%d path=%s", b.playerID, b.current)
 		}
@@ -143,7 +150,7 @@ func (b *BGM) Play(path string) error {
 	if err != nil {
 		return fmt.Errorf("decode %s: %w", source, err)
 	}
-	context := b.ensureContext(outputSampleRateForSource(sourceRate))
+	context := b.ensureOutput(outputSampleRateForSource(sourceRate))
 	if context == nil {
 		return fmt.Errorf("audio context unavailable")
 	}
@@ -159,7 +166,6 @@ func (b *BGM) Play(path string) error {
 	loop := newInfinitePCM(pcm)
 	player := context.NewPlayer(loop)
 	player.SetVolume(b.bgmVolume)
-
 	b.stopCurrent()
 	b.playerID++
 	b.player = player
@@ -537,6 +543,39 @@ func (b *BGM) ensureContext(preferredSampleRate int) *oto.Context {
 	return b.context
 }
 
+// ensureOutput lazily builds the player factory for the configured backend:
+// an external player fed raw PCM over stdin (mpv/aplay, the path that
+// actually opens the speaker on the rg35xx) or the in-process oto driver.
+func (b *BGM) ensureOutput(preferredSampleRate int) audioOutput {
+	if b.output != nil {
+		return b.output
+	}
+	name := resolveAudioBackend(b.backend)
+	switch name {
+	case "mpv", "aplay":
+		if _, err := exec.LookPath(name); err != nil {
+			glog.Warnf("audio backend %s not found, falling back to oto: %v", name, err)
+			name = "oto"
+		}
+	}
+	if name == "mpv" || name == "aplay" {
+		if preferredSampleRate <= 0 {
+			preferredSampleRate = defaultSampleRate
+		}
+		b.sampleRate = preferredSampleRate
+		b.output = newPipeOutput(name, preferredSampleRate)
+		glog.Infof("audio backend selected name=%s sample_rate=%d", b.output.Name(), preferredSampleRate)
+		return b.output
+	}
+	context := b.ensureContext(preferredSampleRate)
+	if context == nil {
+		return nil
+	}
+	b.output = otoOutput{context: context}
+	glog.Infof("audio backend selected name=oto sample_rate=%d", b.sampleRate)
+	return b.output
+}
+
 func (b *BGM) Stop() {
 	if b == nil {
 		return
@@ -551,7 +590,8 @@ func (b *BGM) stopCurrent() {
 		return
 	}
 	glog.Debugf("bgm stopping id=%d path=%s playing=%t", b.playerID, b.current, b.player.IsPlaying())
-	b.player.Pause()
+	// Close (not just Pause) so streamed external players are reaped too.
+	_ = b.player.Close()
 	b.player = nil
 }
 

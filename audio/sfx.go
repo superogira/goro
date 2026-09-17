@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/ebitengine/oto/v3"
 	"github.com/kivutar/goro/res"
 )
 
@@ -99,8 +98,8 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	context := b.ensureContext(defaultSampleRate)
-	if context == nil {
+	output := b.ensureOutput(defaultSampleRate)
+	if output == nil {
 		return "", fmt.Errorf("audio context unavailable")
 	}
 	// Map ambient sounds retrigger every RSW cycle; re-reading and re-decoding
@@ -108,7 +107,7 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	// devices. The decoded PCM is cached per source, so steady-state plays
 	// cost a map lookup and a player creation.
 	if pcm, source, ok := b.cachedSFXPCM(path); ok {
-		b.startSFXPlayer(context, pcm, volume)
+		b.startSFXPlayer(output, pcm, volume)
 		return source, nil
 	}
 	data, source, err := readSFXFile(b.resources, path)
@@ -126,12 +125,15 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 		}
 	}
 	b.storeSFXPCM(path, source, pcm)
-	b.startSFXPlayer(context, pcm, volume)
+	b.startSFXPlayer(output, pcm, volume)
 	return source, nil
 }
 
-func (b *BGM) startSFXPlayer(context *oto.Context, pcm []byte, volume float64) {
-	player := context.NewPlayer(bytes.NewReader(pcm))
+func (b *BGM) startSFXPlayer(output audioOutput, pcm []byte, volume float64) {
+	player := output.NewPlayer(bytes.NewReader(pcm))
+	if player == nil {
+		return
+	}
 	player.SetVolume(b.sfxVolume * clampVolume(volume))
 	b.trimSFXPlayers()
 	b.sfxPlayers = append(b.sfxPlayers, player)
@@ -168,7 +170,7 @@ func (b *BGM) stopSFX() {
 		if player == nil {
 			continue
 		}
-		player.Pause()
+		_ = player.Close()
 	}
 	b.sfxPlayers = nil
 }

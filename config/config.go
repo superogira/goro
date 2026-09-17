@@ -67,6 +67,11 @@ type AudioConfig struct {
 	BGM       bool
 	BGMVolume float64
 	SFXVolume float64
+	// Backend selects the audio output: "auto" (external player on linux,
+	// oto elsewhere), "oto" (in-process driver), "mpv" or "aplay" (raw PCM
+	// piped to the external player's stdin — the working path on devices
+	// where the in-process driver never opens a PCM stream).
+	Backend string
 	// LoginBGMPool is a comma-separated list of BGM files the title screen
 	// picks from at random each launch ("01.mp3,08.mp3"). Empty keeps the
 	// classic single track.
@@ -282,6 +287,7 @@ func defaultConfig() Config {
 			BGM:       true,
 			BGMVolume: 0.55,
 			SFXVolume: 0.55,
+			Backend:   "auto",
 		},
 		Render: RenderConfig{
 			GraphicsAPI:        "vulkan",
@@ -368,6 +374,7 @@ func applyCLI(cfg *Config, args []string) error {
 	fs.BoolVar(&cfg.Audio.Disabled, "no-audio", cfg.Audio.Disabled, "disable all audio output")
 	fs.Float64Var(&cfg.Audio.BGMVolume, "bgm-volume", cfg.Audio.BGMVolume, "BGM volume from 0 to 1")
 	fs.Float64Var(&cfg.Audio.SFXVolume, "sfx-volume", cfg.Audio.SFXVolume, "SFX volume from 0 to 1")
+	fs.StringVar(&cfg.Audio.Backend, "audio-backend", cfg.Audio.Backend, "audio backend: auto, oto, mpv, aplay")
 	fs.StringVar(&cfg.Render.GraphicsAPI, "graphics-api", cfg.Render.GraphicsAPI, "graphics API: auto, vulkan, dx12, metal, gles, software")
 	fs.StringVar(&cfg.Render.PowerPreference, "power-preference", cfg.Render.PowerPreference, "GPU power preference: low, high")
 	fs.BoolVar(&cfg.Render.ForceSoftware, "gpu-software", cfg.Render.ForceSoftware, "request the software GPU adapter")
@@ -491,6 +498,8 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setFloat(value, &cfg.Audio.BGMVolume)
 	case "audio.sfxvolume":
 		return setFloat(value, &cfg.Audio.SFXVolume)
+	case "audio.backend":
+		cfg.Audio.Backend = strings.TrimSpace(value)
 	case "audio.loginbgmpool": // ini keys are normalized: underscores stripped
 		cfg.Audio.LoginBGMPool = strings.TrimSpace(value)
 	case "background.titlepool":

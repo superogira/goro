@@ -10,7 +10,7 @@ type BGM struct {
 	disabled  bool
 }
 
-func NewBGM(_ *res.Manager, _ bool, bgmVolume, sfxVolume float64, disabled bool) *BGM {
+func NewBGM(_ *res.Manager, _ bool, bgmVolume, sfxVolume float64, disabled bool, _ string) *BGM {
 	return &BGM{
 		bgmVolume: clampVolume(bgmVolume),
 		sfxVolume: clampVolume(sfxVolume),

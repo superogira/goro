@@ -106,44 +106,12 @@ if [ -n "$host" ]; then
   getent hosts "$host" 2>/dev/null || echo "  FAILED: hostname does not resolve (DDNS expired/IP changed?)"
 fi
 
-# mpv self-test: a 2s generated tone through mpv+ALSA right at launch —
-# an audible beep proves the whole chain works before the game even starts,
-# and the rc/timing/stderr in the log show what happens when it doesn't.
-# The second test replays the same tone as a RAW stream through the exact
-# option set the game uses, so an option mpv rejects dies here, visibly.
-if command -v mpv >/dev/null 2>&1; then
-  echo "-- mpv version: $(mpv --version 2>&1 | head -1)"
-  echo "-- aplay: $(command -v aplay || echo missing)"
-  if python3 - >/dev/null 2>&1 <<'PYEOF'
-import math, struct, wave
-w = wave.open('/tmp/goro-tone.wav', 'w')
-w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
-w.writeframes(b''.join(struct.pack('<hh',
-    int(9000*math.sin(i*0.09)), int(9000*math.sin(i*0.09)))
-    for i in range(44100*2)))
-w.close()
-PYEOF
-  then
-    t0=$(date +%s)
-    cat /tmp/goro-tone.wav | timeout 8 mpv --no-video --ao=alsa - >/dev/null 2>/tmp/goro-mpv-test.log
-    rc=$?
-    t1=$(date +%s)
-    echo "-- mpv wav test rc=$rc elapsed=$((t1-t0))s (a beep should have played) stderr:"
-    head -c 400 /tmp/goro-mpv-test.log 2>/dev/null | tr '\r' '\n' | tail -3 | sed 's/^/    /'
-    # Raw-stream test with the game's exact option set (second beep).
-    tail -c +45 /tmp/goro-tone.wav | timeout 8 mpv --no-video --ao=alsa \
-      --demuxer=rawaudio --demuxer-rawaudio-format=s16le \
-      --demuxer-rawaudio-rate=44100 --demuxer-rawaudio-channels=stereo - \
-      >/dev/null 2>/tmp/goro-mpv-raw.log
-    rc=$?
-    echo "-- mpv raw test rc=$rc (a second beep should have played) stderr:"
-    head -c 600 /tmp/goro-mpv-raw.log 2>/dev/null | tr '\r' '\n' | grep -v '^$' | tail -5 | sed 's/^/    /'
-  else
-    echo "-- python3 unavailable, tone test skipped"
-  fi
-else
-  echo "-- mpv not found in PATH"
-fi
+# Audio bring-up notes (solved, kept for reference): the in-process oto
+# driver never opens a PCM stream on this firmware, so the game pipes a
+# software-mixed s16le stream into one mpv process (--ao=alsa, see
+# audio/pipe_output.go). The launch-time beep self-tests and the PCM
+# watcher were removed once confirmed working; the log still records the
+# audio backend and master stream start from the game itself.
 
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
@@ -151,18 +119,6 @@ export GOGPU_LOG=info
 # ALSA: prefer the speaker codec (card 0) over the HDMI card (card 2)
 # whenever the audio library resolves the "default" device.
 export ALSA_CARD="${ALSA_CARD:-0}"
-# Watch whether goro actually opens a PCM stream while playing (bounded,
-# ~2 minutes of samples, a few hundred bytes).
-(
-  for i in 1 2 3 4 5 6; do
-    sleep 20
-    echo "-- pcm stream state (t+$((i*20))s):"
-    for c in /proc/asound/card0/pcm0p/sub0/hw_params /proc/asound/card2/pcm0p/sub0/hw_params; do
-      echo "  $c:"
-      sed 's/^/    /' "$c" 2>/dev/null || echo "    (closed)"
-    done
-  done
-) &
 # The app context defines neither HOME nor XDG_CONFIG_HOME; without them
 # os.UserConfigDir() fails and goro logs "login ID save failed". Keep the
 # user store on the SD card, in a dedicated dir: pointing XDG at the app

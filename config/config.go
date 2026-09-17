@@ -16,6 +16,7 @@ import (
 
 type Config struct {
 	Background    BackgroundConfig
+	UI            UIConfig
 	Headless      bool
 	DataDir       string
 	Window        WindowConfig
@@ -86,6 +87,14 @@ type BackgroundConfig struct {
 	// LoadingPool feeds the Now Loading cover shown during character-select
 	// handoff and map changes; one random pick per loading event.
 	LoadingPool string
+}
+
+type UIConfig struct {
+	// HideHUD suppresses the permanent on-screen HUD (basic info + menu,
+	// minimap, shortcut bar, chat console) while a handheld-specific layout
+	// is designed. Windows opened on demand (inventory, skills, ...) are
+	// unaffected.
+	HideHUD bool
 }
 
 type RenderConfig struct {
@@ -506,6 +515,8 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		cfg.Background.TitlePool = strings.TrimSpace(value)
 	case "background.loadingpool":
 		cfg.Background.LoadingPool = strings.TrimSpace(value)
+	case "ui.hidehud":
+		return setBool(value, &cfg.UI.HideHUD)
 	case "render.graphicsapi":
 		cfg.Render.GraphicsAPI = value
 	case "render.powerpreference":

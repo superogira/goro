@@ -762,7 +762,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
 		return nil, nil
 	}
-	m.ui.console.UpdatePresentation(ctx)
+	if !hudHidden(ctx) {
+		m.ui.console.UpdatePresentation(ctx)
+	}
 	if progressBlocksActions {
 		return nil, nil
 	}
@@ -796,7 +798,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.chatShortcutFromInput(ctx) || m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) {
 		return nil, nil
 	}
-	if !dead && !m.ui.nonConsoleKeyboardInputBlocked(ctx) && m.ui.shortcutBar.UpdateKeyboardInput(ctx, m, m.ui.console.Active()) {
+	if !dead && !hudHidden(ctx) && !m.ui.nonConsoleKeyboardInputBlocked(ctx) && m.ui.shortcutBar.UpdateKeyboardInput(ctx, m, m.ui.console.Active()) {
 		return nil, nil
 	}
 	if dead {
@@ -1067,7 +1069,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.guildWindow.UpdateDrag(ctx, &m.ui.shortcutBar) {
 		return nil, nil
 	}
-	if m.ui.shortcutBar.Update(ctx, m) {
+	if !hudHidden(ctx) && m.ui.shortcutBar.Update(ctx, m) {
 		return nil, nil
 	}
 	if m.ui.mailWindow.Update(ctx, &m.ui.itemWindows) {
@@ -1181,12 +1183,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	}
 	m.drainCameraButtons(ctx)
 	m.ui.basicMenu.DrainWebActions(ctx, m.basicMenuCallbacks(ctx))
-	if !m.ui.keyboardInputBlocked(ctx) {
+	if !hudHidden(ctx) && !m.ui.keyboardInputBlocked(ctx) {
 		if m.ui.basicMenu.Update(ctx, m.basicMenuCallbacks(ctx)) {
 			return nil, nil
 		}
 	}
-	minimapDragging := m.ui.minimap.Update(ctx)
+	minimapDragging := !hudHidden(ctx) && m.ui.minimap.Update(ctx)
 	m.syncLevel99AuraEffects(ctx, now)
 	pointerBlocked := minimapDragging || m.mapPointerBlocked(ctx)
 	if !pointerBlocked {

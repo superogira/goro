@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"image"
 	"os"
-	"time"
+	"strings"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -156,21 +156,14 @@ func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects [
 
 	surf.blitSwapchainToDefault()
 
-	// Diagnostic: one-shot GL state + swapchain FBO probe right after
-	// the blit, on frame 30 — tells us the blit's GL error state and
-	// whether the swapchain FBO holds non-black pixels at all.
+	// Diagnostic: full swapchain-FBO scan at frames 1 and 120 (GOGPU_GLES_DEBUG_CLEAR=1).
+	// Counts non-black pixels across the whole FBO and samples a 4x4 grid, plus
+	// the GL error state after the blit — separates "renders never land in the
+	// FBO" (all black) from "content exists but the blit/swap loses it".
 	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
-		surf.debugProbeOnce.Do(func() {
-			time.Sleep(500 * time.Millisecond) // let frames accumulate
-			glErr := q.glCtx.GetError()
-			q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, surf.swapchainFBO)
-			var buf [16]byte
-			q.glCtx.ReadPixels(0, int32(surf.fboHeight/2), 4, 1, gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&buf[0]))
-			hal.Logger().Info("gles: swapchain probe",
-				"glError", fmt.Sprintf("0x%x", glErr),
-				"pixels", fmt.Sprintf("% x", buf[:]))
-			q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, 0)
-		})
+		if n := surf.probeCount.Add(1); n == 1 || n == 120 {
+			q.probeSwapchain(surf, n)
+		}
 	}
 
 	// Diagnostic: magenta-marker mode. The bottom 40px strip is flooded
@@ -218,6 +211,44 @@ func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects [
 	}
 
 	return nil
+}
+
+// probeSwapchain reads back the whole swapchain FBO once and reports how
+// much of it is non-black, a 4x4 pixel grid across the surface, and the
+// pending GL error (which at this point includes any error the blit left).
+func (q *Queue) probeSwapchain(surf *Surface, frame uint32) {
+	w, h := int(surf.fboWidth), int(surf.fboHeight)
+	if w <= 0 || h <= 0 {
+		return
+	}
+	glErr := q.glCtx.GetError()
+	q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, surf.swapchainFBO)
+	buf := make([]byte, w*h*4)
+	q.glCtx.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&buf[0]))
+	readErr := q.glCtx.GetError()
+	nonBlack := 0
+	for i := 0; i < len(buf); i += 4 {
+		if buf[i] != 0 || buf[i+1] != 0 || buf[i+2] != 0 {
+			nonBlack++
+		}
+	}
+	var grid strings.Builder
+	for gy := 0; gy < 4; gy++ {
+		for gx := 0; gx < 4; gx++ {
+			x := w * (2*gx + 1) / 8
+			y := h * (2*gy + 1) / 8
+			o := (y*w + x) * 4
+			fmt.Fprintf(&grid, "(%d,%d)=%02x%02x%02x ", x, y, buf[o], buf[o+1], buf[o+2])
+		}
+	}
+	hal.Logger().Info("gles: swapchain probe",
+		"frame", frame,
+		"glErrorAfterBlit", fmt.Sprintf("0x%x", glErr),
+		"glErrorAfterRead", fmt.Sprintf("0x%x", readErr),
+		"nonBlack", nonBlack,
+		"total", w*h,
+		"grid", grid.String())
+	q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, 0)
 }
 
 // GetTimestampPeriod returns the timestamp period in nanoseconds.

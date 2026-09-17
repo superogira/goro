@@ -192,10 +192,15 @@ type fbdevPlatform struct {
 	varBuf [160]byte
 	// gles enables GPU rendering through EGL on the framebuffer (the
 	// sunxi Mali stack); eglWin backs eglCreateWindowSurface.
-	gles             bool
-	eglWin           fbdevEGLWindow
-	eglWinOK         bool
-	menuHeld         time.Time
+	gles     bool
+	eglWin   fbdevEGLWindow
+	eglWinOK bool
+	// held maps currently-pressed evdev button codes to press time; the
+	// quit watcher closes the window once a quit combo stays held long
+	// enough (MENU / SELECT / SELECT+START / L1+R1 — several paths so a
+	// mis-mapped MENU button can never trap the user inside the app).
+	held             map[uint16]time.Time
+	seenCodes        map[uint16]bool
 	buttons          gpucontext.Buttons
 	axes             map[uint16]int32
 	hatX, hatY       int
@@ -268,8 +273,11 @@ func (p *fbdevPlatform) Init() error {
 	if os.Getenv("GOGPU_FB_PROBE") == "color" {
 		p.probeBufferColors()
 	}
+	p.held = make(map[uint16]time.Time)
+	p.seenCodes = make(map[uint16]bool)
 	p.startInput()
 	go p.cursorLoop()
+	go p.quitWatcher()
 	return nil
 }
 
@@ -677,6 +685,15 @@ func (p *fbdevPlatform) startInput() {
 	if os.Getenv("GOGPU_INPUT_NONE") == "1" {
 		return
 	}
+	// The kernel's own input inventory: one block per evdev device with its
+	// name, handlers (eventN) and KEY/BTN capability bitmask. Decoding the
+	// mask tells us exactly which button codes the hardware can send — the
+	// ground truth when hunting a button that never reaches handleKey.
+	if b, err := os.ReadFile("/proc/bus/input/devices"); err == nil {
+		logger().Info("fbdev: kernel input inventory (/proc/bus/input/devices)", "dump", string(b))
+	} else {
+		logger().Info("fbdev: /proc/bus/input/devices unavailable", "err", err.Error())
+	}
 	glob := os.Getenv("GOGPU_INPUT_GLOB")
 	if glob == "" {
 		glob = "/dev/input/event*"
@@ -686,6 +703,7 @@ func (p *fbdevPlatform) startInput() {
 	for _, d := range devs {
 		f, err := os.OpenFile(d, os.O_RDONLY|unix.O_NONBLOCK, 0)
 		if err != nil {
+			logger().Info("fbdev: input device open failed", "device", d, "err", err.Error())
 			continue
 		}
 		p.inputMu.Lock()
@@ -693,6 +711,7 @@ func (p *fbdevPlatform) startInput() {
 		p.inputMu.Unlock()
 		go p.readEvents(f)
 		opened++
+		logger().Info("fbdev: input device listening", "device", d)
 	}
 	if opened > 0 {
 		logger().Info("fbdev: listening to input devices", "count", opened)
@@ -737,6 +756,79 @@ func (p *fbdevPlatform) isClosing() bool {
 	return p.closing
 }
 
+// setHeld records press/release of a quit-combo button.
+func (p *fbdevPlatform) setHeld(code uint16, down bool) {
+	p.inputMu.Lock()
+	defer p.inputMu.Unlock()
+	if p.held == nil {
+		return
+	}
+	if down {
+		if _, ok := p.held[code]; !ok {
+			p.held[code] = time.Now()
+		}
+	} else {
+		delete(p.held, code)
+	}
+}
+
+// logUnknownCode surfaces unmapped evdev codes, once per code on press —
+// the diagnostic that reveals what code MENU (or any stray button) really
+// sends on a given device.
+func (p *fbdevPlatform) logUnknownCode(code uint16, down bool) {
+	if !down {
+		return
+	}
+	p.inputMu.Lock()
+	seen := p.seenCodes[code]
+	p.seenCodes[code] = true
+	p.inputMu.Unlock()
+	if !seen {
+		logger().Info("fbdev: unmapped input code", "code", fmt.Sprintf("0x%x (%d)", code, code))
+	}
+}
+
+// quitWatcher closes the window once a quit combo has stayed held long
+// enough: MENU ≥1.2s, SELECT ≥3s, SELECT+START ≥1.2s, or L1+R1 ≥1.5s.
+// Several paths because the MENU button's evdev code is not confirmed on
+// this hardware yet, while SELECT/START/L1/R1 mappings are proven. The
+// ticker fires even if the release event never arrives.
+func (p *fbdevPlatform) quitWatcher() {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if p.isClosing() {
+			return
+		}
+		now := time.Now()
+		p.inputMu.Lock()
+		via := ""
+		if t0, ok := p.held[btnMode]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+			via = "MENU"
+		} else if t0, ok := p.held[btnSelect]; ok && now.Sub(t0) >= 3000*time.Millisecond {
+			via = "SELECT"
+		} else if ts, okS := p.held[btnSelect]; okS {
+			if tt, okT := p.held[btnStart]; okT &&
+				now.Sub(ts) >= 1200*time.Millisecond && now.Sub(tt) >= 1200*time.Millisecond {
+				via = "SELECT+START"
+			}
+		} else if tl, okL := p.held[btnTL]; okL {
+			if tr, okR := p.held[btnTR]; okR &&
+				now.Sub(tl) >= 1500*time.Millisecond && now.Sub(tr) >= 1500*time.Millisecond {
+				via = "L1+R1"
+			}
+		}
+		p.inputMu.Unlock()
+		if via != "" {
+			logger().Info("fbdev: quit combo held — closing window", "combo", via)
+			if w := p.window; w != nil {
+				w.Close()
+			}
+			return
+		}
+	}
+}
+
 func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	var button gpucontext.Buttons
 	var key gpucontext.Key
@@ -751,35 +843,24 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		key = gpucontext.KeySpace
 	case btnTL:
 		key = gpucontext.KeyF1
+		p.setHeld(btnTL, down)
 	case btnTR:
 		key = gpucontext.KeyF2
+		p.setHeld(btnTR, down)
 	case btnTL2:
 		key = gpucontext.KeyF3
 	case btnTR2:
 		key = gpucontext.KeyF4
 	case btnSelect:
 		key = gpucontext.KeyEscape
-	case btnMode:
-		// MENU: hold ~1.5s to quit the app outright — the escape hatch
-		// so a misbehaving frame never forces a device reboot.
-		if down {
-			p.inputMu.Lock()
-			p.menuHeld = time.Now()
-			p.inputMu.Unlock()
-		} else {
-			p.inputMu.Lock()
-			held := time.Since(p.menuHeld)
-			p.menuHeld = time.Time{}
-			p.inputMu.Unlock()
-			if held >= 1500*time.Millisecond {
-				if w := p.window; w != nil {
-					logger().Info("fbdev: MENU held — closing window")
-					w.Close()
-				}
-			}
-		}
+		p.setHeld(btnSelect, down)
 	case btnStart:
 		key = gpucontext.KeyEnter
+		p.setHeld(btnStart, down)
+	case btnMode:
+		// MENU feeds the quit watcher only (see quitWatcher); it is not
+		// mapped to a game key.
+		p.setHeld(btnMode, down)
 	case btnThumbl:
 		key = gpucontext.KeyTab
 	case btnThumbr:
@@ -801,6 +882,9 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 				p.alt = down
 				p.inputMu.Unlock()
 			}
+		}
+		if key == 0 || key == gpucontext.KeyUnknown {
+			p.logUnknownCode(code, down)
 		}
 	}
 

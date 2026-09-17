@@ -35,31 +35,31 @@ const (
 )
 
 type varScreeninfo struct {
-	xres, yres, xresVirtual, yresVirtual, xoffset, yoffset uint32
-	bitsPerPixel, grayscale                               uint32
-	red, green, blue, transp                              [2]uint32
-	nonstd, activate, height, width, accelFlags           uint32
+	xres, yres, xresVirtual, yresVirtual, xoffset, yoffset      uint32
+	bitsPerPixel, grayscale                                     uint32
+	red, green, blue, transp                                    [2]uint32
+	nonstd, activate, height, width, accelFlags                 uint32
 	pixclock, leftMargin, rightMargin, upperMargin, lowerMargin uint32
-	hsyncLen, vsyncLen, sync, vmode, rotate, colorspace   uint32
-	reserved                                              [4]uint32
+	hsyncLen, vsyncLen, sync, vmode, rotate, colorspace         uint32
+	reserved                                                    [4]uint32
 }
 
 type fixScreeninfo struct {
-	id            [16]byte
-	smemStart     uintptr
-	smemLen       uint32
-	_type         uint16
-	typeAux       uint16
-	visual        uint16
-	xpanstep      uint16
-	ypanstep      uint16
+	id           [16]byte
+	smemStart    uintptr
+	smemLen      uint32
+	_type        uint16
+	typeAux      uint16
+	visual       uint16
+	xpanstep     uint16
+	ypanstep     uint16
 	ywrapstep    uint16
-	lineLength    uint32
-	mmioStart     uintptr
-	mmioLen       uint32
-	accel         uint16
-	capabilities  uint16
-	reserved      [2]uint16
+	lineLength   uint32
+	mmioStart    uintptr
+	mmioLen      uint32
+	accel        uint16
+	capabilities uint16
+	reserved     [2]uint16
 }
 
 var logFile *os.File
@@ -144,13 +144,14 @@ func main() {
 		}
 	}
 
-	// --- 2. hammer the panel for 25s, cycling colors every 5s ---
+	// --- 2. hammer the panel for 6s, cycling colors every 1.5s ---
+	// (was 25s/5s; the pipeline is proven, this is just a visible sanity flash)
 	palette := [][3]byte{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {255, 255, 255}}
 	names := []string{"red", "green", "blue", "yellow", "white"}
 	start := time.Now()
 	writes := 0
-	for elapsed := 0; elapsed < 25; {
-		stage := (elapsed / 5) % len(palette)
+	for elapsed := 0; elapsed < 6; {
+		stage := (elapsed * 10 / 15) % len(palette)
 		c := palette[stage]
 		paint(mem, lineLen, c[0], c[1], c[2], c[0], c[1], c[2])
 		writes++
@@ -178,7 +179,7 @@ func main() {
 	}
 	// paint one more full red after the modeset
 	paint(mem, lineLen, 255, 0, 0, 255, 0, 0)
-	time.Sleep(3 * time.Second)
+	time.Sleep(1500 * time.Millisecond)
 	logf("=== fbtest done — did any color appear on the panel? ===")
 }
 

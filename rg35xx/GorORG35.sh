@@ -49,7 +49,7 @@ cd "$progdir/GorORG35"
 # during this phase and check fbtest.log afterwards.
 if [ -x ./fbtest ] || [ -f ./fbtest ]; then
   chmod +x ./fbtest 2>/dev/null
-  echo "-- running fbtest (~28s, watch the screen for colors) --"
+  echo "-- running fbtest (~9s, watch the screen for colors) --"
   ./fbtest .
   echo "fbtest exited: $?"
 fi

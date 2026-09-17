@@ -472,6 +472,7 @@ type RenderPassEncoder struct {
 	desc          *hal.RenderPassDescriptor
 	pipeline      *RenderPipeline
 	vertexBuffers []*Buffer
+	vertexOffsets []uint64
 	indexBuffer   *Buffer
 	indexFormat   gputypes.IndexFormat
 	stencilRef    uint32
@@ -570,6 +571,27 @@ func (e *RenderPassEncoder) SetPipeline(pipeline hal.RenderPipeline) {
 			stencilRef:   e.stencilRef,
 		},
 	)
+	// Re-apply vertex attribs for buffers bound before the pipeline. The
+	// attrib layout lives in the pipeline, so a SetVertexBuffer that ran
+	// first could not configure anything (layout nil) — without this
+	// re-bind every vertex reads as the constant (0,0,0,1) and all
+	// triangles collapse to zero area, leaving the target untouched with
+	// no GL error.
+	for slot, buf := range e.vertexBuffers {
+		if buf == nil {
+			continue
+		}
+		var layout *gputypes.VertexBufferLayout
+		if int(slot) < len(p.vertexBuffers) {
+			layout = &p.vertexBuffers[slot]
+		}
+		e.encoder.commands = append(e.encoder.commands, &SetVertexBufferCommand{
+			slot:   uint32(slot),
+			buffer: buf,
+			offset: e.vertexOffsets[slot],
+			layout: layout,
+		})
+	}
 }
 
 // SetBindGroup sets a bind group.
@@ -609,8 +631,10 @@ func (e *RenderPassEncoder) SetVertexBuffer(slot uint32, buffer hal.Buffer, offs
 	// Grow slice if needed
 	for len(e.vertexBuffers) <= int(slot) {
 		e.vertexBuffers = append(e.vertexBuffers, nil)
+		e.vertexOffsets = append(e.vertexOffsets, 0)
 	}
 	e.vertexBuffers[slot] = buf
+	e.vertexOffsets[slot] = offset
 
 	// Get vertex layout from the current pipeline for this slot.
 	var layout *gputypes.VertexBufferLayout

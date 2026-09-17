@@ -4,6 +4,7 @@ import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/input"
@@ -14,6 +15,7 @@ type WindowOption func(*windowConfig)
 
 type windowConfig struct {
 	title        string
+	titleSignal  state.ReadonlySignal[string]
 	closeButton  bool
 	titleButtons []windowTitleButton
 	content      widget.Widget
@@ -56,8 +58,15 @@ func Win(options ...WindowOption) widget.Widget {
 
 	children := make([]widget.Widget, 0, 3)
 	if cfg.titleBar {
+		var title widget.Widget = rotheme.Title(cfg.title)
+		if cfg.titleSignal != nil {
+			title = &windowTitleText{
+				TextWidget: rotheme.Title("").ContentSignal(cfg.titleSignal),
+				signal:     cfg.titleSignal,
+			}
+		}
 		titleContent := primitives.HBox(
-			rotheme.Title(cfg.title),
+			title,
 			primitives.Expanded(primitives.Box()),
 			windowTitleButtons(cfg.titleButtons, cfg.closeButton, cfg.onClose),
 		).
@@ -115,9 +124,23 @@ func Win(options ...WindowOption) widget.Widget {
 	return &windowFrame{BoxWidget: box, onClose: cfg.onClose}
 }
 
+// windowFrame retains the title-bar close action for keyboard closing
+// too, so Escape runs the same cleanup (cancel packets, teardown) as X.
 type windowFrame struct {
 	*primitives.BoxWidget
 	onClose func()
+}
+
+// Unlike a paint-only text binding, a title change also affects header layout.
+type windowTitleText struct {
+	*primitives.TextWidget
+	signal state.ReadonlySignal[string]
+}
+
+func (t *windowTitleText) Mount(ctx widget.Context) {
+	if scheduler := ctx.Scheduler(); scheduler != nil {
+		t.AddBinding(state.BindToSchedulerLayout(t.signal, t, scheduler))
+	}
 }
 
 func windowBodyColor(opacity float32) widget.Color {
@@ -129,6 +152,13 @@ func windowBodyColor(opacity float32) widget.Color {
 func Title(title string) WindowOption {
 	return func(cfg *windowConfig) {
 		cfg.title = title
+	}
+}
+
+// TitleSignal updates the title without rebuilding the header's controls.
+func TitleSignal(title state.ReadonlySignal[string]) WindowOption {
+	return func(cfg *windowConfig) {
+		cfg.titleSignal = title
 	}
 }
 
@@ -209,7 +239,9 @@ func windowTitleButtons(buttons []windowTitleButton, closeButton bool, onClose f
 	for _, button := range buttons {
 		children = append(children, windowTitleIconButton(button.kind, button.onClick))
 	}
-	children = append(children, windowCloseButton(closeButton, onClose))
+	if closeButton || len(buttons) == 0 {
+		children = append(children, windowCloseButton(closeButton, onClose))
+	}
 	return primitives.HBox(children...).
 		Gap(windowTitleButtonGap).
 		CrossAlign(primitives.CrossAxisCenter)

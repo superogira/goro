@@ -15,6 +15,8 @@ import (
 )
 
 type Config struct {
+	// ConfigPath is the absolute file path selected by LoadConfig for saving settings.
+	ConfigPath    string
 	Background    BackgroundConfig
 	Headless      bool
 	DataDir       string
@@ -123,26 +125,46 @@ type ScriptConfig struct {
 }
 
 func LoadConfig(args []string) (Config, error) {
+	// Parse once to find explicitly supplied paths, using the same flag rules as
+	// the final pass. Defer validation until file settings have also been loaded.
+	cli := defaultConfig()
+	if err := parseCLI(&cli, args); err != nil {
+		return Config{}, err
+	}
 	cfg := defaultConfig()
 
-	// File defaults < saved user settings < explicit command-line flags.
-	configPath, explicitConfig := configPathFromArgs(args)
-	if configPath != "" {
-		if err := applyINIFile(&cfg, configPath, explicitConfig); err != nil {
+	// Defaults < ./goro.ini < --data-dir/goro.ini < --config < command-line flags.
+	cfg.ConfigPath = "goro.ini"
+	if err := applyINIFile(&cfg, cfg.ConfigPath, false); err != nil {
+		return Config{}, err
+	}
+	if cli.DataDir != "" {
+		cfg.ConfigPath = filepath.Join(cli.DataDir, "goro.ini")
+		if err := applyINIFile(&cfg, cfg.ConfigPath, false); err != nil {
 			return Config{}, err
 		}
 	}
-	if path, err := UserConfigPath(); err == nil {
-		if err := applyINIFile(&cfg, path, false); err != nil {
+	if cli.ConfigPath != "" {
+		cfg.ConfigPath = cli.ConfigPath
+		if err := applyINIFile(&cfg, cfg.ConfigPath, true); err != nil {
 			return Config{}, err
 		}
 	}
 	if err := applyCLI(&cfg, args); err != nil {
 		return Config{}, err
 	}
+	// Fork layers stacked on top of the upstream file precedence: the
+	// server-side goro.ini, the platform user store (localStorage on the web
+	// build), and the web login query. All three are no-ops on native builds
+	// without those stores, so upstream's precedence tests are unaffected.
 	applyServerINI(&cfg)
 	applyStoredUserINI(&cfg)
 	applyWebLoginQuery(&cfg)
+	path, err := filepath.Abs(cfg.ConfigPath)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConfigPath = path
 	cfg.DataDir = resolveDataDir(cfg.DataDir)
 	return cfg, nil
 }
@@ -200,24 +222,9 @@ func NextScreenshotPath(now time.Time) (string, error) {
 	}
 }
 
-// saveUserConfigValues routes section-style user config saves (upstream
-// call sites such as chat shortcuts) through the platform user store:
-// goro.ini on native, localStorage on the web build.
-func saveUserConfigValues(values map[string]map[string]string) (string, error) {
-	return writeUserSettings(values)
-}
-
-func SaveUserSettings(settings UserSettings) (string, error) {
-	if settings.BGMVolume < 0 || settings.BGMVolume > 1 {
-		return "", fmt.Errorf("bgm volume must be between 0 and 1")
-	}
-	if settings.SFXVolume < 0 || settings.SFXVolume > 1 {
-		return "", fmt.Errorf("sfx volume must be between 0 and 1")
-	}
-	if settings.ResolutionScale != 0 && (settings.ResolutionScale < 0.1 || settings.ResolutionScale > 1) {
-		return "", fmt.Errorf("resolution scale must be between 0.1 and 1")
-	}
-	values := map[string]map[string]string{
+// userSettingsValues builds the ini sections shared by both save paths.
+func userSettingsValues(settings UserSettings) map[string]map[string]string {
+	return map[string]map[string]string{
 		"window": {
 			"fullscreen": formatINIValueBool(settings.Fullscreen),
 		},
@@ -239,14 +246,62 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 			"snap_radius":  formatINIValueFloat(settings.SnapRadius),
 		},
 	}
-	// Native builds write the user goro.ini; web builds store the same ini
-	// text in localStorage, where it survives page reloads.
+}
+
+func validateUserSettings(settings UserSettings) error {
+	if settings.BGMVolume < 0 || settings.BGMVolume > 1 {
+		return fmt.Errorf("bgm volume must be between 0 and 1")
+	}
+	if settings.SFXVolume < 0 || settings.SFXVolume > 1 {
+		return fmt.Errorf("sfx volume must be between 0 and 1")
+	}
+	if settings.ResolutionScale != 0 && (settings.ResolutionScale < 0.1 || settings.ResolutionScale > 1) {
+		return fmt.Errorf("resolution scale must be between 0.1 and 1")
+	}
+	return nil
+}
+
+// SaveUserSettings (upstream path) upserts the settings into the selected
+// local goro.ini.
+func (cfg Config) SaveUserSettings(settings UserSettings) (string, error) {
+	if err := validateUserSettings(settings); err != nil {
+		return "", err
+	}
+	return cfg.saveConfigValues(userSettingsValues(settings))
+}
+
+// saveUserConfigValues routes section-style user config saves (upstream
+// call sites such as chat shortcuts) through the platform user store:
+// goro.ini on native, localStorage on the web build.
+func saveUserConfigValues(values map[string]map[string]string) (string, error) {
 	return writeUserSettings(values)
 }
 
+// SaveUserSettings persists through the platform user store (localStorage
+// on the web build, where it survives reloads); call sites that should
+// write the selected local file use the Config method above.
+func SaveUserSettings(settings UserSettings) (string, error) {
+	if err := validateUserSettings(settings); err != nil {
+		return "", err
+	}
+	return writeUserSettings(userSettingsValues(settings))
+}
+
+// SaveLoginID (upstream path) upserts the remembered ID into the selected
+// local goro.ini.
+func (cfg Config) SaveLoginID(username string, keep bool) (string, error) {
+	if !keep {
+		username = ""
+	}
+	if strings.ContainsAny(username, "\r\n\x00") {
+		return "", fmt.Errorf("login ID must be a single line without NUL characters")
+	}
+	return cfg.saveConfigValues(loginIDValues(username, keep))
+}
+
 // SaveLoginID remembers only the ID, independently of explicit login
-// credentials. It shares the settings store, so on web this lands in
-// localStorage next to the gameplay settings.
+// credentials. It shares the platform settings store, so on web this lands
+// in localStorage next to the gameplay settings.
 func SaveLoginID(username string, keep bool) (string, error) {
 	if !keep {
 		username = ""
@@ -254,12 +309,35 @@ func SaveLoginID(username string, keep bool) (string, error) {
 	if strings.ContainsAny(username, "\r\n\x00") {
 		return "", fmt.Errorf("login ID must be a single line without NUL characters")
 	}
-	return writeUserSettings(map[string]map[string]string{
+	return writeUserSettings(loginIDValues(username, keep))
+}
+
+func loginIDValues(username string, keep bool) map[string]map[string]string {
+	return map[string]map[string]string{
 		"login": {
 			"keep_id":        formatINIValueBool(keep),
 			"saved_username": `"` + username + `"`,
 		},
-	})
+	}
+}
+
+func (cfg Config) saveConfigValues(values map[string]map[string]string) (string, error) {
+	path := cfg.ConfigPath
+	if path == "" {
+		return "", fmt.Errorf("no config file selected")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	data := upsertINIValues(string(existing), values)
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func defaultConfig() Config {
@@ -303,22 +381,6 @@ func defaultConfig() Config {
 	}
 }
 
-func configPathFromArgs(args []string) (string, bool) {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--config" && i+1 < len(args) {
-			return args[i+1], true
-		}
-		if strings.HasPrefix(arg, "--config=") {
-			return strings.TrimPrefix(arg, "--config="), true
-		}
-	}
-	if _, err := os.Stat("goro.ini"); err == nil {
-		return "goro.ini", false
-	}
-	return "", false
-}
-
 func applyINIFile(cfg *Config, path string, explicit bool) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -335,15 +397,14 @@ func applyINIFile(cfg *Config, path string, explicit bool) error {
 	return nil
 }
 
-func applyCLI(cfg *Config, args []string) error {
+func parseCLI(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("goro", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	configPath := ""
 	windowed := false
-	fs.StringVar(&configPath, "config", "", "path to goro ini configuration")
+	fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "path to goro ini configuration (also used to save settings)")
 	fs.BoolVar(&cfg.Headless, "headless", false, "run without a window or audio (implies autologin)")
-	fs.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Ragnarok data directory")
+	fs.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Ragnarok data directory (loads goro.ini from this directory)")
 	fs.StringVar(&cfg.Window.Title, "title", cfg.Window.Title, "window title")
 	fs.IntVar(&cfg.Window.Width, "width", cfg.Window.Width, "window width")
 	fs.IntVar(&cfg.Window.Height, "height", cfg.Window.Height, "window height")
@@ -390,8 +451,24 @@ func applyCLI(cfg *Config, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	var pathErr error
+	fs.Visit(func(f *flag.Flag) {
+		if (f.Name == "config" || f.Name == "data-dir") && f.Value.String() == "" {
+			pathErr = fmt.Errorf("--%s requires a non-empty path", f.Name)
+		}
+	})
+	if pathErr != nil {
+		return pathErr
+	}
 	if windowed {
 		cfg.Window.Fullscreen = false
+	}
+	return nil
+}
+
+func applyCLI(cfg *Config, args []string) error {
+	if err := parseCLI(cfg, args); err != nil {
+		return err
 	}
 	if cfg.Headless {
 		cfg.Login.AutoLogin = true

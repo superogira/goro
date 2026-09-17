@@ -575,13 +575,13 @@ email check.
 | `0x02AC` | S->C | untracked | `0x02ac` | `6` | `-` | - |
 | `0x02AD` | S->C | untracked | `0x02ad` | `8` | `-` | - |
 | `0x02B0` | S->C | referenced | `0x02b0` | `85` | `-` | packet.go |
-| `0x02B1` | S->C | untracked | `0x02b1` | `-1` | `-` | - |
-| `0x02B2` | S->C | untracked | `0x02b2` | `-1` | `-` | - |
-| `0x02B3` | S->C | untracked | `0x02b3` | `107` | `-` | - |
-| `0x02B4` | S->C | untracked | `0x02b4` | `6` | `-` | - |
-| `0x02B5` | S->C | untracked | `0x02b5` | `-1` | `-` | - |
-| `0x02B6` | C->S | missing | `HEADER_CZ_ACTIVE_QUEST` | `sizeof( PACKET_CZ_ACTIVE_QUEST )` | `clif_parse_questStateAck` | - |
-| `0x02B7` | S->C | untracked | `0x02b7` | `7` | `-` | - |
+| `0x02B1` | S->C | implemented | `0x02b1` | `-1` | `-` | quest_packets.go, packet.go |
+| `0x02B2` | S->C | implemented | `0x02b2` | `-1` | `-` | quest_packets.go, packet.go |
+| `0x02B3` | S->C | implemented | `0x02b3` | `107` | `-` | quest_packets.go, packet.go |
+| `0x02B4` | S->C | implemented | `0x02b4` | `6` | `-` | quest_packets.go, packet.go |
+| `0x02B5` | S->C | implemented | `0x02b5` | `-1` | `-` | quest_packets.go, packet.go |
+| `0x02B6` | C->S | implemented | `HEADER_CZ_ACTIVE_QUEST` | `sizeof( PACKET_CZ_ACTIVE_QUEST )` | `clif_parse_questStateAck` | quest_packets.go |
+| `0x02B7` | S->C | implemented | `0x02b7` | `7` | `-` | quest_packets.go, packet.go |
 | `0x02B9` | S->C | implemented | `0x02b9` | `191` | `-` | hotkey_packets.go, packet.go |
 | `0x02BA` | C->S | implemented | `0x02ba` | `11` | `clif_parse_Hotkey` | hotkey_packets.go |
 | `0x02BC` | S->C | untracked | `0x02bc` | `6` | `-` | - |

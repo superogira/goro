@@ -16,20 +16,19 @@ func defaultChatShortcuts() ChatShortcuts {
 
 // LoadChatShortcuts refreshes saved bindings when entering the game again;
 // the startup Config may predate edits made before character selection.
-func LoadChatShortcuts(defaults ChatShortcuts) (ChatShortcuts, error) {
-	cfg := defaultConfig()
-	cfg.ChatShortcuts = defaults
-	path, err := UserConfigPath()
-	if err != nil {
-		return defaults, err
+func (cfg Config) LoadChatShortcuts() (ChatShortcuts, error) {
+	if cfg.ConfigPath == "" {
+		return cfg.ChatShortcuts, nil
 	}
-	if err := applyINIFile(&cfg, path, false); err != nil {
-		return defaults, err
+	latest := defaultConfig()
+	latest.ChatShortcuts = cfg.ChatShortcuts
+	if err := applyINIFile(&latest, cfg.ConfigPath, false); err != nil {
+		return cfg.ChatShortcuts, err
 	}
-	return cfg.ChatShortcuts, nil
+	return latest.ChatShortcuts, nil
 }
 
-func SaveChatShortcuts(commands ChatShortcuts) (string, error) {
+func (cfg Config) SaveChatShortcuts(commands ChatShortcuts) (string, error) {
 	values := make(map[string]string, len(commands))
 	for slot, command := range commands {
 		if strings.ContainsAny(command, "\r\n\x00") {
@@ -37,5 +36,5 @@ func SaveChatShortcuts(commands ChatShortcuts) (string, error) {
 		}
 		values[strconv.Itoa((slot+1)%10)] = `"` + command + `"`
 	}
-	return saveUserConfigValues(map[string]map[string]string{"chatshortcuts": values})
+	return cfg.saveConfigValues(map[string]map[string]string{"chatshortcuts": values})
 }

@@ -1,7 +1,6 @@
 package game
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/gogpu/ui/event"
@@ -13,14 +12,12 @@ import (
 )
 
 func TestLoginSubmissionRemembersAndForgetsID(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	// os.UserConfigDir reads %AppData% on Windows; without this the test
-	// writes into the developer's real goro.ini.
-	if runtime.GOOS == "windows" {
-		t.Setenv("AppData", t.TempDir())
+	args := []string{"--data-dir", t.TempDir()}
+	cfg, err := config.LoadConfig(args)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Chdir(t.TempDir())
-	ctx := client.Context{Session: session.New(), Resources: &res.Manager{}, ScreenW: 800, ScreenH: 600}
+	ctx := client.Context{Config: cfg, Session: session.New(), Resources: &res.Manager{}, ScreenW: 800, ScreenH: 600}
 	mode := NewLoginMode()
 	mode.username, mode.password, mode.keepID = "remembered-id", "not-persisted", true
 	mode.updateLoginWindow(ctx)
@@ -38,7 +35,7 @@ func TestLoginSubmissionRemembersAndForgetsID(t *testing.T) {
 		}
 	}
 	submit()
-	cfg, err := config.LoadConfig(nil)
+	cfg, err = config.LoadConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +63,7 @@ func TestLoginSubmissionRemembersAndForgetsID(t *testing.T) {
 	}
 	mode.loginWindow.KeepID = false
 	submit()
-	cfg, err = config.LoadConfig(nil)
+	cfg, err = config.LoadConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}

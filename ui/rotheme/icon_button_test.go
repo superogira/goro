@@ -45,9 +45,33 @@ func TestIconButtonGlyphKeepsIntegerXAndQuarterPixelY(t *testing.T) {
 	}
 }
 
+func TestCollapseExpandIconsStaySmallAndCentered(t *testing.T) {
+	for _, tt := range []struct {
+		kind IconButtonKind
+		path string
+	}{
+		{IconButtonCollapse, "M0 4.5L3 1.5L6 4.5Z"},
+		{IconButtonExpand, "M0 1.5L3 4.5L6 1.5Z"},
+	} {
+		for _, width := range []float32{IconButtonSize, 324} {
+			canvas := &svgRecordingCanvas{tableViewHeaderCanvas: &tableViewHeaderCanvas{}}
+			bounds := geometry.NewRect(10, 20, width, 10)
+			IconButtonPainter{Kind: tt.kind}.PaintButton(canvas, button.PaintState{Bounds: bounds})
+			if len(canvas.fills) != 1 {
+				t.Fatalf("icon %v: got %d fills, want one triangle", tt.kind, len(canvas.fills))
+			}
+			fill := canvas.fills[0]
+			wantBounds := geometry.NewRect(10+(width-6)/2, 22, 6, 6)
+			if fill.path != tt.path || fill.viewBox != 6 || fill.bounds != wantBounds || fill.color != Default.Colors.Text {
+				t.Fatalf("icon %v: unexpected triangle: %+v", tt.kind, fill)
+			}
+		}
+	}
+}
+
 func TestIconButtonShadowMatchesSharedButton(t *testing.T) {
 	bounds := geometry.NewRect(0, 0, IconButtonSize, IconButtonSize)
-	for _, kind := range []IconButtonKind{IconButtonClose, IconButtonPlus, IconButtonMinus} {
+	for _, kind := range []IconButtonKind{IconButtonClose, IconButtonPlus, IconButtonMinus, IconButtonSearch} {
 		painted := &uitest.MockCanvas{}
 		IconButtonPainter{Kind: kind}.PaintButton(painted, button.PaintState{Bounds: bounds})
 		direct := &uitest.MockCanvas{}

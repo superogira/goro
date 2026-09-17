@@ -2,7 +2,6 @@ package game
 
 import (
 	"github.com/kivutar/goro/client"
-	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/res"
 	gameui "github.com/kivutar/goro/ui"
@@ -81,7 +80,7 @@ func (m *LoginMode) saveLoginID(ctx client.Context) {
 			ctx.Session.SavedUsername = m.username
 		}
 	}
-	if _, err := config.SaveLoginID(m.username, m.keepID); err != nil {
+	if _, err := ctx.Config.SaveLoginID(m.username, m.keepID); err != nil {
 		glog.Warnf("login ID save failed: %v", err)
 	}
 }

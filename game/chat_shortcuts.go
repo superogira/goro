@@ -34,6 +34,9 @@ func (m *WorldMode) uiInputSuspended() bool {
 }
 
 func (m *WorldMode) suppressShortcutText(ctx client.Context, code input.KeyCode) bool {
+	if code == gpucontext.KeyGrave && worldMapShortcutDown(ctx.Input) && (m.ui.worldMap.IsOpen() || !m.ui.nonConsoleKeyboardInputBlocked(ctx)) {
+		return true
+	}
 	if !plainAltDown(ctx.Input) || code == gpucontext.KeyUnknown {
 		return false
 	}
@@ -43,7 +46,7 @@ func (m *WorldMode) suppressShortcutText(ctx client.Context, code input.KeyCode)
 	if m.ui.nonConsoleKeyboardInputBlocked(ctx) {
 		return false
 	}
-	if code == gpucontext.KeyL || code == gpucontext.KeyG {
+	if code == gpucontext.KeyL || code == gpucontext.KeyG || code == gpucontext.KeyU {
 		return true
 	}
 	for slot, key := range chatShortcutKeys {

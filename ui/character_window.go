@@ -93,6 +93,16 @@ func (w *CharacterWindow) Close() {
 	w.dragLayer = false
 }
 
+// Rebind satisfies the mode rebind pass after login/map changes. The HUD
+// reads the session directly each frame from cached surfaces, so rebinding
+// only refreshes the DOM mirror state.
+func (w *CharacterWindow) Rebind(ctx client.Context) {
+	if w == nil {
+		return
+	}
+	w.webSyncState(ctx)
+}
+
 func clampHUDInt(value, lo, hi int) int {
 	if value < lo {
 		return lo

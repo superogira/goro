@@ -22,6 +22,9 @@ const (
 	IconButtonRight
 	IconButtonUp
 	IconButtonDown
+	IconButtonSearch
+	IconButtonCollapse
+	IconButtonExpand
 )
 
 var iconButtonSegments = map[IconButtonKind][][4]float32{
@@ -96,6 +99,21 @@ func DrawIconButton(canvas widget.Canvas, bounds geometry.Rect, kind IconButtonK
 }
 
 func drawIconGlyph(canvas widget.Canvas, bounds geometry.Rect, kind IconButtonKind, color widget.Color) {
+	if kind == IconButtonCollapse || kind == IconButtonExpand {
+		// Keep these small, flat triangles independent of the button's size.
+		// The 6x6 view box contains a centered 6x3 triangle.
+		path := "M0 4.5L3 1.5L6 4.5Z"
+		if kind == IconButtonExpand {
+			path = "M0 1.5L3 4.5L6 1.5Z"
+		}
+		if filler, ok := canvas.(widget.SVGFiller); ok {
+			filler.FillSVGPath(path, 6, geometry.NewRect(
+				bounds.Min.X+(bounds.Width()-6)/2,
+				bounds.Min.Y+(bounds.Height()-6)/2, 6, 6,
+			), color)
+		}
+		return
+	}
 	size := bounds.Width()
 	if bounds.Height() < size {
 		size = bounds.Height()
@@ -113,6 +131,11 @@ func drawIconGlyph(canvas widget.Canvas, bounds geometry.Rect, kind IconButtonKi
 	midX := float32(int(bounds.Min.X + bounds.Width()/2))
 	midY := float32(int(bounds.Min.Y+bounds.Height()/2)) + iconButtonGlyphYOffset
 	half := float32(icon / 2)
+	if kind == IconButtonSearch {
+		canvas.StrokeCircle(geometry.Pt(midX-1, midY-1), half, color, 1)
+		canvas.DrawLine(geometry.Pt(midX+half-1, midY+half-1), geometry.Pt(midX+half+2, midY+half+2), color, 1)
+		return
+	}
 	for _, s := range iconButtonSegments[kind] {
 		canvas.DrawLine(
 			geometry.Pt(midX+s[0]*half, midY+s[1]*half),

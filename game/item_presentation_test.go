@@ -2,6 +2,7 @@ package game
 
 import (
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,6 +11,64 @@ import (
 	"github.com/kivutar/goro/res"
 	worldstate "github.com/kivutar/goro/world"
 )
+
+func TestOverlappingGroundItemsKeepDrawOrder(t *testing.T) {
+	world := worldstate.New()
+	// Different sprites at the same sub-tile position share exactly one depth.
+	// IDs ending in the same digits must still have a deterministic order.
+	for i, id := range []uint32{201, 101, 301} {
+		world.Items[id] = worldstate.FloorItem{ID: id, ItemID: uint16(501 + i), X: 10, Y: 20, SubX: 6, SubY: 6}
+	}
+	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
+	items := (&WorldMode{}).collectSceneItemEntries(render.NewFrame(800, 600), client.Context{World: world}, projection, time.Now())
+	if len(items) != 3 {
+		t.Fatalf("item entries = %d, want 3", len(items))
+	}
+	// Exercise all collection orders explicitly, without relying on random map
+	// iteration to expose a flicker.
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		shuffled := []sceneItemDrawEntry{items[order[0]], items[order[1]], items[order[2]]}
+		var sprites, shadows []uint32
+		for _, entry := range sortedSceneDrawEntries(nil, shuffled) {
+			if entry.itemShadowIndex >= 0 {
+				if len(sprites) != 0 {
+					t.Fatal("item shadow drawn over a settled item")
+				}
+				shadows = append(shadows, shuffled[entry.itemShadowIndex].item.ID)
+			} else {
+				sprites = append(sprites, shuffled[entry.itemIndex].item.ID)
+			}
+		}
+		want := []uint32{101, 201, 301}
+		if !slices.Equal(sprites, want) || !slices.Equal(shadows, want) {
+			t.Fatalf("input order %v: sprites %v, shadows %v, want %v for both", order, sprites, shadows, want)
+		}
+	}
+}
+
+func TestSceneDrawOrderKeepsDepthBeforeEntityID(t *testing.T) {
+	actors := []sceneActorDrawEntry{{
+		actor: worldstate.Actor{ID: 20}, depth: 100, shadowDepth: 102, castShadow: true,
+	}}
+	items := []sceneItemDrawEntry{
+		{item: worldstate.FloorItem{ID: 30}, depth: 100, shadowDepth: 102},
+		{item: worldstate.FloorItem{ID: 10}, depth: 100, shadowDepth: 102},
+		{item: worldstate.FloorItem{ID: 1}, depth: 90, shadowDepth: 92},
+		{item: worldstate.FloorItem{ID: 99}, depth: 110, shadowDepth: 112},
+	}
+	entries := sortedSceneDrawEntries(actors, items)
+	var ids []uint32
+	for i, entry := range entries {
+		ids = append(ids, entry.entityID)
+		if i > 0 && entry.depth > entries[i-1].depth {
+			t.Fatalf("entry %d at depth %.2f drawn after nearer entry at %.2f", i, entry.depth, entries[i-1].depth)
+		}
+	}
+	want := []uint32{99, 99, 10, 20, 30, 10, 20, 30, 1, 1}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("draw order = %v, want %v", ids, want)
+	}
+}
 
 func TestFallingGroundItemKeepsShadowOnTerrain(t *testing.T) {
 	now := time.Now()

@@ -216,6 +216,8 @@ type worldUI struct {
 	mercenaryConfirm     gameui.ConfirmModal
 	statsWindow          gameui.StatsWindow
 	skillWindow          gameui.SkillWindow
+	questWindow          gameui.QuestWindow
+	worldMap             gameui.WorldMapWindow
 	emoteWindow          gameui.EmoteWindow
 	chatShortcuts        gameui.ChatShortcutsWindow
 	friendsWindow        gameui.FriendsWindow
@@ -292,6 +294,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.starPlaceConfirm.IsOpen() ||
 		u.settingsWindow.IsOpen() ||
 		u.chatShortcuts.IsOpen() ||
+		u.worldMap.IsOpen() ||
 		u.autoSpellWindow.IsOpen() ||
 		u.monsterInfoWindow.IsOpen() ||
 		u.identifyWindow.IsOpen() ||
@@ -646,6 +649,7 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 		return emblem.image.RGBA()
 	}
 	m.setGuildEmblemOptions(ctx)
+	m.ui.characterWindow.Rebind(ctx)
 	m.ui.basicMenu.Rebind(ctx, m.basicMenuCallbacks(ctx))
 	m.ui.inventoryBag.Rebind(ctx, &m.ui.itemWindows)
 	m.ui.equipmentWindow.Rebind(ctx, &m.ui.itemWindows, &m.ui.cartWindow, m)
@@ -653,6 +657,8 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 	m.ui.itemWindows.Rebind(ctx, m)
 	m.ui.statsWindow.Rebind(ctx)
 	m.ui.skillWindow.Rebind(ctx, m)
+	m.ui.questWindow.Rebind(ctx, func(id uint32, active bool) { m.setQuestActive(ctx, id, active) })
+	m.ui.worldMap.Rebind(ctx)
 	m.ui.levelUpNotifications.Rebind(ctx)
 	m.ui.emoteWindow.OnSelect = m.ui.chatShortcuts.SelectEmotion
 	m.ui.emoteWindow.Rebind(ctx, &m.ui.console)
@@ -797,6 +803,8 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	m.ui.console.UpdatePresentation(ctx)
+	m.ui.questWindow.UpdatePresentation(ctx, now)
+	m.ui.worldMap.UpdatePresentation(ctx)
 	if progressBlocksActions {
 		return nil, nil
 	}
@@ -827,7 +835,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// Window.Update consumes pointer hover so that map input does not pass
 	// through the UI. Handle keyboard-only window shortcuts before pointer
 	// dispatch, otherwise their JustPressed event can be lost.
-	if m.chatShortcutFromInput(ctx) || m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) {
+	if m.chatShortcutFromInput(ctx) || m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) || m.toggleQuestWindowFromInput(ctx) || m.toggleWorldMapFromInput(ctx) {
 		return nil, nil
 	}
 	if !dead && !m.ui.nonConsoleKeyboardInputBlocked(ctx) && m.ui.shortcutBar.UpdateKeyboardInput(ctx, m, m.ui.console.Active()) {
@@ -1037,6 +1045,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.weaponRefine.Update(ctx) {
 		return nil, nil
 	}
+	// Let the atlas close on Escape before the console handles that key.
+	if m.ui.worldMap.Update(ctx) {
+		return nil, nil
+	}
 	if !dead && !m.ui.chatShortcuts.KeyboardShortcutsBlocked() && m.ui.console.UpdateInput(ctx) {
 		return nil, nil
 	}
@@ -1135,6 +1147,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	if m.ui.skillWindow.Update(ctx, &m.ui.shortcutBar, m) {
+		return nil, nil
+	}
+	if m.ui.questWindow.Update(ctx) {
 		return nil, nil
 	}
 	if m.ui.homunculusSkill.Update(ctx, &m.ui.shortcutBar, m) {
@@ -1576,6 +1591,8 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.petLastTalk = m.petLastTalk
 	next.ui.statsWindow = m.ui.statsWindow
 	next.ui.skillWindow = m.ui.skillWindow
+	next.ui.questWindow = m.ui.questWindow
+	next.ui.worldMap = m.ui.worldMap
 	next.ui.emoteWindow = m.ui.emoteWindow
 	next.ui.chatShortcuts = m.ui.chatShortcuts
 	next.ui.friendsWindow = m.ui.friendsWindow
@@ -1893,6 +1910,7 @@ func absInt(value int) int {
 
 type sceneDrawEntry struct {
 	depth           float64
+	entityID        uint32
 	actorIndex      int
 	shadowIndex     int
 	itemIndex       int
@@ -1904,23 +1922,7 @@ func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Co
 	m.drawSkillUnitRSMModels(screen, ctx, projection, now)
 	actors := m.collectSceneActorEntries(screen, ctx, projection)
 	items := m.collectSceneItemEntries(screen, ctx, projection, now)
-	entries := make([]sceneDrawEntry, 0, len(actors)*2+len(items)*2)
-	for i, item := range items {
-		entries = append(entries,
-			sceneDrawEntry{depth: item.shadowDepth, actorIndex: -1, shadowIndex: -1, itemIndex: -1, itemShadowIndex: i},
-			sceneDrawEntry{depth: item.depth, actorIndex: -1, shadowIndex: -1, itemIndex: i, itemShadowIndex: -1},
-		)
-	}
-	for i, actor := range actors {
-		if actor.castShadow {
-			entries = append(entries, sceneDrawEntry{depth: actor.shadowDepth, actorIndex: -1, shadowIndex: i, itemIndex: -1, itemShadowIndex: -1})
-		}
-		entries = append(entries, sceneDrawEntry{depth: actor.depth, actorIndex: i, shadowIndex: -1, itemIndex: -1, itemShadowIndex: -1})
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].depth > entries[j].depth
-	})
-	for _, entry := range entries {
+	for _, entry := range sortedSceneDrawEntries(actors, items) {
 		if entry.itemShadowIndex >= 0 {
 			m.drawGroundItemShadowEntry3D(screen, projection, items[entry.itemShadowIndex])
 			continue
@@ -1937,6 +1939,31 @@ func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Co
 	}
 	m.drawSceneActorFalcons(screen, ctx, projection, actors)
 	return actors
+}
+
+func sortedSceneDrawEntries(actors []sceneActorDrawEntry, items []sceneItemDrawEntry) []sceneDrawEntry {
+	entries := make([]sceneDrawEntry, 0, len(actors)*2+len(items)*2)
+	for i, item := range items {
+		entries = append(entries,
+			sceneDrawEntry{depth: item.shadowDepth, entityID: item.item.ID, actorIndex: -1, shadowIndex: -1, itemIndex: -1, itemShadowIndex: i},
+			sceneDrawEntry{depth: item.depth, entityID: item.item.ID, actorIndex: -1, shadowIndex: -1, itemIndex: i, itemShadowIndex: -1},
+		)
+	}
+	for i, actor := range actors {
+		if actor.castShadow {
+			entries = append(entries, sceneDrawEntry{depth: actor.shadowDepth, entityID: actor.actor.ID, actorIndex: -1, shadowIndex: i, itemIndex: -1, itemShadowIndex: -1})
+		}
+		entries = append(entries, sceneDrawEntry{depth: actor.depth, entityID: actor.actor.ID, actorIndex: i, shadowIndex: -1, itemIndex: -1, itemShadowIndex: -1})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		// A stable sort alone preserves the world's random map iteration order
+		// at equal depths, making overlapping loot flicker from frame to frame.
+		if entries[i].depth == entries[j].depth {
+			return entries[i].entityID < entries[j].entityID
+		}
+		return entries[i].depth > entries[j].depth
+	})
+	return entries
 }
 
 func loadGAT(manager *res.Manager, mapName string) (*res.GAT, string, error) {

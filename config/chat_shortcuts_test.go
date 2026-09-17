@@ -26,26 +26,28 @@ func TestChatShortcutsDefaultsAndSlots(t *testing.T) {
 
 func TestChatShortcutsSavePreservesOtherSettings(t *testing.T) {
 	isolateUserConfig(t)
-	t.Setenv("APPDATA", t.TempDir())
-	if _, err := SaveLoginID("Tester", true); err != nil {
+	cfg, err := LoadConfig([]string{"--data-dir", t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.SaveLoginID("Tester", true); err != nil {
 		t.Fatal(err)
 	}
 	commands := defaultChatShortcuts()
 	commands[0] = `hello #;="world"`
 	commands[3] = "/w Alice hello"
 	commands[9] = ""
-	path, err := SaveChatShortcuts(commands)
+	path, err := cfg.SaveChatShortcuts(commands)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SaveUserSettings(UserSettings{VSync: true, BGMVolume: 0.5, SFXVolume: 0.5}); err != nil {
+	if _, err := cfg.SaveUserSettings(UserSettings{VSync: true, BGMVolume: 0.5, SFXVolume: 0.5}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadChatShortcuts(defaultChatShortcuts())
+	got, err := cfg.LoadChatShortcuts()
 	if err != nil || got != commands {
 		t.Fatalf("reload = %q, %v; want %q", got, err, commands)
 	}
-	cfg := defaultConfig()
 	if err := applyINIFile(&cfg, path, true); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,7 @@ func TestChatShortcutsSavePreservesOtherSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands[0] = "hello\n[login]\nusername = injected"
-	if _, err := SaveChatShortcuts(commands); err == nil {
+	if _, err := cfg.SaveChatShortcuts(commands); err == nil {
 		t.Fatal("accepted multiline shortcut")
 	}
 	after, err := os.ReadFile(path)

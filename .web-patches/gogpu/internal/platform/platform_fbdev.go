@@ -931,8 +931,22 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	case btnR2:
 		key = gpucontext.KeyF4
 	case btnMenu:
-		// Physical MENU (0x138 on this hardware) — quit watcher only.
+		// Physical MENU (0x138 on this hardware): hold ≥1.2s quits via the
+		// quit watcher; a short tap fires the PrintScreen key, which the
+		// app layer turns into a screenshot.
+		p.inputMu.Lock()
+		t0, menuHeld := p.held[btnMenu]
+		p.inputMu.Unlock()
 		p.setHeld(btnMenu, down)
+		if !down && menuHeld && time.Since(t0) < 500*time.Millisecond {
+			p.dispatchKey(gpucontext.KeyPrintScreen, true)
+			// Release shortly after so the key does not stay held; the
+			// press edge lands in the current event batch.
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyPrintScreen, false)
+			}()
+		}
 	case btnSelect:
 		key = gpucontext.KeyEscape
 		p.setHeld(btnSelect, down)

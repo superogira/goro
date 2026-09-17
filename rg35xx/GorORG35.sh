@@ -74,7 +74,10 @@ syncer=$!
 # colors), verifies writes survive read-back, and probes the
 # mode-setting ioctls. Watch the screen during this phase and check
 # fbtest.log afterwards.
-if [ -x ./fbtest ] || [ -f ./fbtest ]; then
+# --- 1) display diagnostic (opt-in): create a marker file "fbtest.enabled"
+# next to this script to re-arm it; the panel and present path are proven
+# now, so it stays out of the normal boot.
+if [ -f ./fbtest.enabled ] && { [ -x ./fbtest ] || [ -f ./fbtest ]; }; then
   chmod +x ./fbtest 2>/dev/null
   echo "-- running fbtest (~9s, watch the screen for colors) --"
   ./fbtest .
@@ -82,9 +85,18 @@ if [ -x ./fbtest ] || [ -f ./fbtest ]; then
 fi
 sync
 
+# Audio diagnostics: the game's audio context opens silently, so record
+# what the kernel actually exposes before blaming the client.
+echo "-- sound cards:"
+cat /proc/asound/cards 2>/dev/null || echo "  /proc/asound/cards unavailable"
+echo "-- /dev/snd:"
+ls /dev/snd 2>/dev/null || echo "  /dev/snd missing"
+echo "-- mixer state (first 60 lines):"
+amixer 2>/dev/null | head -60 || echo "  amixer unavailable"
+
 # --- 2) the game itself ---
 export GOGPU_PLATFORM=fbdev
-export GOGPU_LOG=debug
+export GOGPU_LOG=info
 # The app context defines neither HOME nor XDG_CONFIG_HOME; without them
 # os.UserConfigDir() fails and goro logs "login ID save failed". Keep the
 # user store on the SD card, in a dedicated dir: pointing XDG at the app
@@ -97,9 +109,6 @@ mkdir -p "$XDG_CONFIG_HOME/goro" 2>/dev/null
 # If the context comes up, frames go from seconds to GPU speed. Falls
 # back to the software path when unset.
 export GOGPU_FB_GLES=1
-# diagnostic: floods every frame with magenta before the EGL swap —
-# if the panel shows magenta, present reaches the screen
-export GOGPU_GLES_DEBUG_CLEAR=1
 ./goro -config goro.ini -data-dir . -graphics-api gles
 echo "goro exited: $?"
 sync

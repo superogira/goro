@@ -142,6 +142,15 @@ func (g *Game) PrepareTextInput(code input.KeyCode) bool {
 }
 
 func (g *Game) PrepareKeyInput(code input.KeyCode, mods gpucontext.Modifiers) {
+	// PrintScreen captures the current frame from any screen (title, login,
+	// world). The rg35xx launcher binds a short MENU tap to this key.
+	if code == gpucontext.KeyPrintScreen {
+		if path, err := g.RequestScreenshot(); err == nil {
+			glog.Infof("screenshot requested path=%s", path)
+		} else {
+			glog.Warnf("screenshot request failed: %v", err)
+		}
+	}
 	if g.modes != nil {
 		g.modes.PrepareKeyInput(g.modeContext(), code, mods)
 	}

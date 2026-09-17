@@ -8,9 +8,11 @@ import (
 	"github.com/kivutar/goro/glog"
 )
 
-// Heartbeat replies arrive even when the player is idle. Allow two normal
-// heartbeat intervals before treating a silent map connection as disconnected.
-const mapReadTimeout = 10 * time.Second
+// Heartbeat replies arrive even when the player is idle. Many servers also
+// push their own ZC_NOTIFY_TIME every ~30s, so the deadline must comfortably
+// exceed both the reply interval and a server-driven ping interval before a
+// silent map connection is treated as disconnected.
+const mapReadTimeout = 35 * time.Second
 
 // startMapKeepalive ties the map-server heartbeat to the connection rather
 // than the game or render loop. A reconnect stops the old loop before the new
@@ -61,8 +63,11 @@ func (c *Client) runMapKeepalive(conn net.Conn, stop <-chan struct{}, interval t
 					return
 				}
 				glog.Warnf("map keepalive failed opcode=0x%04X len=%d client_date=%d: %v", ID(packet), len(packet), c.clientDate, err)
-			} else if c.trace {
-				glog.Debugf("sent CZ_REQUEST_TIME opcode=0x%04X client_date=%d", ID(packet), c.clientDate)
+			} else {
+				// Always log the tick (info, not trace): field reports of
+				// "enters map then disconnects ~20s later" need to prove
+				// which opcode went out and that the server never answered.
+				glog.Infof("sent map tick opcode=0x%04X len=%d client_date=%d", ID(packet), len(packet), c.clientDate)
 			}
 		case <-stop:
 			return

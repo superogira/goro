@@ -135,6 +135,7 @@ const (
 	btnTR2    = 0x138 // R2
 	btnSelect = 0x139
 	btnStart  = 0x13a
+	btnMode   = 0x13d
 	btnThumbl = 0x13b
 	btnThumbr = 0x13c
 
@@ -194,6 +195,7 @@ type fbdevPlatform struct {
 	gles             bool
 	eglWin           fbdevEGLWindow
 	eglWinOK         bool
+	menuHeld         time.Time
 	buttons          gpucontext.Buttons
 	axes             map[uint16]int32
 	hatX, hatY       int
@@ -757,6 +759,25 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		key = gpucontext.KeyF4
 	case btnSelect:
 		key = gpucontext.KeyEscape
+	case btnMode:
+		// MENU: hold ~1.5s to quit the app outright — the escape hatch
+		// so a misbehaving frame never forces a device reboot.
+		if down {
+			p.inputMu.Lock()
+			p.menuHeld = time.Now()
+			p.inputMu.Unlock()
+		} else {
+			p.inputMu.Lock()
+			held := time.Since(p.menuHeld)
+			p.menuHeld = time.Time{}
+			p.inputMu.Unlock()
+			if held >= 1500*time.Millisecond {
+				if w := p.window; w != nil {
+					logger().Info("fbdev: MENU held — closing window")
+					w.Close()
+				}
+			}
+		}
 	case btnStart:
 		key = gpucontext.KeyEnter
 	case btnThumbl:

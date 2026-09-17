@@ -7,6 +7,7 @@ package gles
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/gogpu/gputypes"
 	"github.com/gogpu/wgpu/hal"
@@ -46,6 +47,7 @@ type Surface struct {
 	swapchainFBO        uint32
 	colorRenderbuffer   uint32
 	fboWidth, fboHeight uint32
+	debugProbeOnce      sync.Once
 }
 
 // GetAdapterInfo returns adapter information from this surface's GL context.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"time"
 	"unsafe"
 
 	"github.com/gogpu/gputypes"
@@ -154,6 +155,23 @@ func (q *Queue) Present(surface hal.Surface, _ hal.SurfaceTexture, damageRects [
 	}
 
 	surf.blitSwapchainToDefault()
+
+	// Diagnostic: one-shot GL state + swapchain FBO probe right after
+	// the blit, on frame 30 — tells us the blit's GL error state and
+	// whether the swapchain FBO holds non-black pixels at all.
+	if os.Getenv("GOGPU_GLES_DEBUG_CLEAR") == "1" {
+		surf.debugProbeOnce.Do(func() {
+			time.Sleep(500 * time.Millisecond) // let frames accumulate
+			glErr := q.glCtx.GetError()
+			q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, surf.swapchainFBO)
+			var buf [16]byte
+			q.glCtx.ReadPixels(0, int32(surf.fboHeight/2), 4, 1, gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&buf[0]))
+			hal.Logger().Info("gles: swapchain probe",
+				"glError", fmt.Sprintf("0x%x", glErr),
+				"pixels", fmt.Sprintf("% x", buf[:]))
+			q.glCtx.BindFramebuffer(gl.READ_FRAMEBUFFER, 0)
+		})
+	}
 
 	// Diagnostic: magenta-marker mode. The bottom 40px strip is flooded
 	// magenta after the content blit — magenta on the panel proves the

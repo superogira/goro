@@ -1710,7 +1710,9 @@ func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
 	m.drawMapFade(ctx, screen, now)
-	if !ctx.Config.Render.NoUI {
+	if !ctx.Config.Render.NoUI && !hudHidden(ctx) {
+		// Small-screen mode hides the pointer sprite: nothing moves it (no
+		// mouse on the device) and it would sit frozen in the corner.
 		m.drawUIDragGhosts(screen, ctx)
 		m.drawPetSlotMachine(screen, ctx, now)
 		m.drawROCursor(screen, ctx, projection, now)

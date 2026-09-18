@@ -42,9 +42,18 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		return false
 	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) && !pointerBlocked {
+		// While an NPC dialog is open, A acts as its confirm button.
+		if m.ui.npcDialog.IsOpen() {
+			m.ui.npcDialog.Confirm(ctx)
+			return true
+		}
 		if m.gamepadPrimaryAction(ctx, now) {
 			return true
 		}
+		// Nothing in range: consume the press anyway. Falling through would
+		// click wherever the stale pointer sits (top-left corner), making A
+		// walk the player northwest for no visible reason.
+		return true
 	}
 	m.updateGamepadWalk(ctx, pointerBlocked, now)
 	return false
@@ -91,6 +100,29 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 		m.clearLockedAttack()
 		m.clearAttackFocus()
 		m.requestPickup(ctx, bestItem, "gamepad a")
+		return true
+	}
+
+	// No combat and no loot: talk to the nearest NPC instead.
+	bestTalkDistance := math.Inf(1)
+	var bestTalkActor world.Actor
+	for _, actor := range ctx.World.Actors {
+		if _, dead := m.actorDeaths[actor.ID]; dead {
+			continue
+		}
+		if !cursorActorCanTalk(actor) {
+			continue
+		}
+		actorX, actorY := actorRenderPosition(actor, now)
+		distance := math.Hypot(actorX-float64(playerX), actorY-float64(playerY))
+		if distance < bestTalkDistance {
+			bestTalkDistance = distance
+			bestTalkActor = actor
+		}
+	}
+	if bestTalkDistance <= gamepadActionRange {
+		glog.Infof("gamepad a npc talk target id=%d name=%q distance=%.1f player=%d,%d", bestTalkActor.ID, bestTalkActor.Name, bestTalkDistance, playerX, playerY)
+		m.requestNPCTalk(ctx, bestTalkActor, "gamepad a")
 		return true
 	}
 	return false

@@ -230,6 +230,9 @@ type fbdevPlatform struct {
 	// to /sys/class/graphics/fb0/blank) without any system sleep.
 	screenBlanked   bool
 	screenBlankPath string
+	// dispdbgRestoreLevel is the backlight level captured before the power
+	// key turned the panel off, so unblanking restores the user's level.
+	dispdbgRestoreLevel int
 	buttons           gpucontext.Buttons
 	axes              map[uint16]int32
 	hatX, hatY        int
@@ -1097,11 +1100,14 @@ func (p *fbdevPlatform) toggleScreenBlank() {
 	logger().Warn("fbdev: no screen blank mechanism worked; power key will only mute audio")
 }
 
-// applyScreenBlank pushes a blank level (0 active, 4 powerdown) through
-// whichever mechanism this firmware exposes. It also seeds the cached node
-// path on the first successful write.
+// applyScreenBlank pushes a blank level (0 active, 4 powerdown for the
+// fbdev paths; 0/previous brightness for backlight) through whichever
+// mechanism this firmware exposes. The Allwinner dispdbg backlight comes
+// before the fbdev blank paths: game frames re-activate a blanked fb layer
+// within one frame (observed as a black flash), while the backlight stays
+// off no matter how much renders.
 func (p *fbdevPlatform) applyScreenBlank(level byte) bool {
-	if p.screenBlankPath != "" && p.screenBlankPath != " " && p.screenBlankPath != "ioctl" {
+	if p.screenBlankPath != "" && p.screenBlankPath != " " && p.screenBlankPath != "ioctl" && p.screenBlankPath != "dispdbg" {
 		if err := os.WriteFile(p.screenBlankPath, []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
 			return true
 		}
@@ -1116,6 +1122,11 @@ func (p *fbdevPlatform) applyScreenBlank(level byte) bool {
 			}
 		}
 	}
+	if dispdbgSetBacklight(p, level) {
+		p.screenBlankPath = "dispdbg"
+		logger().Info("fbdev: screen blank via dispdbg setbl", "restore_level", p.dispdbgRestoreLevel)
+		return true
+	}
 	if err := os.WriteFile("/sys/class/graphics/fb0/blank", []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
 		p.screenBlankPath = "/sys/class/graphics/fb0/blank"
 		logger().Info("fbdev: screen blank via fb sysfs", "path", p.screenBlankPath)
@@ -1124,11 +1135,6 @@ func (p *fbdevPlatform) applyScreenBlank(level byte) bool {
 	if fbBlankViaioctl(level) {
 		p.screenBlankPath = "ioctl"
 		logger().Info("fbdev: screen blank via FBIOBLANK ioctl")
-		return true
-	}
-	if dispdbgSetBacklight(level) {
-		p.screenBlankPath = " "
-		logger().Info("fbdev: screen blank via dispdbg setbl")
 		return true
 	}
 	return false
@@ -1152,15 +1158,24 @@ func fbBlankViaioctl(level byte) bool {
 
 // dispdbgSetBacklight drives the Allwinner disp engine debugfs interface
 // the way Rockbox TYPE1 does: name=lcd0, param=level, command=setbl.
-func dispdbgSetBacklight(level byte) bool {
+// Blanking (level 4) captures the current brightness via getbl first so
+// the panel restores to the level the user had, not a hardcoded value.
+func dispdbgSetBacklight(p *fbdevPlatform, level byte) bool {
 	base := "/sys/kernel/debug/dispdbg"
-	name, err := os.ReadFile(base + "/name")
-	if err != nil || strings.TrimSpace(string(name)) == "" {
+	if _, err := os.Stat(base + "/command"); err != nil {
 		return false
+	}
+	param := fmt.Sprintf("%d", level)
+	if level == 4 && p.dispdbgRestoreLevel == 0 {
+		// Remember the current brightness before turning it off.
+		p.dispdbgRestoreLevel = dispdbgGetBacklight(base)
+	} else if level == 0 && p.dispdbgRestoreLevel > 0 {
+		// "Unblank" restores the remembered brightness level.
+		param = fmt.Sprintf("%d", p.dispdbgRestoreLevel)
 	}
 	writes := [][2]string{
 		{base + "/name", "lcd0"},
-		{base + "/param", fmt.Sprintf("%d", level)},
+		{base + "/param", param},
 		{base + "/command", "setbl"},
 		{base + "/start", "1"},
 	}
@@ -1171,6 +1186,31 @@ func dispdbgSetBacklight(level byte) bool {
 		}
 	}
 	return true
+}
+
+// dispdbgGetBacklight asks the disp engine for the current backlight level
+// through the debugfs getbl command; 0 (with a log) when unsupported.
+func dispdbgGetBacklight(base string) int {
+	writes := [][2]string{
+		{base + "/name", "lcd0"},
+		{base + "/command", "getbl"},
+		{base + "/start", "1"},
+	}
+	for _, w := range writes {
+		if err := os.WriteFile(w[0], []byte(w[1]), 0o644); err != nil {
+			return 0
+		}
+	}
+	data, err := os.ReadFile(base + "/param")
+	if err != nil {
+		return 0
+	}
+	level, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || level <= 0 || level > 255 {
+		return 0
+	}
+	logger().Info("fbdev: dispdbg getbl", "level", level)
+	return level
 }
 
 func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {	typ := EventKeyUp

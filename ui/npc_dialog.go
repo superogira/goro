@@ -251,18 +251,23 @@ func (d *NPCDialog) Update(ctx Context) bool {
 		return true
 	}
 	if ctx.Input.JustPressed(input.KeyEnter) {
-		switch d.action {
-		case npcDialogActionNext:
-			d.next(ctx)
-		case npcDialogActionClose:
-			d.close(ctx)
-		case npcDialogActionMenu:
-			d.chooseSelected(ctx)
-		case npcDialogActionNumberInput, npcDialogActionStringInput:
-			d.submitInput(ctx)
-		}
+		d.Confirm(ctx)
 		d.publish(ctx)
 		return true
+	}
+	// Handheld navigation: the d-pad moves the menu selection through the
+	// options and down to the Cancel row; Confirm (Enter or the gamepad A)
+	// activates whatever is selected.
+	if d.action == npcDialogActionMenu {
+		if ctx.Input.JustPressed(input.KeyArrowUp) || ctx.Input.JustPressed(input.KeyArrowDown) {
+			step := 1
+			if ctx.Input.JustPressed(input.KeyArrowUp) {
+				step = -1
+			}
+			d.moveMenuSelection(step)
+			d.publish(ctx)
+			return true
+		}
 	}
 
 	consumed := false
@@ -402,10 +407,59 @@ func (d *NPCDialog) choose(ctx Context, choice int) {
 }
 
 func (d *NPCDialog) chooseSelected(ctx Context) {
+	if d.menuRow == npcMenuCancelRow {
+		d.choose(ctx, 255)
+		return
+	}
 	if d.menuRow < 0 || d.menuRow >= len(d.options) {
 		return
 	}
 	d.choose(ctx, d.menuRow+1)
+}
+
+// npcMenuCancelRow is the sentinel menuRow for the Cancel footer button —
+// the last stop for d-pad navigation.
+const npcMenuCancelRow = -2
+
+// moveMenuSelection steps the selection over the options list; past the
+// last option it lands on the Cancel row, and back up from there.
+func (d *NPCDialog) moveMenuSelection(step int) {
+	switch {
+	case d.menuRow == npcMenuCancelRow:
+		if step > 0 {
+			return
+		}
+		d.menuRow = len(d.options) - 1
+	case d.menuRow < 0:
+		if step > 0 {
+			d.menuRow = 0
+		}
+		return
+	case d.menuRow+step >= len(d.options):
+		if step > 0 {
+			d.menuRow = npcMenuCancelRow
+		} else if d.menuRow > 0 {
+			d.menuRow--
+		}
+	default:
+		d.menuRow += step
+	}
+	d.dirty = true
+}
+
+// Confirm activates the current dialog action — the Enter path, exported
+// so the handheld A button can reuse it.
+func (d *NPCDialog) Confirm(ctx Context) {
+	switch d.action {
+	case npcDialogActionNext:
+		d.next(ctx)
+	case npcDialogActionClose:
+		d.close(ctx)
+	case npcDialogActionMenu:
+		d.chooseSelected(ctx)
+	case npcDialogActionNumberInput, npcDialogActionStringInput:
+		d.submitInput(ctx)
+	}
 }
 
 func (d *NPCDialog) ensureWindows(ctx Context) {

@@ -240,6 +240,12 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		if now.Sub(m.heldMenuActivatedAt) < 300*time.Millisecond {
 			return true
 		}
+		// Global A action floor: holding/tapping A rapidly fired
+		// attack/pickup back-to-back (log: four pickups in one second).
+		if !m.gamepadActionAt.IsZero() && now.Sub(m.gamepadActionAt) < 450*time.Millisecond {
+			return true
+		}
+		m.gamepadActionAt = now
 		if m.gamepadPrimaryAction(ctx, now) {
 			return true
 		}

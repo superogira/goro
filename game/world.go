@@ -34,6 +34,7 @@ type WorldMode struct {
 	heldMenuSel        int
 	heldMenuMovedAt    time.Time
 	heldMenuActivatedAt time.Time
+	gamepadActionAt     time.Time
 	statsSelMovedAt    time.Time
 	mapLoad            *mapLoadState
 	mapLoadRSWSource   string

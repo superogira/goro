@@ -225,6 +225,11 @@ type fbdevPlatform struct {
 	// lastKeyPress debounces same-key press pairs (firmware key repeat is
 	// full 1/0 cycles, not value=2).
 	lastKeyPress map[uint16]time.Time
+	// hatXAt/hatYAt floor d-pad axis transitions: the polled hat bounces
+	// (press pairs tens of ms apart) and the bounce must not reach the
+	// game as repeated JustPressed edges (menus skipped rows).
+	hatXAt time.Time
+	hatYAt time.Time
 	// The firmware emits a SELECT (0x162) press right after every MENU
 	// (0x138) release. Swallow that echo so a MENU tap does not also open
 	// the in-game escape menu.
@@ -1393,18 +1398,30 @@ func (p *fbdevPlatform) pointerButton(button gpucontext.Buttons, down bool) {
 func (p *fbdevPlatform) handleAbs(code uint16, value int32) {
 	p.inputMu.Lock()
 	defer p.inputMu.Unlock()
+	// D-pad bounce floor: the polled hat reports a rapid press/release
+	// pair (event log shows pairs ~30-100ms apart) that the game read as
+	// separate JustPressed edges and skipped menu rows. The axis value is
+	// always tracked (so the resting position is never stale); only the
+	// synthesised key edge is floored.
+	const hatFloor = 220 * time.Millisecond
 	switch code {
 	case evAbsHat0X:
 		if int(value) != p.hatX {
 			old := p.hatX
 			p.hatX = int(value)
-			p.queueHatKeys(old, int(value), gpucontext.KeyLeft, gpucontext.KeyRight)
+			if time.Since(p.hatXAt) >= hatFloor {
+				p.hatXAt = time.Now()
+				p.queueHatKeys(old, int(value), gpucontext.KeyLeft, gpucontext.KeyRight)
+			}
 		}
 	case evAbsHat0Y:
 		if int(value) != p.hatY {
 			old := p.hatY
 			p.hatY = int(value)
-			p.queueHatKeys(old, int(value), gpucontext.KeyUp, gpucontext.KeyDown)
+			if time.Since(p.hatYAt) >= hatFloor {
+				p.hatYAt = time.Now()
+				p.queueHatKeys(old, int(value), gpucontext.KeyUp, gpucontext.KeyDown)
+			}
 		}
 	default:
 		p.axes[code] = value

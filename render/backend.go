@@ -2438,7 +2438,7 @@ func (r *runner) drawVolumeHUD(screen *Frame) {
 	}
 	fillH := barH * level
 	fillColor := color.RGBA{R: 250, G: 220, B: 120, A: 235}
-	if state.muted {
+	if state.muted || level <= 0 {
 		fillColor = color.RGBA{R: 160, G: 160, B: 160, A: 235}
 	}
 	if fillH > 0 {
@@ -2448,7 +2448,7 @@ func (r *runner) drawVolumeHUD(screen *Frame) {
 	// Speaker glyph below the bar: a small box body plus a wider base.
 	gx := barX - 1
 	gy := barY + barH + 10
-	if state.muted {
+	if state.muted || level <= 0 {
 		render_DrawRect(screen, gx, gy, barW+2, barW+2, color.RGBA{R: 160, G: 160, B: 160, A: 235})
 		// Mute slash
 		render_DrawRect(screen, gx+barW/2, gy, 3, barW+2, color.RGBA{R: 255, G: 90, B: 90, A: 255})

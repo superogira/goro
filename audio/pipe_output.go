@@ -79,7 +79,11 @@ func newPipeOutput(name string, rate int) *pipeOutput {
 			name: name,
 			rate: rate,
 			command: []string{
+				// Small ALSA buffer (~1024 frames ≈ 23ms) keeps SFX close
+				// behind the action; the default buffer was audible frames
+				// late on the rg35xx.
 				"aplay", "-q", "-f", "S16_LE", "-r", fmt.Sprintf("%d", rate), "-c", "2",
+				"--buffer-size=1024", "--period-size=256",
 			},
 		}
 	}

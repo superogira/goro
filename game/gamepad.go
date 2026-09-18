@@ -26,7 +26,7 @@ const (
 	// projecting that point back through the camera, so the walk direction
 	// is exactly the direction shown on screen regardless of the isometric
 	// camera rotation or zoom.
-	gamepadWalkScreenLead = 160.0
+	gamepadWalkScreenLead = 80.0
 )
 
 // ensureHeldMenu lazily builds the MENU-tap overlay with its item actions.
@@ -75,6 +75,13 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	if ctx.Input == nil || ctx.World == nil {
 		return false
 	}
+	// While an NPC dialog is open, A confirms it — checked before the
+	// keyboard-blocked gate below, which reports the open dialog itself
+	// and would swallow the press.
+	if m.ui.npcDialog.IsOpen() && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+		m.ui.npcDialog.Confirm(ctx)
+		return true
+	}
 	// The MENU-tap overlay owns every button while open: d-pad moves its
 	// selection (its own Update), A activates, MENU closes, walking is
 	// suspended.
@@ -88,14 +95,6 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	}
 	if m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx) {
 		return false
-	}
-	// While an NPC dialog is open, A acts as its confirm button — even
-	// though the dialog blocks the pointer (it is a modal).
-	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
-		if m.ui.npcDialog.IsOpen() {
-			m.ui.npcDialog.Confirm(ctx)
-			return true
-		}
 	}
 	if m.pendingSkill.skill.ID != 0 || m.pendingPetCapture.active {
 		return false
@@ -209,18 +208,26 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 		return
 	}
 	if ctx.Input.KeyCodeDown(gpucontext.KeyF17) {
+		// Rate-limited fine camera steps: the held d-pad repeats through
+		// the game loop, so gate to a gentle per-tenth-second nudge.
+		if now.Sub(m.gamepadCameraAt) < 100*time.Millisecond {
+			return
+		}
+		m.gamepadCameraAt = now
+		const zoomFactor = 1.06
+		const rotateAngle = 8.0
 		if !cameraZoomLockedForMap(ctx) {
 			if dy < 0 {
-				m.camera.ZoomBy(1 / cameraButtonZoomStep)
+				m.camera.ZoomBy(zoomFactor)
 			} else if dy > 0 {
-				m.camera.ZoomBy(cameraButtonZoomStep)
+				m.camera.ZoomBy(1 / zoomFactor)
 			}
 		}
 		if !cameraRotationLockedForMap(ctx) {
 			if dx < 0 {
-				m.camera.Rotate(-cameraButtonRotateStep)
+				m.camera.Rotate(-rotateAngle)
 			} else if dx > 0 {
-				m.camera.Rotate(cameraButtonRotateStep)
+				m.camera.Rotate(rotateAngle)
 			}
 		}
 		m.gamepadDirLogged = false

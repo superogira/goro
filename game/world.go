@@ -29,6 +29,7 @@ type WorldMode struct {
 	walkCooldownUntil  time.Time
 	nextHeldWalkAt     time.Time
 	gamepadDirLogged  bool
+	gamepadCameraAt   time.Time
 	mapLoad           *mapLoadState
 	mapLoadRSWSource  string
 	camera             followCamera
@@ -1246,6 +1247,12 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		// prevents a throttled ground click from turning into a walk on the next
 		// frame merely because the button is still down.
 		m.nextHeldWalkAt = now.Add(heldWalkRepeatInterval)
+	}
+	if gamepadConsumed {
+		// The A button's companion click (auto-released ~80ms later) must not
+		// turn into a held-click walk toward the stale pointer position
+		// during its brief down window.
+		m.nextHeldWalkAt = now.Add(600 * time.Millisecond)
 	}
 	if leftClick && m.pendingSkill.skill.ID != 0 {
 		screenW, screenH := ctx.ScreenSize()

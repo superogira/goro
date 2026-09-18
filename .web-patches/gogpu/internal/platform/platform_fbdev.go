@@ -229,6 +229,7 @@ type fbdevPlatform struct {
 	// blanked too) → on (restore). Not a sleep — sockets stay alive.
 	powerState          int
 	dispdbgRestoreLevel int
+	backlightLevel      int
 	buttons             gpucontext.Buttons
 	axes                map[uint16]int32
 	hatX, hatY          int
@@ -805,16 +806,19 @@ func (p *fbdevPlatform) readEvents(f *os.File) {
 			value := int32(binary.LittleEndian.Uint32(buf[off+20 : off+24]))
 			switch typ {
 			case evTypeKey:
+				// Kernel autorepeat (value 2) fired a held button as a
+				// stream of re-presses — the volume keys stepped ~5x/s and
+				// A double-advanced login screens. Drop repeats entirely.
+				if value == 2 {
+					continue
+				}
 				// Trace the first key events of the session: the physical
 				// button → evdev code map, including codes that map to
-				// game keys and would otherwise stay silent. Autorepeat
-				// (value 2) is skipped.
-				if value != 2 {
-					if n := p.traceKeyEvent(f); n <= 40 {
-						logger().Info("fbdev: key event",
-							"code", fmt.Sprintf("0x%x (%d)", code, code),
-							"value", value)
-					}
+				// game keys and would otherwise stay silent.
+				if n := p.traceKeyEvent(f); n <= 40 {
+					logger().Info("fbdev: key event",
+						"code", fmt.Sprintf("0x%x (%d)", code, code),
+						"value", value)
 				}
 				p.handleKey(code, value != 0)
 			case evTypeAbs:
@@ -966,16 +970,11 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		button = gpucontext.ButtonsRight
 	case btnMiddle, btnNorth: // real mouse middle / gamepad X
 		button = gpucontext.ButtonsMiddle
-	case btnL1:
-		key = gpucontext.KeyF1
-		p.setHeld(btnL1, down)
-	case btnR1:
-		key = gpucontext.KeyF2
-		p.setHeld(btnR1, down)
-	case btnL2:
-		key = gpucontext.KeyF3
-	case btnR2:
-		key = gpucontext.KeyF4
+	case btnL1, btnR1, btnL2, btnR2:
+		// Shoulder buttons: held for combos only (quit watcher / future
+		// use). The earlier F1-F4 mappings leaked into UI focus paths and
+		// made L2 behave like a stray Enter in dialogs.
+		p.setHeld(code, down)
 	case btnMenu:
 		// Physical MENU (0x138 on this hardware): hold ≥3s quits via the
 		// quit watcher (long, because MENU+d-pad is the camera combo and
@@ -1001,7 +1000,8 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			p.inputMu.Lock()
 			p.suppressSel0Until = time.Now().Add(250 * time.Millisecond)
 			p.inputMu.Unlock()
-			if menuHeld && time.Since(t0) < 800*time.Millisecond {
+			if menuHeld && time.Since(t0) < 1500*time.Millisecond {
+				logger().Info("fbdev: menu tap — handheld menu key")
 				p.dispatchKey(gpucontext.KeyF15, true)
 				// Release shortly after so the key does not stay held; the
 				// press edge lands in the current event batch.
@@ -1015,8 +1015,15 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		key = gpucontext.KeyEscape
 		p.setHeld(btnSelect, down)
 	case keyVolDown, keyVolUp:
-		// Side volume keys: straight through as media keys; the app layer
-		// steps the game's BGM+SFX volume.
+		// Volume keys: with MENU held they step the panel backlight (the
+		// system combo); alone they are media keys the app layer maps to
+		// game volume.
+		if p.isHeld(btnMenu) {
+			if down {
+				p.stepBacklight(code == keyVolUp)
+			}
+			return
+		}
 		if code == keyVolUp {
 			key = gpucontext.KeyAudioVolumeUp
 		} else {
@@ -1188,6 +1195,29 @@ func (p *fbdevPlatform) captureBacklightLevel() {
 	}
 	p.dispdbgRestoreLevel = level
 	logger().Info("fbdev: captured backlight level", "level", level)
+}
+
+// stepBacklight nudges the panel brightness through the Allwinner dispdbg
+// interface (MENU+volume combo). Starts from the captured or default level.
+func (p *fbdevPlatform) stepBacklight(up bool) {
+	if p.backlightLevel == 0 {
+		p.captureBacklightLevel()
+		p.backlightLevel = p.dispdbgRestoreLevel
+	}
+	delta := 20
+	if !up {
+		delta = -20
+	}
+	level := p.backlightLevel + delta
+	if level < 10 {
+		level = 10
+	}
+	if level > 255 {
+		level = 255
+	}
+	p.backlightLevel = level
+	p.setPanelBacklight(level)
+	logger().Info("fbdev: backlight step", "level", level)
 }
 
 // setPanelBacklight writes a brightness level through the Allwinner dispdbg

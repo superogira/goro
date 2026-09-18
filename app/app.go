@@ -66,6 +66,9 @@ func New(cfg config.Config) (*Game, error) {
 		screenW:  cfg.Window.Width,
 		screenH:  cfg.Window.Height,
 	}
+	// Preferred resolver (e.g. 8.8.8.8 on the rg35xx, whose local DNS
+	// NXDOMAINs DDNS hostnames); no-op when unset.
+	network.SetPreferredDNS(cfg.Network.DNS)
 	g.session.KeepLoginID = cfg.Login.KeepID
 	g.session.SavedUsername = cfg.Login.SavedUsername
 	g.session.NoShift = cfg.Gameplay.NoShift

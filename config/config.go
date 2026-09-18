@@ -118,6 +118,10 @@ type RenderConfig struct {
 
 type NetworkConfig struct {
 	Trace bool
+	// DNS is an IP of a resolver queried directly (UDP 53) before the
+	// system resolver — for devices whose local DNS misresolves DDNS
+	// hostnames ("8.8.8.8"). Empty uses the system resolver only.
+	DNS string
 }
 
 type FogConfig struct {
@@ -620,6 +624,8 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Render.WorldDebugStats)
 	case "network.trace":
 		return setBool(value, &cfg.Network.Trace)
+	case "network.dns":
+		cfg.Network.DNS = strings.TrimSpace(value)
 	case "fog.enabled":
 		return setBool(value, &cfg.Fog.Enabled)
 	case "gameplay.noshift":

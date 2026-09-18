@@ -180,12 +180,13 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 	}()
 }
 
-// drawMapLoadProgress renders the loading cover with a progress bar. Used
-// while the background map load runs, replacing the bare black screen.
+// drawMapLoadProgress draws the progress bar on the loading cover. The cover
+// itself (background image/black + showcase sprite) is drawn by
+// drawLoadingScreen/drawLoadingShowcase first — an opaque fill here would
+// erase them, which is exactly what hid the showcase sprite on the device.
 func drawMapLoadProgress(screen *render.Frame, load *mapLoadState) {
 	bounds := screen.Bounds()
 	width, height := float64(bounds.Dx()), float64(bounds.Dy())
-	render.DrawRect(screen, 0, 0, width, height, color.RGBA{A: 255})
 
 	fraction := load.progress()
 	const barWidthFactor = 0.5

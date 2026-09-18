@@ -33,20 +33,21 @@ const (
 
 type EquipmentWindow struct {
 	Window
-	snapshot      string
-	itemInfo      *ItemWindows
-	cart          *CartWindow
-	hasCart       bool
-	hasPeco       bool
-	preview       image.Image
-	tooltip       tooltipState
-	lastClickItem uint16
-	lastClickAt   time.Time
-	icons         map[equipmentItemIconKey]image.Image
-	iconMiss      map[equipmentItemIconKey]struct{}
-	assets        AssetProvider
-	webOpen       bool
-	webSyncKey    string
+	snapshot        string
+	itemInfo        *ItemWindows
+	cart            *CartWindow
+	hasCart         bool
+	hasPeco         bool
+	preview         image.Image
+	tooltip         tooltipState
+	lastClickItem   uint16
+	lastClickAt     time.Time
+	icons           map[equipmentItemIconKey]image.Image
+	iconMiss        map[equipmentItemIconKey]struct{}
+	assets          AssetProvider
+	webOpen         bool
+	webSyncKey      string
+	gamepadSelected int
 }
 
 type equipmentItemIconKey struct {
@@ -115,6 +116,7 @@ func (w *EquipmentWindow) Toggle(ctx Context) {
 	w.hasCart = inventoryBagHasCart(ctx)
 	w.hasPeco = equipmentHasPeco(ctx)
 	w.preview = nil
+	w.gamepadSelected = 0
 	w.Window.Open(ctx, w.widgetTree(ctx, nil, nil))
 	w.Publish(ctx)
 }
@@ -199,29 +201,29 @@ func (w *EquipmentWindow) widgetTree(ctx Context, itemInfo *ItemWindows, cart *C
 			primitives.Box(
 				primitives.HBox(
 					primitives.Box(
-						w.slotWidget(ctx, itemInfo, equipmentSlotHeadTop, equipmentLeftColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotHeadLow, equipmentLeftColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotWeapon, equipmentLeftColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotGarment, equipmentLeftColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotAccessory, equipmentLeftColW),
+						w.slotWidget(ctx, itemInfo, 0, equipmentLeftColW),
+						w.slotWidget(ctx, itemInfo, 2, equipmentLeftColW),
+						w.slotWidget(ctx, itemInfo, 4, equipmentLeftColW),
+						w.slotWidget(ctx, itemInfo, 6, equipmentLeftColW),
+						w.slotWidget(ctx, itemInfo, 8, equipmentLeftColW),
 					).
 						Width(equipmentLeftColW).
 						Gap(0),
 
 					primitives.Box(
 						newStaticImageWidget(w.preview, equipmentCenterColW, equipmentPreviewImageH),
-						w.slotWidget(ctx, itemInfo, equipmentSlotAmmo, equipmentCenterColW),
+						w.slotWidget(ctx, itemInfo, 10, equipmentCenterColW),
 					).
 						Width(equipmentCenterColW).
 						Height(equipmentCenterColH).
 						Gap(0),
 
 					primitives.Box(
-						w.slotWidget(ctx, itemInfo, equipmentSlotHeadMid, equipmentRightColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotArmor, equipmentRightColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotShield, equipmentRightColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotShoes, equipmentRightColW),
-						w.slotWidget(ctx, itemInfo, equipmentSlotAccessory2, equipmentRightColW),
+						w.slotWidget(ctx, itemInfo, 1, equipmentRightColW),
+						w.slotWidget(ctx, itemInfo, 3, equipmentRightColW),
+						w.slotWidget(ctx, itemInfo, 5, equipmentRightColW),
+						w.slotWidget(ctx, itemInfo, 7, equipmentRightColW),
+						w.slotWidget(ctx, itemInfo, 9, equipmentRightColW),
 					).
 						Width(equipmentRightColW).
 						Gap(0),
@@ -271,7 +273,13 @@ func (w *EquipmentWindow) footerWidgets(ctx Context, itemInfo *ItemWindows, cart
 	return children
 }
 
-func (w *EquipmentWindow) slotWidget(ctx Context, itemInfo *ItemWindows, slot equipmentSlotDef, width int) widget.Widget {
+func (w *EquipmentWindow) slotWidget(ctx Context, itemInfo *ItemWindows, index int, width int) widget.Widget {
+	if index < 0 || index >= len(equipmentSlots) {
+		return primitives.Box().
+			Width(float32(width)).
+			Height(equipmentRowH)
+	}
+	slot := equipmentSlots[index]
 	if !equipmentSlotVisible(ctx.Session, slot) {
 		return primitives.Box().
 			Width(float32(width)).
@@ -280,6 +288,7 @@ func (w *EquipmentWindow) slotWidget(ctx Context, itemInfo *ItemWindows, slot eq
 	item, hasItem := equippedItemForSlot(ctx.Session, slot.location)
 	return newEquipmentSlotWidget(equipmentSlotWidgetConfig{
 		slot:    slot,
+		index:   index,
 		item:    item,
 		icon:    w.itemIconImage(ctx.Resources, item),
 		hasItem: hasItem,
@@ -301,6 +310,7 @@ func (w *EquipmentWindow) slotWidget(ctx Context, itemInfo *ItemWindows, slot eq
 				itemInfo.openItem(ctx, item, x, y)
 			}
 		},
+		selected: &w.gamepadSelected,
 	})
 }
 
@@ -464,11 +474,13 @@ func equipmentSnapshot(s *session.Session) string {
 
 type equipmentSlotWidgetConfig struct {
 	slot         equipmentSlotDef
+	index        int
 	item         session.InventoryItem
 	icon         image.Image
 	hasItem      bool
 	width        int
 	res          *res.Manager
+	selected     *int
 	onClick      func(session.InventoryItem)
 	onHover      func(session.InventoryItem)
 	onLeave      func()
@@ -549,6 +561,10 @@ func (w *equipmentSlotWidget) Draw(ctx widget.Context, canvas widget.Canvas) {
 		false,
 		align,
 	)
+	// Gamepad cursor: outline only, matching the inventory cell selection.
+	if w.cfg.selected != nil && *w.cfg.selected == w.cfg.index {
+		canvas.StrokeRect(w.Bounds(), rotheme.Default.Colors.InputFocus, 1.5)
+	}
 }
 
 func (w *equipmentSlotWidget) Event(ctx widget.Context, e event.Event) bool {

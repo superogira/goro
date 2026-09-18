@@ -144,6 +144,14 @@ const (
 	btnThumbl = 0x13b
 	btnThumbr = 0x13c
 
+	// Side keys seen in the field: VOLUMEDOWN/VOLUMEUP on the gamepad device
+	// (event1), and the PMIC power key on event0 (axp2202-pek). The power
+	// key toggles screen+audio off without sleeping — the game keeps its
+	// connection.
+	keyVolDown = 0x72 // KEY_VOLUMEDOWN
+	keyVolUp   = 0x73 // KEY_VOLUMEUP
+	keyPower   = 0x74 // KEY_POWER
+
 	// btnSel0 is SELECT on this device — the one non-gamepad code the
 	// ANBERNIC-keys device advertises (from its /proc caps bitmap).
 	btnSel0 = 0x162
@@ -216,6 +224,11 @@ type fbdevPlatform struct {
 	// (0x138) release. Swallow that echo so a MENU tap does not also open
 	// the in-game escape menu.
 	suppressSel0Until time.Time
+	// Power-key screen state: blanked toggles the panel backlight through
+	// sysfs (Rockbox-style: /sys/class/backlight/*/bl_power, falling back
+	// to /sys/class/graphics/fb0/blank) without any system sleep.
+	screenBlanked   bool
+	screenBlankPath string
 	buttons           gpucontext.Buttons
 	axes              map[uint16]int32
 	hatX, hatY        int
@@ -972,6 +985,26 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	case btnSelect:
 		key = gpucontext.KeyEscape
 		p.setHeld(btnSelect, down)
+	case keyVolDown, keyVolUp:
+		// Side volume keys: straight through as media keys; the app layer
+		// steps the game's BGM+SFX volume.
+		if code == keyVolUp {
+			key = gpucontext.KeyAudioVolumeUp
+		} else {
+			key = gpucontext.KeyAudioVolumeDown
+		}
+	case keyPower:
+		// Short power press: blank/unblank the panel and mute/unmute the
+		// game (KeyF14 edge). Not a sleep — the process and its sockets
+		// stay alive.
+		if down {
+			p.toggleScreenBlank()
+			p.dispatchKey(gpucontext.KeyF14, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF14, false)
+			}()
+		}
 	case btnStart:
 		key = gpucontext.KeyEnter
 		p.setHeld(btnStart, down)
@@ -1045,8 +1078,46 @@ func (p *fbdevPlatform) mods() gpucontext.Modifiers {
 	return m
 }
 
-func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {
-	typ := EventKeyUp
+// toggleScreenBlank flips the panel backlight for the power key. Uses the
+// standard backlight node first (Rockbox TYPE2), then the framebuffer
+// blank node; both take 0 = active and 4 = powerdown. Rendering and the
+// network connection continue — this is a display mute, not a sleep.
+func (p *fbdevPlatform) toggleScreenBlank() {
+	if p.screenBlankPath == "" {
+		candidates := []string{}
+		if matches, err := filepath.Glob("/sys/class/backlight/*/bl_power"); err == nil {
+			candidates = append(candidates, matches...)
+		}
+		candidates = append(candidates, "/sys/class/graphics/fb0/blank")
+		for _, path := range candidates {
+			if err := os.WriteFile(path, []byte("0"), 0o644); err == nil {
+				p.screenBlankPath = path
+				logger().Info("fbdev: screen blank node selected", "path", path)
+				break
+			}
+		}
+		if p.screenBlankPath == "" {
+			logger().Warn("fbdev: no writable screen blank node found; power key will only mute audio")
+			p.screenBlankPath = " "
+			return
+		}
+	}
+	p.screenBlanked = !p.screenBlanked
+	value := "0"
+	if p.screenBlanked {
+		value = "4"
+	}
+	if p.screenBlankPath != " " {
+		if err := os.WriteFile(p.screenBlankPath, []byte(value), 0o644); err != nil {
+			logger().Warn("fbdev: screen blank write failed", "path", p.screenBlankPath, "err", err.Error())
+			p.screenBlanked = !p.screenBlanked
+			return
+		}
+	}
+	logger().Info("fbdev: power key toggled screen", "blanked", p.screenBlanked)
+}
+
+func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {	typ := EventKeyUp
 	if down {
 		typ = EventKeyDown
 	}

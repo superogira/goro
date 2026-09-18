@@ -32,6 +32,13 @@ const (
 	doriDoriTurns     = 5
 	doriDoriMinSpan   = 1500 * time.Millisecond
 	doriDoriMaxSpan   = 3 * time.Second
+
+	// Compact-auto mode (small screens): the dormant console shrinks to a
+	// few lines and unpublishes entirely after a quiet spell, popping back
+	// on the next message. Typing always shows the full console.
+	consoleCompactWidth    = 320
+	consoleCompactHeight   = 4*consoleLineH + consoleFieldH + 20
+	consoleCompactHideWait = 6 * time.Second
 )
 
 var (
@@ -61,6 +68,12 @@ type ChatConsole struct {
 	lastMessage      string
 	lastMessageAt    time.Time
 	doriDoriTimes    [doriDoriTurns]time.Time
+
+	// compactAuto is the small-screen layout mode: the dormant console is
+	// compact and auto-unpublishes after consoleCompactHideWait without
+	// messages. lastActivityAt feeds that timer.
+	compactAuto    bool
+	lastActivityAt time.Time
 
 	OnGuildWindow func()
 
@@ -201,6 +214,14 @@ func (c *ChatConsole) UpdatePresentation(ctx client.Context) {
 		return
 	}
 	c.flushPendingMessageRedraw(ctx)
+	if c.compactAutoIdle(time.Now()) {
+		// Quiet small-screen mode: drop the window entirely; the next
+		// message (or activation) reopens it through ensureWindow.
+		if c.window.IsOpen() {
+			c.window.Close()
+		}
+		return
+	}
 	c.ensureWindow(ctx)
 	c.Publish(ctx)
 	c.armPendingMessageRedraw()
@@ -343,9 +364,32 @@ func (c *ChatConsole) clickedOutside(ctx client.Context) bool {
 	return !pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, x, y, width, height)
 }
 
+// SetCompactAuto switches the small-screen layout mode: compact size and
+// auto-hide when dormant. World mode drives this from the UI config.
+func (c *ChatConsole) SetCompactAuto(enabled bool) {
+	if c == nil || c.compactAuto == enabled {
+		return
+	}
+	c.compactAuto = enabled
+	// Force a bounds re-evaluation on the next presentation pass.
+	c.cacheKey = ""
+	c.renderKeyCache = ""
+}
+
+// compactAutoIdle reports whether the dormant console has been quiet long
+// enough to unpublish itself.
+func (c *ChatConsole) compactAutoIdle(now time.Time) bool {
+	return c.compactAuto && !c.active && !c.Active() &&
+		!c.lastActivityAt.IsZero() && now.Sub(c.lastActivityAt) > consoleCompactHideWait
+}
+
 func (c *ChatConsole) ensureWindow(ctx client.Context) {
 	screenW, screenH := ctx.ScreenSize()
 	x, y, width, height := consoleBounds(screenW, screenH)
+	if c.compactAuto && !c.active && !c.Active() {
+		width = minInt(consoleCompactWidth, maxInt(200, screenW-2*consoleMargin))
+		height = consoleCompactHeight
+	}
 	key := c.renderKey(width, height)
 	if c.window.width == 0 {
 		c.window = NewWindow(width, height)
@@ -424,6 +468,7 @@ func (c *ChatConsole) addMessageColor(messageColor color.RGBA, format string, ar
 	}
 	c.lastMessage = text
 	c.lastMessageAt = now
+	c.lastActivityAt = now
 	c.messages = append(c.messages, ConsoleMessage{Text: text, Color: messageColor})
 	if len(c.messages) > 80 {
 		copy(c.messages, c.messages[len(c.messages)-80:])

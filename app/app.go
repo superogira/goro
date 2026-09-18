@@ -37,6 +37,10 @@ type Game struct {
 	quit              func()
 	quitting          bool
 	pendingScreenshot string
+	// Handheld audio state: side-key volume steps and the power-key mute.
+	muted    bool
+	mutedBGM float64
+	mutedSFX float64
 }
 
 func New(cfg config.Config) (*Game, error) {
@@ -157,9 +161,51 @@ func (g *Game) PrepareKeyInput(code input.KeyCode, mods gpucontext.Modifiers) {
 			glog.Warnf("screenshot request failed: %v", err)
 		}
 	}
+	// Handheld side keys: volume steps (both BGM and SFX together) and the
+	// power-key screen toggle, whose KeyF14 edge mutes/unmutes the game.
+	switch code {
+	case gpucontext.KeyAudioVolumeUp:
+		g.stepVolume(0.1)
+	case gpucontext.KeyAudioVolumeDown:
+		g.stepVolume(-0.1)
+	case gpucontext.KeyF14:
+		g.toggleMute()
+	}
 	if g.modes != nil {
 		g.modes.PrepareKeyInput(g.modeContext(), code, mods)
 	}
+}
+
+// stepVolume nudges both volume channels and clears any mute so the change
+// is audible immediately.
+func (g *Game) stepVolume(delta float64) {
+	if g.audio == nil {
+		return
+	}
+	g.muted = false
+	g.audio.SetBGMVolume(g.audio.BGMVolume() + delta)
+	g.audio.SetSFXVolume(g.audio.SFXVolume() + delta)
+	glog.Infof("volume changed bgm=%.2f sfx=%.2f", g.audio.BGMVolume(), g.audio.SFXVolume())
+}
+
+// toggleMute remembers the levels before silencing so the power-key screen
+// toggle can restore them exactly.
+func (g *Game) toggleMute() {
+	if g.audio == nil {
+		return
+	}
+	if g.muted {
+		g.muted = false
+		g.audio.SetBGMVolume(g.mutedBGM)
+		g.audio.SetSFXVolume(g.mutedSFX)
+		glog.Infof("audio unmuted bgm=%.2f sfx=%.2f", g.mutedBGM, g.mutedSFX)
+		return
+	}
+	g.mutedBGM = g.audio.BGMVolume()
+	g.mutedSFX = g.audio.SFXVolume()
+	g.muted = true
+	g.audio.SetVolume(0)
+	glog.Infof("audio muted (was bgm=%.2f sfx=%.2f)", g.mutedBGM, g.mutedSFX)
 }
 
 func (g *Game) SetQuitFunc(quit func()) {

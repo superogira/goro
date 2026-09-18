@@ -771,9 +771,11 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
 		return nil, nil
 	}
-	if !hudHidden(ctx) {
-		m.ui.console.UpdatePresentation(ctx)
-	}
+	// Small-screen mode: the console keeps running in compact-auto form
+	// (small, auto-show on message, auto-hide when quiet) instead of being
+	// suppressed outright; the rest of the HUD stays hidden.
+	m.ui.console.SetCompactAuto(hudHidden(ctx))
+	m.ui.console.UpdatePresentation(ctx)
 	m.ui.questWindow.UpdatePresentation(ctx, now)
 	m.ui.worldMap.UpdatePresentation(ctx)
 	if progressBlocksActions {

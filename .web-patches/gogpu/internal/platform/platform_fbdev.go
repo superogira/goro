@@ -225,11 +225,14 @@ type fbdevPlatform struct {
 	// lastKeyPress debounces same-key press pairs (firmware key repeat is
 	// full 1/0 cycles, not value=2).
 	lastKeyPress map[uint16]time.Time
-	// hatXAt/hatYAt floor d-pad axis transitions: the polled hat bounces
-	// (press pairs tens of ms apart) and the bounce must not reach the
-	// game as repeated JustPressed edges (menus skipped rows).
-	hatXAt time.Time
-	hatYAt time.Time
+	// hatXAt/hatYAt floor d-pad axis edges; hatXPosted/hatYPosted track
+	// what the game currently believes. The sync loop coalesces: it always
+	// converges the posted value to the physical one, so a release can
+	// never be swallowed (swallowed edges left the character walking).
+	hatXAt     time.Time
+	hatYAt     time.Time
+	hatXPosted int
+	hatYPosted int
 	// The firmware emits a SELECT (0x162) press right after every MENU
 	// (0x138) release. Swallow that echo so a MENU tap does not also open
 	// the in-game escape menu.
@@ -754,6 +757,7 @@ func (p *fbdevPlatform) startInput() {
 	}
 	if opened > 0 {
 		logger().Info("fbdev: listening to input devices", "count", opened)
+		go p.hatSyncLoop()
 	}
 }
 
@@ -1398,33 +1402,45 @@ func (p *fbdevPlatform) pointerButton(button gpucontext.Buttons, down bool) {
 func (p *fbdevPlatform) handleAbs(code uint16, value int32) {
 	p.inputMu.Lock()
 	defer p.inputMu.Unlock()
-	// D-pad bounce floor: the polled hat reports a rapid press/release
-	// pair (event log shows pairs ~30-100ms apart) that the game read as
-	// separate JustPressed edges and skipped menu rows. The axis value is
-	// always tracked (so the resting position is never stale); only the
-	// synthesised key edge is floored.
-	const hatFloor = 220 * time.Millisecond
+	// Record the physical state only; hatSyncLoop posts coalesced edges.
 	switch code {
 	case evAbsHat0X:
-		if int(value) != p.hatX {
-			old := p.hatX
-			p.hatX = int(value)
-			if time.Since(p.hatXAt) >= hatFloor {
-				p.hatXAt = time.Now()
-				p.queueHatKeys(old, int(value), gpucontext.KeyLeft, gpucontext.KeyRight)
-			}
-		}
+		p.hatX = int(value)
 	case evAbsHat0Y:
-		if int(value) != p.hatY {
-			old := p.hatY
-			p.hatY = int(value)
-			if time.Since(p.hatYAt) >= hatFloor {
-				p.hatYAt = time.Now()
-				p.queueHatKeys(old, int(value), gpucontext.KeyUp, gpucontext.KeyDown)
-			}
-		}
+		p.hatY = int(value)
 	default:
 		p.axes[code] = value
+	}
+}
+
+// hatSyncLoop publishes d-pad axis state to the game with edge coalescing:
+// at most one key edge per axis per floor interval, always converging the
+// posted value to the physical one. The earlier inline floor dropped
+// edges outright — a release swallowed inside the window left the
+// character walking (field report: movement stuck or wrong direction).
+func (p *fbdevPlatform) hatSyncLoop() {
+	const hatFloor = 180 * time.Millisecond
+	ticker := time.NewTicker(30 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		if p.isClosing() {
+			return
+		}
+		p.inputMu.Lock()
+		now := time.Now()
+		if p.hatX != p.hatXPosted && now.Sub(p.hatXAt) >= hatFloor {
+			old := p.hatXPosted
+			p.hatXPosted = p.hatX
+			p.hatXAt = now
+			p.queueHatKeys(old, p.hatXPosted, gpucontext.KeyLeft, gpucontext.KeyRight)
+		}
+		if p.hatY != p.hatYPosted && now.Sub(p.hatYAt) >= hatFloor {
+			old := p.hatYPosted
+			p.hatYPosted = p.hatY
+			p.hatYAt = now
+			p.queueHatKeys(old, p.hatYPosted, gpucontext.KeyUp, gpucontext.KeyDown)
+		}
+		p.inputMu.Unlock()
 	}
 }
 

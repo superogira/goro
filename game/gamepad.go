@@ -31,6 +31,13 @@ const (
 	// is exactly the direction shown on screen regardless of the isometric
 	// camera rotation or zoom.
 	gamepadWalkScreenLead = 80.0
+	// gamepadActionFloor paces A actions (attack/pickup/talk/confirm):
+	// the firmware repeats held keys as press pairs and every path that
+	// skipped this floor machine-gunned (four pickups per second, several
+	// dialog pages per press).
+	gamepadActionFloor = 600 * time.Millisecond
+	// gamepadNavFloor paces d-pad menu navigation everywhere.
+	gamepadNavFloor = 220 * time.Millisecond
 )
 
 // ensureHeldMenu lazily builds the handheld menu item actions.
@@ -126,7 +133,7 @@ func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
 	if dx == 0 && dy == 0 {
 		return
 	}
-	if now.Sub(m.heldMenuMovedAt) < 180*time.Millisecond {
+	if now.Sub(m.heldMenuMovedAt) < gamepadNavFloor {
 		return
 	}
 	m.heldMenuMovedAt = now
@@ -187,9 +194,13 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	}
 	// While an NPC dialog is open, A confirms it — checked before the
 	// keyboard-blocked gate below, which reports the open dialog itself
-	// and would swallow the press.
+	// and would swallow the press. Floored: the firmware's hold-repeat
+	// pairs otherwise advanced several dialog pages per held press.
 	if m.ui.npcDialog.IsOpen() && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
-		m.ui.npcDialog.Confirm(ctx)
+		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+			m.gamepadActionAt = now
+			m.ui.npcDialog.Confirm(ctx)
+		}
 		return true
 	}
 	// The direct-drawn MENU overlay owns every button while open; B closes.
@@ -211,7 +222,10 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	// move the stat selection, A raises it, walking is suspended.
 	if m.ui.statsWindow.IsOpen() {
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
-			m.ui.statsWindow.GamepadConfirm(ctx)
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.statsWindow.GamepadConfirm(ctx)
+			}
 			return true
 		}
 		delta := 0
@@ -221,7 +235,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		if ctx.Input.JustPressed(input.KeyArrowDown) || ctx.Input.JustPressed(input.KeyArrowRight) {
 			delta++
 		}
-		if delta != 0 && now.Sub(m.statsSelMovedAt) >= 180*time.Millisecond {
+		if delta != 0 && now.Sub(m.statsSelMovedAt) >= gamepadNavFloor {
 			m.statsSelMovedAt = now
 			m.ui.statsWindow.GamepadNavigate(ctx, delta)
 		}
@@ -242,7 +256,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		}
 		// Global A action floor: holding/tapping A rapidly fired
 		// attack/pickup back-to-back (log: four pickups in one second).
-		if !m.gamepadActionAt.IsZero() && now.Sub(m.gamepadActionAt) < 450*time.Millisecond {
+		if !m.gamepadActionAt.IsZero() && now.Sub(m.gamepadActionAt) < gamepadActionFloor {
 			return true
 		}
 		m.gamepadActionAt = now

@@ -100,6 +100,16 @@ type SkillWindow struct {
 	selectedLevels map[uint16]int
 	webOpen        bool
 	webSyncKey     string
+
+	// Handheld gamepad selection: table mode tracks a row, grid (tree) mode
+	// a tree position; down off the last row moves focus to the footer's
+	// Reset/Confirm buttons.
+	gamepadRow      int
+	gamepadPosition int
+	gamepadOnFooter bool
+	gamepadFooter   int // 0 = Reset, 1 = Confirm
+	gamepadRowSig   state.Signal[int]
+	detail          SkillDetailWindow
 }
 
 func (w *SkillWindow) Toggle(ctx Context) {
@@ -161,6 +171,8 @@ func (w *SkillWindow) Update(ctx Context, shortcuts *ShortcutBar, actions GameAc
 		w.lastIconAssets = true
 		w.snapshot = ""
 	}
+	// The standalone skill detail window rides along while open.
+	w.detail.Update(ctx)
 	if ctx.Input == nil {
 		w.Publish(ctx)
 		return true
@@ -266,6 +278,7 @@ func (w *SkillWindow) openAtDefault(ctx Context) {
 	w.snapshot = w.skillSnapshot(ctx.Session)
 	w.ensureSkillViewForSnapshot(ctx, w.snapshot)
 	w.ensureScrollSignal().Set(0)
+	w.resetGamepadSelection()
 	w.OpenAt(x, y, w.widgetTree(ctx, w.actions))
 	w.Publish(ctx)
 }
@@ -274,8 +287,22 @@ func (w *SkillWindow) close(ctx Context) {
 	w.dragActive = false
 	w.hasHover = false
 	w.hideTooltip()
+	w.detail.closeIfOpen(ctx)
+	w.resetGamepadSelection()
 	w.Window.Close()
 	w.Publish(ctx)
+}
+
+// resetGamepadSelection clears the handheld cursor (grid cell, table row,
+// footer focus).
+func (w *SkillWindow) resetGamepadSelection() {
+	w.gamepadRow = -1
+	w.gamepadPosition = -1
+	w.gamepadOnFooter = false
+	w.gamepadFooter = 0
+	if w.gamepadRowSig != nil {
+		w.gamepadRowSig.Set(-1)
+	}
 }
 
 func (w *SkillWindow) widgetTree(ctx Context, actions GameActions) widget.Widget {
@@ -324,16 +351,27 @@ func (w *SkillWindow) widgetTreeWithAssets(ctx Context, assets AssetProvider, ac
 		Footer(
 			footerLabel(fmt.Sprintf("Skill Points: %d", maxInt(0, sessionSkillPoints(ctx.Session)-w.pendingCount()))),
 			primitives.Expanded(primitives.Box()),
-			rotheme.Button("Reset", func() {
+			w.skillFooterButton(ctx, "Reset", 0, func() {
 				w.clearPending()
 				w.dirty = true
 			}),
-			rotheme.Button("Confirm", func() {
+			w.skillFooterButton(ctx, "Confirm", 1, func() {
 				w.confirmPending(ctx)
 				w.dirty = true
 			}),
 		),
 	)
+}
+
+// skillFooterButton wraps a footer action button with the gamepad focus
+// outline when the handheld cursor sits on it.
+func (w *SkillWindow) skillFooterButton(_ Context, label string, index int, onClick func()) widget.Widget {
+	button := rotheme.Button(label, onClick)
+	if w.gamepadOnFooter && w.gamepadFooter == index {
+		return primitives.Box(button).
+			BorderStyle(1.5, rotheme.Default.Colors.InputFocus)
+	}
+	return button
 }
 
 func (w *SkillWindow) skillTableWidget(ctx Context, assets AssetProvider, actions GameActions) *rotheme.TableViewWidget {
@@ -346,6 +384,7 @@ func (w *SkillWindow) skillTableWidget(ctx Context, assets AssetProvider, action
 		rotheme.TableViewHeaderHeight(skillHeaderH),
 		rotheme.TableViewEmptyText("No skills received from server yet."),
 		rotheme.TableViewScrollYSignal(w.ensureScrollSignal()),
+		rotheme.TableViewSelectedRow(w.ensureGamepadRowSignal()),
 		rotheme.TableViewDispatchHoverToCells(false),
 		rotheme.TableViewBuildSimpleCell(func(cell rotheme.TableViewCellContext) rotheme.TableViewSimpleCell {
 			if cell.Row < 0 || cell.Row >= len(skills) {
@@ -393,6 +432,7 @@ func (w *SkillWindow) skillGridWidget(ctx Context, assets AssetProvider, actions
 			w.hasHover = false
 			w.hideTooltip()
 		},
+		selectedPosition: &w.gamepadPosition,
 	})
 	w.grid = grid
 	w.table = nil
@@ -418,15 +458,7 @@ func (w *SkillWindow) skillTabColumn(ctx Context, assets AssetProvider, actions 
 			width:         skillTabRailW,
 			height:        skillTabH,
 			onClick: func() {
-				if w.tab == tab.tab {
-					return
-				}
-				w.tab = tab.tab
-				w.ensureScrollSignal().Set(0)
-				w.hasHover = false
-				w.hideTooltip()
-				w.SetContent(w.widgetTreeWithAssets(ctx, assets, actions))
-				w.Publish(ctx)
+				w.switchTab(ctx, tab.tab, assets, actions)
 			},
 		}))
 	}
@@ -434,6 +466,21 @@ func (w *SkillWindow) skillTabColumn(ctx Context, assets AssetProvider, actions 
 		Width(skillTabRailW).
 		Height(float32(w.contentHeight())).
 		Gap(-skillTabOver)
+}
+
+// switchTab activates a class tab, mirroring what a tab-rail click does; the
+// gamepad L1/R1 cycling shares it.
+func (w *SkillWindow) switchTab(ctx Context, tab int, assets AssetProvider, actions GameActions) {
+	if tab == w.tab {
+		return
+	}
+	w.tab = tab
+	w.ensureScrollSignal().Set(0)
+	w.hasHover = false
+	w.hideTooltip()
+	w.resetGamepadSelection()
+	w.SetContent(w.widgetTreeWithAssets(ctx, assets, actions))
+	w.Publish(ctx)
 }
 
 func (w *SkillWindow) skillTableCell(ctx Context, assets AssetProvider, skill session.Skill, cell rotheme.TableViewCellContext) rotheme.TableViewSimpleCell {

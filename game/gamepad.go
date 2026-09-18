@@ -98,6 +98,9 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) {
 	if m.ui.itemWindows.CloseTopIllustration(ctx) {
 		return
 	}
+	if m.ui.skillWindow.CloseTopDetail(ctx) {
+		return
+	}
 	switch {
 	case m.ui.statsWindow.IsOpen():
 		m.ui.statsWindow.Toggle(ctx)
@@ -378,6 +381,56 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 				} else {
 					m.ui.equipmentWindow.GamepadNavigate(ctx, dx, dy)
 				}
+			}
+			return true
+		}
+		return true
+	}
+	// The skill tree follows the same handheld scheme: d-pad walks the skill
+	// cells (table rows in list mode) and then the footer's Reset/Confirm
+	// buttons, A stages a level-up (or presses the footer button), Y opens
+	// the skill detail window, L1/R1 cycle the class tabs.
+	if m.ui.skillWindow.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+			m.ui.skillWindow.GamepadTab(ctx, -1)
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
+			m.ui.skillWindow.GamepadTab(ctx, 1)
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.skillWindow.GamepadInfo(ctx)
+			}
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.skillWindow.GamepadActivate(ctx)
+			}
+			return true
+		}
+		dx := 0
+		dy := 0
+		if ctx.Input.JustPressed(input.KeyArrowLeft) {
+			dx--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowRight) {
+			dx++
+		}
+		if ctx.Input.JustPressed(input.KeyArrowUp) {
+			dy--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowDown) {
+			dy++
+		}
+		if dx != 0 || dy != 0 {
+			if now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+				m.invSelMovedAt = now
+				m.ui.skillWindow.GamepadNavigate(ctx, dx, dy)
 			}
 			return true
 		}

@@ -26,14 +26,15 @@ type skillGridEntry struct {
 }
 
 type skillGridConfig struct {
-	entries       []skillGridEntry
-	job           int
-	onPress       func(session.Skill, int, int)
-	onStage       func(session.Skill)
-	selectedLevel func(session.Skill) int
-	onAdjustLevel func(session.Skill, int) int
-	onHover       func(session.Skill, int, int)
-	onLeave       func()
+	entries          []skillGridEntry
+	job              int
+	onPress          func(session.Skill, int, int)
+	onStage          func(session.Skill)
+	selectedLevel    func(session.Skill) int
+	onAdjustLevel    func(session.Skill, int) int
+	onHover          func(session.Skill, int, int)
+	onLeave          func()
+	selectedPosition *int
 }
 
 type skillGridPart uint8
@@ -89,6 +90,10 @@ func (w *skillGridWidget) Draw(_ widget.Context, canvas widget.Canvas) {
 			cell := w.cellBounds(position)
 			entry, occupied := w.entryAtPosition(position)
 			w.drawCell(canvas, cell, entry, occupied, position == w.hoveredPosition)
+			// Gamepad cursor: outline the selected tree cell.
+			if w.cfg.selectedPosition != nil && position == *w.cfg.selectedPosition {
+				canvas.StrokeRect(cell, rotheme.Default.Colors.InputFocus, 1.5)
+			}
 		}
 	}
 }
@@ -349,6 +354,23 @@ func (w *skillGridWidget) entryAtPosition(position int) (skillGridEntry, bool) {
 		return skillGridEntry{}, false
 	}
 	return w.cfg.entries[index], true
+}
+
+func (w *skillGridWidget) hasEntryAt(position int) bool {
+	_, ok := w.entryAtPosition(position)
+	return ok
+}
+
+// firstEntryPosition returns the lowest tree position holding a skill, for
+// gamepad navigation entry.
+func (w *skillGridWidget) firstEntryPosition() int {
+	first := -1
+	for position := range w.entryByPosition {
+		if first < 0 || position < first {
+			first = position
+		}
+	}
+	return first
 }
 
 func (w *skillGridWidget) totalRows() int {

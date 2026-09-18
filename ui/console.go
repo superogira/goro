@@ -164,6 +164,11 @@ func (c *ChatConsole) PrepareKeyInput(ctx client.Context, code input.KeyCode, mo
 	switch code {
 	case gpucontext.KeyBackspace, gpucontext.KeyDelete, gpucontext.KeyHome, gpucontext.KeyEnd,
 		gpucontext.KeyLeft, gpucontext.KeyRight, gpucontext.KeyUp, gpucontext.KeyDown:
+		if c.compactAuto {
+			// Handheld: the d-pad is the walk control; navigation keys must
+			// not yank the console open (Enter still activates chat).
+			return
+		}
 	case gpucontext.KeyA, gpucontext.KeyC, gpucontext.KeyV, gpucontext.KeyX:
 		if mods&gpucontext.ModControl == 0 {
 			return

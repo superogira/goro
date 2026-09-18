@@ -1041,7 +1041,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		m.handleEscapeMenuAction(ctx)
 		return nil, nil
 	}
-	characterWindowConsumed := m.ui.characterWindow.Update(ctx)
+	characterWindowConsumed := !hudHidden(ctx) && m.ui.characterWindow.Update(ctx)
 	m.ui.basicMenu.FollowCharacterWindow(ctx, &m.ui.characterWindow)
 	if characterWindowConsumed {
 		return nil, nil
@@ -1730,7 +1730,9 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	}
 	now := time.Now()
 	m.drawShowDigit(screen, ctx, now)
-	m.ui.characterWindow.Draw(screen, ctx)
+	if !hudHidden(ctx) {
+		m.ui.characterWindow.Draw(screen, ctx)
+	}
 	m.ui.announcement.Draw(screen, now)
 	m.ui.poptips.Draw(screen, now)
 	m.ui.inventoryBag.DrawTooltip(ctx, screen)

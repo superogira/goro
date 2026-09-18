@@ -106,6 +106,15 @@ if [ -n "$host" ]; then
   getent hosts "$host" 2>/dev/null || echo "  FAILED: hostname does not resolve (DDNS expired/IP changed?)"
 fi
 
+# Screen-blank inventory for the power-key feature: which panel control
+# nodes this firmware actually exposes.
+echo "-- backlight nodes:"
+ls /sys/class/backlight/ 2>/dev/null || echo "  /sys/class/backlight: none"
+for f in /sys/class/backlight/*/bl_power /sys/class/backlight/*/brightness /sys/class/graphics/fb0/blank; do
+  [ -f "$f" ] && echo "  $f = $(cat "$f" 2>/dev/null)"
+done
+ls /sys/kernel/debug/dispdbg/ >/dev/null 2>&1 && echo "  dispdbg: present" || echo "  dispdbg: absent"
+
 # Audio bring-up notes (solved, kept for reference): the in-process oto
 # driver never opens a PCM stream on this firmware, so the game pipes a
 # software-mixed s16le stream into one mpv process (--ao=alsa, see

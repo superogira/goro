@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -1078,43 +1079,98 @@ func (p *fbdevPlatform) mods() gpucontext.Modifiers {
 	return m
 }
 
-// toggleScreenBlank flips the panel backlight for the power key. Uses the
-// standard backlight node first (Rockbox TYPE2), then the framebuffer
-// blank node; both take 0 = active and 4 = powerdown. Rendering and the
-// network connection continue — this is a display mute, not a sleep.
+// toggleScreenBlank flips the panel off for the power key, trying several
+// firmware strategies in order: the standard backlight node (Rockbox
+// TYPE2), the framebuffer blank node, then the FBIOBLANK ioctl on fb0, and
+// finally the Allwinner dispdbg debugfs interface (Rockbox TYPE1 setbl).
+// Rendering and the network connection continue — display mute, no sleep.
 func (p *fbdevPlatform) toggleScreenBlank() {
-	if p.screenBlankPath == "" {
-		candidates := []string{}
-		if matches, err := filepath.Glob("/sys/class/backlight/*/bl_power"); err == nil {
-			candidates = append(candidates, matches...)
+	value := byte(0)
+	if !p.screenBlanked {
+		value = 4 // FB_BLANK_POWERDOWN
+	}
+	if p.applyScreenBlank(value) {
+		p.screenBlanked = !p.screenBlanked
+		logger().Info("fbdev: power key toggled screen", "blanked", p.screenBlanked)
+		return
+	}
+	logger().Warn("fbdev: no screen blank mechanism worked; power key will only mute audio")
+}
+
+// applyScreenBlank pushes a blank level (0 active, 4 powerdown) through
+// whichever mechanism this firmware exposes. It also seeds the cached node
+// path on the first successful write.
+func (p *fbdevPlatform) applyScreenBlank(level byte) bool {
+	if p.screenBlankPath != "" && p.screenBlankPath != " " && p.screenBlankPath != "ioctl" {
+		if err := os.WriteFile(p.screenBlankPath, []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
+			return true
 		}
-		candidates = append(candidates, "/sys/class/graphics/fb0/blank")
-		for _, path := range candidates {
-			if err := os.WriteFile(path, []byte("0"), 0o644); err == nil {
+		p.screenBlankPath = ""
+	}
+	if matches, err := filepath.Glob("/sys/class/backlight/*/bl_power"); err == nil {
+		for _, path := range matches {
+			if err := os.WriteFile(path, []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
 				p.screenBlankPath = path
-				logger().Info("fbdev: screen blank node selected", "path", path)
-				break
+				logger().Info("fbdev: screen blank via backlight", "path", path)
+				return true
 			}
 		}
-		if p.screenBlankPath == "" {
-			logger().Warn("fbdev: no writable screen blank node found; power key will only mute audio")
-			p.screenBlankPath = " "
-			return
+	}
+	if err := os.WriteFile("/sys/class/graphics/fb0/blank", []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
+		p.screenBlankPath = "/sys/class/graphics/fb0/blank"
+		logger().Info("fbdev: screen blank via fb sysfs", "path", p.screenBlankPath)
+		return true
+	}
+	if fbBlankViaioctl(level) {
+		p.screenBlankPath = "ioctl"
+		logger().Info("fbdev: screen blank via FBIOBLANK ioctl")
+		return true
+	}
+	if dispdbgSetBacklight(level) {
+		p.screenBlankPath = " "
+		logger().Info("fbdev: screen blank via dispdbg setbl")
+		return true
+	}
+	return false
+}
+
+// fbBlankViaioctl issues FBIOBLANK (0x461B) on /dev/fb0 — the fbdev-native
+// blank path some Allwinner builds honor even when sysfs is absent.
+func fbBlankViaioctl(level byte) bool {
+	fb, err := os.OpenFile("/dev/fb0", os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	defer fb.Close()
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fb.Fd(), 0x461B, uintptr(level))
+	if errno != 0 {
+		logger().Warn("fbdev: FBIOBLANK failed", "errno", errno.Error())
+		return false
+	}
+	return true
+}
+
+// dispdbgSetBacklight drives the Allwinner disp engine debugfs interface
+// the way Rockbox TYPE1 does: name=lcd0, param=level, command=setbl.
+func dispdbgSetBacklight(level byte) bool {
+	base := "/sys/kernel/debug/dispdbg"
+	name, err := os.ReadFile(base + "/name")
+	if err != nil || strings.TrimSpace(string(name)) == "" {
+		return false
+	}
+	writes := [][2]string{
+		{base + "/name", "lcd0"},
+		{base + "/param", fmt.Sprintf("%d", level)},
+		{base + "/command", "setbl"},
+		{base + "/start", "1"},
+	}
+	for _, w := range writes {
+		if err := os.WriteFile(w[0], []byte(w[1]), 0o644); err != nil {
+			logger().Warn("fbdev: dispdbg write failed", "file", w[0], "err", err.Error())
+			return false
 		}
 	}
-	p.screenBlanked = !p.screenBlanked
-	value := "0"
-	if p.screenBlanked {
-		value = "4"
-	}
-	if p.screenBlankPath != " " {
-		if err := os.WriteFile(p.screenBlankPath, []byte(value), 0o644); err != nil {
-			logger().Warn("fbdev: screen blank write failed", "path", p.screenBlankPath, "err", err.Error())
-			p.screenBlanked = !p.screenBlanked
-			return
-		}
-	}
-	logger().Info("fbdev: power key toggled screen", "blanked", p.screenBlanked)
+	return true
 }
 
 func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {	typ := EventKeyUp

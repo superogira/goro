@@ -70,6 +70,29 @@ var heldMenuItems = []string{
 	"Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
 }
 
+// closeActiveHandheldWindow closes the window the handheld menu most
+// recently could have opened (B button). The first open window in menu
+// order wins — with one window open at a time (the normal handheld flow)
+// this is exactly "the active window".
+func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) {
+	switch {
+	case m.ui.statsWindow.IsOpen():
+		m.ui.statsWindow.Toggle(ctx)
+	case m.ui.inventoryBag.IsOpen():
+		m.ui.inventoryBag.Toggle(ctx)
+	case m.ui.equipmentWindow.IsOpen():
+		m.ui.equipmentWindow.Toggle(ctx)
+	case m.ui.skillWindow.IsOpen():
+		m.ui.skillWindow.Toggle(ctx)
+	case m.ui.questWindow.IsOpen():
+		m.ui.questWindow.Toggle(ctx)
+	case m.ui.worldMap.IsOpen():
+		if err := m.ui.worldMap.Toggle(ctx); err != nil {
+			m.ui.console.AddErrorMessage("%s", err.Error())
+		}
+	}
+}
+
 // updateHeldMenuInput drives the direct-drawn MENU overlay: d-pad moves the
 // selection (debounced — the polled d-pad bounces), A or START activates,
 // SELECT closes. MENU itself toggles at the world level and must NOT be
@@ -83,6 +106,7 @@ func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
 	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) || ctx.Input.JustPressed(input.KeyEnter) {
 		m.heldMenuOpen = false
+		m.heldMenuActivatedAt = now
 		m.heldMenuActivate(ctx)
 		return
 	}
@@ -168,9 +192,19 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		m.ui.npcDialog.Confirm(ctx)
 		return true
 	}
-	// The direct-drawn MENU overlay owns every button while open.
+	// The direct-drawn MENU overlay owns every button while open; B closes.
 	if m.heldMenuOpen {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
+			m.heldMenuOpen = false
+			return true
+		}
 		m.updateHeldMenuInput(ctx, now)
+		return true
+	}
+	// B closes the active (topmost relevant) window. Checked before the
+	// walk layer so B never walks or attacks while dismissing a window.
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
+		m.closeActiveHandheldWindow(ctx)
 		return true
 	}
 	// The stats window owns the d-pad while open: up/down (or left/right)
@@ -200,6 +234,12 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		return false
 	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) && !pointerBlocked {
+		// The same A press that activated a handheld-menu item must not
+		// also fall into the combat chain a frame later (observed:
+		// screenshot then attack from one press).
+		if now.Sub(m.heldMenuActivatedAt) < 300*time.Millisecond {
+			return true
+		}
 		if m.gamepadPrimaryAction(ctx, now) {
 			return true
 		}

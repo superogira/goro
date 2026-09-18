@@ -33,6 +33,7 @@ type WorldMode struct {
 	heldMenuOpen       bool
 	heldMenuSel        int
 	heldMenuMovedAt    time.Time
+	heldMenuActivatedAt time.Time
 	statsSelMovedAt    time.Time
 	mapLoad            *mapLoadState
 	mapLoadRSWSource   string

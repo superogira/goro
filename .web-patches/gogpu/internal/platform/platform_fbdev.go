@@ -128,19 +128,20 @@ const (
 
 	// Physical layout decoded from the user's presses on this ANBERNIC-keys
 	// device: face buttons occupy 0x130-0x133, then L1=0x134, R1=0x135,
-	// L2=0x136, R2=0x137, and 0x138 — the ninth key — is MENU (held 3.5s
-	// twice while testing). The standard BTN_TL/BTN_MODE numbering does
-	// NOT match this hardware.
+	// L2=0x136. The latest field round shows the physical START button on
+	// this unit is 0x137 (pressed while MENU held, expecting the capture
+	// combo); 0x13a fired in earlier rounds and stays as an Enter alias.
+	// The standard BTN_TL/BTN_MODE numbering does NOT match this hardware.
 	btnSouth  = 0x130 // A
 	btnEast   = 0x131 // B
 	btnNorth  = 0x133 // X
 	btnL1     = 0x134 // physical L1 (BTN_WEST slot on standard pads)
 	btnR1     = 0x135 // physical R1 (BTN_TL slot on standard pads)
 	btnL2     = 0x136 // physical L2 (BTN_TR slot on standard pads)
-	btnR2     = 0x137 // physical R2 (BTN_TL2 slot on standard pads)
+	btnStart  = 0x137 // physical START on this unit (labeled R2 in early rounds)
 	btnMenu   = 0x138 // physical MENU (BTN_TR2 slot on standard pads)
 	btnSelect = 0x139
-	btnStart  = 0x13a
+	btnEnter2 = 0x13a // Enter alias (fired as Enter in early decode rounds)
 	btnMode   = 0x13d
 	btnThumbl = 0x13b
 	btnThumbr = 0x13c
@@ -984,11 +985,27 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			p.dispatchKey(gpucontext.KeyF13, false)
 			p.pointerButton(gpucontext.ButtonsLeft, false)
 		}()
-	case btnRight, btnEast: // real mouse right / gamepad B
+	case btnEast:
+		// B button: a KeyF18 edge the game layer turns into "close the
+		// active window" (or the handheld menu). No companion right-click:
+		// stray context menus on a pointerless device were pure noise.
+		if down {
+			p.dispatchKey(gpucontext.KeyF18, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF18, false)
+			}()
+			return
+		}
+	case btnEnter2:
+		// Early decode rounds fired this as Enter; keep it working.
+		key = gpucontext.KeyEnter
+		p.setHeld(btnEnter2, down)
+	case btnRight: // real mouse right button
 		button = gpucontext.ButtonsRight
 	case btnMiddle, btnNorth: // real mouse middle / gamepad X
 		button = gpucontext.ButtonsMiddle
-	case btnL1, btnR1, btnL2, btnR2:
+	case btnL1, btnR1, btnL2:
 		// Shoulder buttons: held for combos only (quit watcher / future
 		// use). The earlier F1-F4 mappings leaked into UI focus paths and
 		// made L2 behave like a stray Enter in dialogs.

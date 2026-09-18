@@ -955,15 +955,14 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		}
 		p.inputMu.Unlock()
 	}
-	// This firmware's held keys repeat as full press/release pairs (~4-5/s),
-	// not value=2 autorepeat — the volume keys machine-gunned and menus
-	// skipped. The observed pair interval is ~200ms, so the floor must sit
-	// above it.
+	// This firmware's held keys repeat as full press/release pairs, at
+	// intervals measured 200-360ms depending on the key (MENU ~330ms) — not
+	// value=2 autorepeat. The floor must clear the slowest observed pair.
 	if down {
 		p.inputMu.Lock()
 		last, repeated := p.lastKeyPress[code]
 		p.inputMu.Unlock()
-		if repeated && time.Since(last) < 280*time.Millisecond {
+		if repeated && time.Since(last) < 400*time.Millisecond {
 			return
 		}
 		p.inputMu.Lock()

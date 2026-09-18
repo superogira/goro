@@ -2510,7 +2510,7 @@ func (r *runner) drawScreenNotice(screen *Frame) {
 	}
 	render_DrawRect(screen, x-110, y, 220, pillH, color.RGBA{R: 20, G: 18, B: 28, A: alpha})
 	render_DrawRect(screen, x-110, y, 220, 2, color.RGBA{R: 214, G: 178, B: 92, A: alpha})
-	DrawUIOutlinedTextAt(screen, state.text, x-100, y+6, color.RGBA{R: 250, G: 240, B: 210, A: 255}, color.RGBA{A: 190})
+	DrawOutlinedTextAt(screen, state.text, int(x)-100, int(y)+6, color.RGBA{R: 250, G: 240, B: 210, A: 255}, color.RGBA{A: 190})
 }
 
 func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {

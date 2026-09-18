@@ -119,37 +119,38 @@ func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
 	}
 }
 
-// drawHeldMenu renders the overlay with plain rects and outlined text —
-// the same direct-draw path as tooltips and damage labels, which renders
-// on the device (an earlier widget-window version never appeared).
+// drawHeldMenu renders the overlay with immediate primitives only —
+// DrawRect + DrawOutlinedTextAt draw straight into the frame (the volume
+// HUD path). The earlier UI-label variants appended to compositor lists
+// that never flushed for game-drawn content, so nothing appeared.
 func (m *WorldMode) drawHeldMenu(screen *render.Frame) {
 	if !m.heldMenuOpen || screen == nil {
 		return
 	}
-	const itemH = 18.0
-	const pad = 10.0
-	const menuW = 190.0
-	titleH := 22.0
-	menuH := titleH + pad + float64(len(heldMenuItems))*itemH + pad
+	const itemH = 18
+	const pad = 10
+	const menuW = 190
+	titleH := 22
+	menuH := titleH + pad + len(heldMenuItems)*itemH + pad
 	bounds := screen.Bounds()
 	x := (float64(bounds.Dx()) - menuW) / 2
-	y := (float64(bounds.Dy()) - menuH) / 2
+	y := (float64(bounds.Dy()) - float64(menuH)) / 2
 
 	// Panel and title bar.
-	render.DrawUIRect(screen, x, y, menuW, menuH, color.RGBA{R: 24, G: 20, B: 34, A: 235})
-	render.DrawUIRect(screen, x, y, menuW, titleH, color.RGBA{R: 60, G: 48, B: 84, A: 245})
-	render.DrawUIRect(screen, x, y+titleH-2, menuW, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
-	render.DrawUIOutlinedTextAt(screen, "MENU", x+pad, y+4, color.RGBA{R: 250, G: 240, B: 210, A: 255}, color.RGBA{A: 200})
+	render.DrawRect(screen, x, y, menuW, float64(menuH), color.RGBA{R: 24, G: 20, B: 34, A: 235})
+	render.DrawRect(screen, x, y, menuW, float64(titleH), color.RGBA{R: 60, G: 48, B: 84, A: 245})
+	render.DrawRect(screen, x, y+float64(titleH-2), menuW, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
+	render.DrawOutlinedTextAt(screen, "MENU", int(x)+pad, int(y)+4, color.RGBA{R: 250, G: 240, B: 210, A: 255}, color.RGBA{A: 200})
 
 	// Items; the selection inverts its row.
 	for i, label := range heldMenuItems {
-		rowY := y + titleH + pad + float64(i)*itemH
+		rowY := y + float64(titleH+pad+i*itemH)
 		if i == m.heldMenuSel {
-			render.DrawUIRect(screen, x+4, rowY-1, menuW-8, itemH, color.RGBA{R: 214, G: 178, B: 92, A: 235})
-			render.DrawUIOutlinedTextAt(screen, label, x+pad, rowY+2, color.RGBA{R: 30, G: 22, B: 12, A: 255}, color.RGBA{A: 0})
+			render.DrawRect(screen, x+4, rowY-1, menuW-8, float64(itemH), color.RGBA{R: 214, G: 178, B: 92, A: 235})
+			render.DrawOutlinedTextAt(screen, label, int(x)+pad, int(rowY)+2, color.RGBA{R: 30, G: 22, B: 12, A: 255}, color.RGBA{A: 0})
 			continue
 		}
-		render.DrawUIOutlinedTextAt(screen, label, x+pad, rowY+2, color.RGBA{R: 235, G: 232, B: 240, A: 255}, color.RGBA{A: 200})
+		render.DrawOutlinedTextAt(screen, label, int(x)+pad, int(rowY)+2, color.RGBA{R: 235, G: 232, B: 240, A: 255}, color.RGBA{A: 200})
 	}
 }
 

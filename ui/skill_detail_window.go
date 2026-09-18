@@ -17,11 +17,12 @@ import (
 // from the skill window's gamepad controls. Long descriptions scroll with the
 // d-pad (GamepadScroll).
 const (
-	skillDetailWindowWidth  = 300
-	skillDetailWindowPad    = 10
-	skillDetailIconSize     = 28
-	skillDetailMaxHeight    = 340
-	skillDetailScrollStep   = itemInfoLineH * 3
+	skillDetailWindowWidth = 300
+	skillDetailWindowPad   = 10
+	skillDetailIconSize    = 28
+	skillDetailIconRowH    = skillDetailIconSize + 4
+	skillDetailMaxHeight   = 340
+	skillDetailScrollStep  = itemInfoLineH * 3
 )
 
 type SkillDetailWindow struct {
@@ -63,29 +64,34 @@ func (w *SkillDetailWindow) openSkill(ctx Context, skill session.Skill, icon ima
 
 // layout computes the viewport height and scroll range from the current
 // lines/icon. openSkill calls it; swapping lines and re-calling it reflows
-// the window.
-func (w *SkillDetailWindow) layout() float32 {
+// the window. The content tree gives every child an explicit height and no
+// gaps, so the content height — and with it the scroll range — is exact
+// rather than estimated: a low estimate left the last lines unreachable
+// (the scrollbar claimed room the d-pad scroll refused to use).
+func (w *SkillDetailWindow) layout() {
 	w.ensureScrollSignal()
-	bodyHeight := float32(len(w.lines) * itemInfoLineH)
+	contentHeight := float32(len(w.lines) * itemInfoLineH)
 	if w.icon != nil {
-		bodyHeight += skillDetailIconSize + 2
+		contentHeight += skillDetailIconRowH
 	}
-	viewHeight := minFloat32(bodyHeight, skillDetailMaxHeight-ROWindowTitleHeight-skillDetailWindowPad*2)
+	viewHeight := minFloat32(contentHeight, skillDetailMaxHeight-ROWindowTitleHeight-skillDetailWindowPad*2)
 	w.viewHeight = viewHeight
-	w.maxScroll = maxFloat32(0, bodyHeight-viewHeight)
+	w.maxScroll = maxFloat32(0, contentHeight-viewHeight)
 	if w.scrollY != nil && w.scrollY.Get() > w.maxScroll {
 		w.scrollY.Set(w.maxScroll)
 	}
-	return bodyHeight
 }
 
 func (w *SkillDetailWindow) widgetTree(ctx Context) widget.Widget {
+	// Every child carries an explicit height and the boxes have no gap, so
+	// the laid-out content height matches the layout() arithmetic exactly —
+	// the d-pad scroll clamp and the scrollview range stay in sync.
 	children := make([]widget.Widget, 0, len(w.lines)+1)
 	if w.icon != nil {
 		children = append(children,
 			primitives.Box(newStaticImageWidget(w.icon, skillDetailIconSize, skillDetailIconSize)).
-				Height(skillDetailIconSize).
-				Width(skillDetailIconSize),
+				Height(skillDetailIconRowH).
+				Width(skillDetailWindowWidth-ROScrollbarGutter),
 		)
 	}
 	for _, line := range w.lines {
@@ -93,11 +99,17 @@ func (w *SkillDetailWindow) widgetTree(ctx Context) widget.Widget {
 		if text == "" {
 			text = " "
 		}
-		children = append(children, rotheme.Text(text).
-			Color(itemInfoWidgetColor(inventoryTextColor)).
-			LineHeight(itemInfoLineH / rotheme.Default.Typography.TextSize))
+		children = append(children,
+			primitives.Box(
+				rotheme.Text(text).
+					Color(itemInfoWidgetColor(inventoryTextColor)).
+					LineHeight(itemInfoLineH/rotheme.Default.Typography.TextSize),
+			).
+				Height(itemInfoLineH).
+				Width(skillDetailWindowWidth-skillDetailWindowPad*2-ROScrollbarGutter),
+		)
 	}
-	body := primitives.Box(children...).Gap(2)
+	body := primitives.Box(children...).Gap(0)
 	if w.maxScroll > 0 {
 		body = primitives.Box(
 			scrollview.New(

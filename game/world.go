@@ -31,6 +31,7 @@ type WorldMode struct {
 	gamepadDirLogged    bool
 	gamepadCameraAt     time.Time
 	heldMenuOpen        bool
+	menuPanelsShown     bool
 	heldMenuSel         int
 	heldMenuMovedAt     time.Time
 	heldMenuActivatedAt time.Time
@@ -459,6 +460,10 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	now := time.Now()
 	m.bindNPCDialogLifecycle()
 	m.startMapPrewarm()
+	// The handheld MENU panels (character info window, minimap) show only
+	// while the menu overlay is open; start each map with them tucked away.
+	m.menuPanelsShown = false
+	m.ui.minimap.Hide(ctx)
 	// Parse the item tables while the map streams: the first drop's sprite
 	// cannot resolve its resource name until these are loaded, and the lazy
 	// first-query load lands mid-combat otherwise. Cheap when the login
@@ -1051,7 +1056,14 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		m.handleEscapeMenuAction(ctx)
 		return nil, nil
 	}
-	characterWindowConsumed := !hudHidden(ctx) && m.ui.characterWindow.Update(ctx)
+	// The upstream character info window rides the handheld MENU: it shows
+	// while the menu overlay is open and hides again when it closes.
+	characterWindowConsumed := false
+	if m.menuPanelsShown && !hudHidden(ctx) {
+		characterWindowConsumed = m.ui.characterWindow.Update(ctx)
+	} else if m.ui.characterWindow.IsOpen() {
+		m.ui.characterWindow.Close()
+	}
 	m.ui.basicMenu.FollowCharacterWindow(ctx, &m.ui.characterWindow)
 	if characterWindowConsumed {
 		return nil, nil
@@ -1231,13 +1243,11 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	m.updateBot(ctx, now)
 
 	// MENU tap: toggle the handheld menu overlay. While open it owns every
-	// button (d-pad selection, A activates) and world input pauses.
+	// button (d-pad selection, A activates) and world input pauses. The
+	// upstream character info window and the minimap ride along: shown while
+	// the menu is open, hidden again when it closes.
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) {
-		m.heldMenuOpen = !m.heldMenuOpen
-		if m.heldMenuOpen && m.heldMenuSel < 0 {
-			m.heldMenuSel = 0
-		}
-		glog.Infof("handheld menu toggled open=%t", m.heldMenuOpen)
+		m.setHeldMenuOpen(ctx, !m.heldMenuOpen)
 	}
 	if m.heldMenuOpen {
 		m.updateGamepadControls(ctx, pointerBlocked, now)
@@ -1495,6 +1505,30 @@ func (m *WorldMode) requestSessionGuildEmblem(ctx client.Context) {
 		version = ctx.Session.Guild.EmblemVersion
 	}
 	m.requestGuildEmblem(ctx, guildID, version, true)
+}
+
+// setHeldMenuOpen opens or closes the handheld MENU overlay, driving the
+// companion panels (character info window, minimap) that show only while the
+// menu is up.
+func (m *WorldMode) setHeldMenuOpen(ctx client.Context, open bool) {
+	if m.heldMenuOpen == open {
+		return
+	}
+	m.heldMenuOpen = open
+	if open && m.heldMenuSel < 0 {
+		m.heldMenuSel = 0
+	}
+	glog.Infof("handheld menu toggled open=%t", m.heldMenuOpen)
+	if open {
+		m.menuPanelsShown = true
+		m.ui.minimap.Show(ctx)
+		return
+	}
+	m.menuPanelsShown = false
+	m.ui.minimap.Hide(ctx)
+	if m.ui.characterWindow.IsOpen() {
+		m.ui.characterWindow.Close()
+	}
 }
 
 func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange) Mode {
@@ -1765,9 +1799,6 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	}
 	now := time.Now()
 	m.drawShowDigit(screen, ctx, now)
-	if !hudHidden(ctx) {
-		m.ui.characterWindow.Draw(screen, ctx)
-	}
 	m.ui.announcement.Draw(screen, now)
 	m.ui.poptips.Draw(screen, now)
 	m.ui.inventoryBag.DrawTooltip(ctx, screen)

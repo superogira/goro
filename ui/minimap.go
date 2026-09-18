@@ -216,6 +216,20 @@ func (m *Minimap) Toggle(ctx Context) {
 	m.Update(ctx)
 }
 
+// Show reveals the minimap (no-op when already visible).
+func (m *Minimap) Show(ctx Context) {
+	if m.hidden {
+		m.Toggle(ctx)
+	}
+}
+
+// Hide closes the minimap (no-op when already hidden).
+func (m *Minimap) Hide(ctx Context) {
+	if !m.hidden {
+		m.Toggle(ctx)
+	}
+}
+
 func (m *Minimap) ensureWindow(width, height int) {
 	if m.window.width != 0 {
 		return

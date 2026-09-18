@@ -8,6 +8,7 @@ import (
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
+	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/world"
 	"image/color"
@@ -54,28 +55,40 @@ func (m *WorldMode) heldMenuActivate(ctx client.Context) {
 	glog.Infof("handheld menu activate item=%d %q", m.heldMenuSel, heldMenuItems[m.heldMenuSel])
 	switch m.heldMenuSel {
 	case 0:
-		m.ui.inventoryBag.Toggle(ctx)
+		// Sit/Stand: toggles the local player posture; the server echoes the
+		// action back and battle.go flips ctx.World.Player.Sitting.
+		if ctx.Network != nil && ctx.Session != nil {
+			action := network.ActionSitDown
+			if ctx.World.Player.Sitting {
+				action = network.ActionStandUp
+			}
+			if err := ctx.Network.SendActionRequest(ctx.Session.AccountID, action); err != nil {
+				m.ui.console.AddErrorMessage("sit/stand failed")
+			}
+		}
 	case 1:
-		m.ui.equipmentWindow.Toggle(ctx)
+		m.ui.inventoryBag.Toggle(ctx)
 	case 2:
-		m.ui.skillWindow.Toggle(ctx)
+		m.ui.equipmentWindow.Toggle(ctx)
 	case 3:
-		m.ui.statsWindow.Toggle(ctx)
+		m.ui.skillWindow.Toggle(ctx)
 	case 4:
-		m.ui.questWindow.Toggle(ctx)
+		m.ui.statsWindow.Toggle(ctx)
 	case 5:
+		m.ui.questWindow.Toggle(ctx)
+	case 6:
 		if err := m.ui.worldMap.Toggle(ctx); err != nil {
 			m.ui.console.AddErrorMessage("%s", err.Error())
 		}
-	case 6:
-		m.ui.console.OpenForTyping(ctx)
 	case 7:
+		m.ui.console.OpenForTyping(ctx)
+	case 8:
 		if path, err := ctx.RequestScreenshot(); err == nil {
 			m.ui.console.AddSystemMessage("Screenshot: %s", path)
 		} else {
 			m.ui.console.AddErrorMessage("screenshot failed: %s", err.Error())
 		}
-	case 8:
+	case 9:
 		if ctx.RequestQuit != nil {
 			ctx.RequestQuit()
 		}
@@ -83,7 +96,7 @@ func (m *WorldMode) heldMenuActivate(ctx client.Context) {
 }
 
 var heldMenuItems = []string{
-	"Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
+	"Sit/Stand", "Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
 }
 
 // closeActiveHandheldWindow closes whatever the handheld layer opened last
@@ -127,11 +140,11 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) {
 // rendered and walking continuing underneath).
 func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
 	if ctx.Input.JustPressed(input.KeyEscape) {
-		m.heldMenuOpen = false
+		m.setHeldMenuOpen(ctx, false)
 		return
 	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) || ctx.Input.JustPressed(input.KeyEnter) {
-		m.heldMenuOpen = false
+		m.setHeldMenuOpen(ctx, false)
 		m.heldMenuActivatedAt = now
 		m.heldMenuActivate(ctx)
 		return
@@ -225,7 +238,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	// The direct-drawn MENU overlay owns every button while open; B closes.
 	if m.heldMenuOpen {
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
-			m.heldMenuOpen = false
+			m.setHeldMenuOpen(ctx, false)
 			return true
 		}
 		m.updateHeldMenuInput(ctx, now)

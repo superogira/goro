@@ -27,6 +27,10 @@ const (
 	basicMenuPad       = 8
 
 	basicMenuCloseSize = 17
+
+	// Edge tab geometry, shared with the character HUD the menu follows.
+	hudEdgeTabW = 26
+	hudEdgeTabH = 44
 )
 
 type BasicMenu struct {
@@ -34,7 +38,7 @@ type BasicMenu struct {
 	content   widget.Widget
 	callbacks BasicMenuCallbacks
 	open      bool
-	dismissed bool
+	collapsed bool
 	// webSyncedOpen dedupes menuWebSync pushes on the web overlay.
 	webSyncedOpen bool
 }
@@ -71,14 +75,28 @@ func (m *BasicMenu) IsOpen() bool {
 }
 
 // Close hides the menu until its edge tab is tapped again. The web overlay
-// tracks its own open/dismissed pair; the embedded window closes too.
+// tracks its own open/collapsed pair; the embedded window closes too.
 func (m *BasicMenu) Close() {
 	if m == nil {
 		return
 	}
 	m.open = false
-	m.dismissed = true
+	m.collapsed = true
 	m.Window.Close()
+}
+
+// toggleCollapsed collapses the menu to its edge tab, or restores it (the
+// upstream character-window tests drive it).
+func (m *BasicMenu) toggleCollapsed() {
+	if m == nil {
+		return
+	}
+	if m.collapsed {
+		m.collapsed = false
+		m.open = true
+		return
+	}
+	m.Close()
 }
 
 // DrainWebActions services DOM menu taps unconditionally: the canvas menu
@@ -97,7 +115,7 @@ func (m *BasicMenu) DrainWebActions(ctx client.Context, callbacks BasicMenuCallb
 		switch key := strings.TrimPrefix(action, "menu:"); key {
 		case "tab":
 			m.open = true
-			m.dismissed = false
+			m.collapsed = false
 			menuWebSync(true)
 		case "close":
 			m.Close()
@@ -120,7 +138,7 @@ func basicMenuSize() (int, int) {
 }
 
 // basicMenuEdgeTabRect is the flush-left tab shown while the menu is
-// dismissed; tapping it reopens the window.
+// collapsed; tapping it reopens the window.
 func basicMenuEdgeTabRect() (int, int, int, int) {
 	return 0, 8 + hudEdgeTabH + 6, hudEdgeTabW, hudEdgeTabH
 }
@@ -132,12 +150,11 @@ func basicMenuEdgeTabHit(mouseX, mouseY int) bool {
 
 // buttonRect returns the on-screen rect of the button at index i.
 
-
 func (m *BasicMenu) Update(ctx client.Context, callbacks BasicMenuCallbacks) bool {
 	m.callbacks = callbacks
 	if hudWebEnabled() {
 		hudWebInstallHooks()
-		if !m.open && !m.dismissed {
+		if !m.open && !m.collapsed {
 			m.open = true
 		}
 		if m.open != m.webSyncedOpen {
@@ -146,7 +163,7 @@ func (m *BasicMenu) Update(ctx client.Context, callbacks BasicMenuCallbacks) boo
 		}
 		return false
 	}
-	if !m.open && !m.dismissed {
+	if !m.open && !m.collapsed {
 		m.open = true
 	}
 	width, height := basicMenuSize()
@@ -190,6 +207,22 @@ func (m *BasicMenu) FollowCharacterWindow(ctx client.Context, character *Charact
 		m.titleHeight = 0
 		m.CloseOnEsc = false
 	}
+	if !m.IsOpen() {
+		// A hidden menu claims no extent under the window.
+		character.dragBottom = 0
+		return
+	}
+	// The menu owns the attached extent. Expanding near the bottom moves the
+	// whole group back on screen (upstream behavior).
+	bottom := basicMenuFollowGap + height
+	if bottom > character.dragBottom && !character.dragging {
+		_, screenH := ctx.ScreenSize()
+		maxY := maxInt(windowScreenMargin, screenH-character.height-bottom-windowScreenMargin)
+		if character.y > maxY {
+			character.setPosition(ctx, character.x, maxY)
+		}
+	}
+	character.dragBottom = bottom
 	x := character.x
 	y := character.y + character.height + basicMenuFollowGap
 	if character.dragLayer {

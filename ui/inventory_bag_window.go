@@ -63,22 +63,23 @@ var inventoryBagTabs = []struct {
 
 type InventoryBagWindow struct {
 	Window
-	tab           int
-	scrollY       state.Signal[float32]
-	snapshot      string
-	itemInfo      *ItemWindows
-	lastClickItem uint16
-	lastClickAt   time.Time
-	dragItem      session.InventoryItem
-	dragActive    bool
-	dragFrom      time.Time
-	amountPrompt  amountPrompt
-	pendingCard   uint16
-	tooltip       tooltipState
-	icons         map[inventoryBagIconKey]image.Image
-	iconMiss      map[inventoryBagIconKey]struct{}
-	webOpen       bool
-	webSyncedKey  string
+	tab             int
+	scrollY         state.Signal[float32]
+	snapshot        string
+	itemInfo        *ItemWindows
+	lastClickItem   uint16
+	lastClickAt     time.Time
+	dragItem        session.InventoryItem
+	dragActive      bool
+	dragFrom        time.Time
+	amountPrompt    amountPrompt
+	pendingCard     uint16
+	tooltip         tooltipState
+	icons           map[inventoryBagIconKey]image.Image
+	iconMiss        map[inventoryBagIconKey]struct{}
+	gamepadSelected int
+	webOpen         bool
+	webSyncedKey    string
 }
 
 type inventoryBagIconKey struct {
@@ -105,6 +106,7 @@ func (w *InventoryBagWindow) Toggle(ctx Context) {
 		return
 	}
 	w.selectFirstNonEmptyTab(ctx.Session)
+	w.gamepadSelected = 0
 	w.ClampScroll(ctx.Session)
 	w.snapshot = w.inventorySnapshot(ctx.Session)
 	x, y := inventoryBagDefaultPosition(ctx)
@@ -319,6 +321,7 @@ func (w *InventoryBagWindow) widgetTree(ctx Context, itemInfo *ItemWindows) widg
 		icons:     w.itemIcons(ctx, items),
 		amounts:   inventoryGridAmountLabels(items),
 		viewWidth: inventoryBagViewW,
+		selected:  &w.gamepadSelected,
 		onPress:   func(item session.InventoryItem) { w.startItemDragOrActivate(ctx, item) },
 		onHover:   func(item session.InventoryItem) { w.showTooltip(ctx, item) },
 		onLeave:   func() { w.hideTooltip() },
@@ -653,6 +656,9 @@ type inventoryGridConfig struct {
 	minRows      int
 	cellSize     int
 	viewWidth    int
+	// selected is the gamepad cursor cell; nil when the grid has none (the
+	// default — mouse-only grids must not paint a phantom highlight).
+	selected     *int
 	onPress      func(session.InventoryItem)
 	onHover      func(session.InventoryItem)
 	onLeave      func()
@@ -695,6 +701,14 @@ func (w *inventoryGridWidget) Draw(ctx widget.Context, canvas widget.Canvas) {
 	for i := startIndex; i < endIndex; i++ {
 		item := w.cfg.items[i]
 		cell := w.cellBounds(i)
+		if w.cfg.selected != nil && i == *w.cfg.selected {
+			// Gamepad cursor: a translucent fill plus an outline, so the
+			// selected cell reads even over the icon and its amount label.
+			fill := rotheme.Default.Colors.InputFocus
+			fill.A = 110
+			canvas.DrawRect(cell, fill)
+			canvas.StrokeRect(cell, rotheme.Default.Colors.InputFocus, 1.5)
+		}
 		if i < len(w.cfg.icons) && w.cfg.icons[i] != nil {
 			canvas.DrawImage(w.cfg.icons[i], geometry.Pt(cell.Min.X+4, cell.Min.Y+4))
 		}

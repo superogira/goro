@@ -135,6 +135,7 @@ const (
 	btnSouth  = 0x130 // A
 	btnEast   = 0x131 // B
 	btnNorth  = 0x133 // X
+	btnY      = 0x132 // Y (BTN_C slot — this hardware's nonstandard face map)
 	btnL1     = 0x134 // physical L1 (BTN_WEST slot on standard pads)
 	btnR1     = 0x135 // physical R1 (BTN_TL slot on standard pads)
 	btnL2     = 0x136 // physical L2 (BTN_TR slot on standard pads)
@@ -1072,12 +1073,41 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		p.setHeld(btnEnter2, down)
 	case btnRight: // real mouse right button
 		button = gpucontext.ButtonsRight
-	case btnMiddle, btnNorth: // real mouse middle / gamepad X
+	case btnMiddle: // real mouse middle button
 		button = gpucontext.ButtonsMiddle
-	case btnL1, btnR1, btnL2:
-		// Shoulder buttons: held for combos only (quit watcher / future
-		// use). The earlier F1-F4 mappings leaked into UI focus paths and
-		// made L2 behave like a stray Enter in dialogs.
+	case btnY, btnNorth:
+		// Y button (and X as an alias — which of 0x132/0x133 carries the
+		// "Y" label on this hardware is not fully pinned down, so both fire
+		// the action): a KeyF19 edge the game layer turns into "open the
+		// description of the selected thing" (inventory item, card slot).
+		if down {
+			p.dispatchKey(gpucontext.KeyF19, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF19, false)
+			}()
+			return
+		}
+	case btnL1, btnR1:
+		// Shoulder buttons: held for the quit watcher, plus a key edge the
+		// game layer turns into "switch inventory tab" (F20 = L1/previous,
+		// F21 = R1/next).
+		p.setHeld(code, down)
+		if down {
+			key = gpucontext.KeyF20
+			if code == btnR1 {
+				key = gpucontext.KeyF21
+			}
+			p.dispatchKey(key, true)
+			release := key
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(release, false)
+			}()
+			return
+		}
+	case btnL2:
+		// L2 has no edge action yet — held for combos only.
 		p.setHeld(code, down)
 	case btnMenu:
 		// Physical MENU (0x138 on this hardware): hold ≥3s quits via the

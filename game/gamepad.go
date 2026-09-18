@@ -86,11 +86,18 @@ var heldMenuItems = []string{
 	"Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
 }
 
-// closeActiveHandheldWindow closes the window the handheld menu most
-// recently could have opened (B button). The first open window in menu
-// order wins — with one window open at a time (the normal handheld flow)
-// this is exactly "the active window".
+// closeActiveHandheldWindow closes whatever the handheld layer opened last
+// (B button). Stacked windows close top-first: item descriptions and card
+// artwork sit on top of the inventory, so walking the stack down means B
+// never closes the inventory out from under a detail window — and never
+// closes the whole stack in one press.
 func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) {
+	if m.ui.itemWindows.CloseTopDescription(ctx) {
+		return
+	}
+	if m.ui.itemWindows.CloseTopIllustration(ctx) {
+		return
+	}
 	switch {
 	case m.ui.statsWindow.IsOpen():
 		m.ui.statsWindow.Toggle(ctx)
@@ -247,6 +254,79 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		if delta != 0 && now.Sub(m.statsSelMovedAt) >= gamepadNavFloor {
 			m.statsSelMovedAt = now
 			m.ui.statsWindow.GamepadNavigate(ctx, delta)
+		}
+		return true
+	}
+	// The inventory owns every handheld button while open: d-pad moves the
+	// cell selection, A activates the item (use/equip, the double-click
+	// path), Y opens its description, L1/R1 cycle the Item/Equip/Etc tabs.
+	// While a description window sits on top, the d-pad and Y drive its card
+	// slots instead; B is handled by the branch above and closes the stack
+	// top-down.
+	if m.ui.inventoryBag.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+			m.ui.inventoryBag.GamepadTab(ctx, -1)
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
+			m.ui.inventoryBag.GamepadTab(ctx, 1)
+			return true
+		}
+		if m.ui.itemWindows.HasOpenDescriptions() {
+			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
+				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+					m.gamepadActionAt = now
+					m.ui.itemWindows.GamepadOpenSelectedCard(ctx)
+				}
+				return true
+			}
+			dx := 0
+			if ctx.Input.JustPressed(input.KeyArrowLeft) || ctx.Input.JustPressed(input.KeyArrowUp) {
+				dx--
+			}
+			if ctx.Input.JustPressed(input.KeyArrowRight) || ctx.Input.JustPressed(input.KeyArrowDown) {
+				dx++
+			}
+			if dx != 0 && now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+				m.invSelMovedAt = now
+				// A description without card slots (a plain item) does not
+				// want the d-pad — route it to the inventory grid beneath.
+				if !m.ui.itemWindows.GamepadCardNavigate(ctx, dx) {
+					m.ui.inventoryBag.GamepadNavigate(ctx, dx, 0)
+				}
+			}
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.inventoryBag.GamepadActivate(ctx)
+			}
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.inventoryBag.GamepadInfo(ctx)
+			}
+			return true
+		}
+		dx, dy := 0, 0
+		if ctx.Input.JustPressed(input.KeyArrowLeft) {
+			dx--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowRight) {
+			dx++
+		}
+		if ctx.Input.JustPressed(input.KeyArrowUp) {
+			dy--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowDown) {
+			dy++
+		}
+		if (dx != 0 || dy != 0) && now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+			m.invSelMovedAt = now
+			m.ui.inventoryBag.GamepadNavigate(ctx, dx, dy)
 		}
 		return true
 	}

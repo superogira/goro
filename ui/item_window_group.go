@@ -102,3 +102,74 @@ func (w *ItemWindows) pruneClosed() {
 	w.descriptions = slices.DeleteFunc(w.descriptions, func(info *ItemInfoWindow) bool { return !info.IsOpen() })
 	w.illustrations = slices.DeleteFunc(w.illustrations, func(art *CardIllustrationWindow) bool { return !art.IsOpen() })
 }
+
+// HasOpenDescriptions reports whether any item description window is open —
+// the handheld layer treats them as sitting on top of the inventory.
+func (w *ItemWindows) HasOpenDescriptions() bool {
+	for _, info := range w.descriptions {
+		if info.IsOpen() {
+			return true
+		}
+	}
+	return false
+}
+
+// CloseTopDescription closes the most recently opened description window.
+// The handheld B button walks the stack top-down so one press never closes
+// the inventory underneath.
+func (w *ItemWindows) CloseTopDescription(ctx Context) bool {
+	for i := len(w.descriptions) - 1; i >= 0; i-- {
+		info := w.descriptions[i]
+		if !info.IsOpen() {
+			continue
+		}
+		info.tooltip.Hide()
+		info.Close()
+		info.Publish(ctx)
+		return true
+	}
+	return false
+}
+
+// CloseTopIllustration closes the most recently opened card artwork window.
+func (w *ItemWindows) CloseTopIllustration(ctx Context) bool {
+	for i := len(w.illustrations) - 1; i >= 0; i-- {
+		art := w.illustrations[i]
+		if !art.IsOpen() {
+			continue
+		}
+		art.Close()
+		art.Publish(ctx)
+		return true
+	}
+	return false
+}
+
+// GamepadCardNavigate steps the card-slot selection of the top-most open
+// description window (dir < 0 left, dir > 0 right). It reports false when
+// that window shows no card slots, so the caller can route the d-pad
+// elsewhere.
+func (w *ItemWindows) GamepadCardNavigate(ctx Context, dir int) bool {
+	for i := len(w.descriptions) - 1; i >= 0; i-- {
+		info := w.descriptions[i]
+		if !info.IsOpen() {
+			continue
+		}
+		return info.GamepadCardNavigate(ctx, dir)
+	}
+	return false
+}
+
+// GamepadOpenSelectedCard opens the description of the card in the selected
+// slot of the top-most open description window, stacking another window.
+func (w *ItemWindows) GamepadOpenSelectedCard(ctx Context) bool {
+	for i := len(w.descriptions) - 1; i >= 0; i-- {
+		info := w.descriptions[i]
+		if !info.IsOpen() {
+			continue
+		}
+		info.GamepadOpenSelectedCard(ctx)
+		return true
+	}
+	return false
+}

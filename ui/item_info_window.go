@@ -40,6 +40,7 @@ type ItemInfoWindow struct {
 	readBookRequest ItemInfoReadBookRequest
 	cardArtRequest  ItemInfoCardIllustrationRequest
 	cardInfoRequest itemInfoCardRequest
+	cardSelected    int
 	tooltip         tooltipState
 	slotIcons       map[string]image.Image
 	slotIconMiss    map[string]struct{}
@@ -73,6 +74,7 @@ func (w *ItemInfoWindow) openItem(ctx Context, item session.InventoryItem, mouse
 	w.readBookRequest = ItemInfoReadBookRequest{}
 	w.cardArtRequest = ItemInfoCardIllustrationRequest{}
 	w.cardInfoRequest = itemInfoCardRequest{}
+	w.cardSelected = itemInfoFirstCardSlot(w)
 	w.tooltip.Hide()
 
 	height := w.windowHeight(ctx)
@@ -235,6 +237,7 @@ func (w *ItemInfoWindow) cardSlotsFooter(ctx Context) []widget.Widget {
 				itemInfoSlotIcon,
 				itemInfoSlotIcon,
 				cardID,
+				i == w.cardSelected,
 				func(cardID uint16) { w.showCardTooltip(ctx, cardID) },
 				func() { w.tooltip.Hide() },
 				func(cardID uint16, x, y int) { w.openCard(ctx, cardID, x, y) },
@@ -294,6 +297,53 @@ func (w *ItemInfoWindow) openCard(ctx Context, cardID uint16, mouseX, mouseY int
 		return
 	}
 	w.cardInfoRequest = itemInfoCardRequest{ItemID: cardID, X: mouseX, Y: mouseY}
+}
+
+// GamepadCardNavigate steps the card-slot selection (dir < 0 left, dir > 0
+// right) within the four slots of the footer. It reports false when this
+// window shows no card slots, so the caller can route the d-pad elsewhere.
+func (w *ItemInfoWindow) GamepadCardNavigate(ctx Context, dir int) bool {
+	if !w.IsOpen() || dir == 0 || !itemInfoShowsCardSlots(ctx, w.item) {
+		return false
+	}
+	next := w.cardSelected + dir
+	if next < 0 {
+		next = 0
+	}
+	if next > 3 {
+		next = 3
+	}
+	if next == w.cardSelected {
+		return true
+	}
+	w.cardSelected = next
+	w.SetContent(w.widgetTree(ctx))
+	w.Publish(ctx)
+	return true
+}
+
+// GamepadOpenSelectedCard opens the description of the card in the selected
+// slot, stacked on top of this window.
+func (w *ItemInfoWindow) GamepadOpenSelectedCard(ctx Context) {
+	if !w.IsOpen() || !itemInfoShowsCardSlots(ctx, w.item) {
+		return
+	}
+	cardID := w.cardSlotCardID(w.cardSelected)
+	if cardID == 0 {
+		return
+	}
+	w.openCard(ctx, cardID, w.x+40, w.y+40)
+}
+
+// itemInfoFirstCardSlot picks where the gamepad card selection starts: the
+// first slot holding a card, or slot 0 when the equipment has none yet.
+func itemInfoFirstCardSlot(w *ItemInfoWindow) int {
+	for i := 0; i < len(w.item.Cards); i++ {
+		if w.cardSlotCardID(i) != 0 {
+			return i
+		}
+	}
+	return 0
 }
 
 func (w *ItemInfoWindow) cardSlotCardID(index int) uint16 {
@@ -667,24 +717,26 @@ func itemInfoWidgetColor(c color.RGBA) widget.Color {
 
 type itemInfoCardSlotWidget struct {
 	widget.WidgetBase
-	image   image.Image
-	width   int
-	height  int
-	cardID  uint16
-	onHover func(uint16)
-	onLeave func()
-	onOpen  func(uint16, int, int)
+	image    image.Image
+	width    int
+	height   int
+	cardID   uint16
+	selected bool
+	onHover  func(uint16)
+	onLeave  func()
+	onOpen   func(uint16, int, int)
 }
 
-func newItemInfoCardSlotWidget(img image.Image, width, height int, cardID uint16, onHover func(uint16), onLeave func(), onOpen func(uint16, int, int)) *itemInfoCardSlotWidget {
+func newItemInfoCardSlotWidget(img image.Image, width, height int, cardID uint16, selected bool, onHover func(uint16), onLeave func(), onOpen func(uint16, int, int)) *itemInfoCardSlotWidget {
 	w := &itemInfoCardSlotWidget{
-		image:   img,
-		width:   width,
-		height:  height,
-		cardID:  cardID,
-		onHover: onHover,
-		onLeave: onLeave,
-		onOpen:  onOpen,
+		image:    img,
+		width:    width,
+		height:   height,
+		cardID:   cardID,
+		selected: selected,
+		onHover:  onHover,
+		onLeave:  onLeave,
+		onOpen:   onOpen,
 	}
 	w.SetVisible(true)
 	w.SetEnabled(true)
@@ -698,7 +750,14 @@ func (w *itemInfoCardSlotWidget) Layout(ctx widget.Context, constraints geometry
 }
 
 func (w *itemInfoCardSlotWidget) Draw(ctx widget.Context, canvas widget.Canvas) {
-	if !w.IsVisible() || w.image == nil {
+	if !w.IsVisible() {
+		return
+	}
+	if w.selected {
+		// Gamepad cursor over the card slots.
+		canvas.StrokeRect(w.Bounds(), rotheme.Default.Colors.InputFocus, 1.5)
+	}
+	if w.image == nil {
 		return
 	}
 	canvas.DrawImage(w.image, w.Bounds().Min)

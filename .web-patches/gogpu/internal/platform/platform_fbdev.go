@@ -158,16 +158,21 @@ const (
 	// ANBERNIC-keys device advertises (from its /proc caps bitmap).
 	btnSel0 = 0x162
 
-	// keySettleTime is how long a key must stay released before the next
-	// press is accepted; hatReleaseHold is how long the d-pad must sit at
-	// neutral before a release is published. keySettleTime clears the
-	// measured press/release chatter, whose UP phase lasts 50-150ms, while
-	// deliberate taps leave the key up 450ms+. hatReleaseHold is the same
-	// measurement applied to the axis levels, with margin above the 150ms
-	// slow end so a chatter drop is absorbed instead of stopping the walk.
-	keySettleTime  = 180 * time.Millisecond
+	// keySettleTime is the normal release-stability window: a key must be up
+	// this long before the next press counts as deliberate.
+	// keyChatterHold is the lockout applied for the rest of a burst once a
+	// press has been rejected as chatter, so the burst's own short gaps can
+	// never re-arm it; the next real tap (a longer gap) resets the window.
+	// Measured on the device: chatter keeps the key up 50-150ms, deliberate
+	// taps leave it up 400ms+ — 140ms sits in the empty band between the two,
+	// which lets the player mash noticeably faster than the old 180ms did.
+	keySettleTime  = 140 * time.Millisecond
+	keyChatterHold = 400 * time.Millisecond
+	// hatReleaseHold is how long the d-pad must sit at neutral before a
+	// release is published, with margin above the 150ms slow end of the
+	// chatter so a drop is absorbed instead of stopping the walk.
 	hatReleaseHold = 200 * time.Millisecond
-	keyEsc  = 0x001
+	keyEsc         = 0x001
 
 	// Stick handling: RG35XX-style pads report 0..255 with center ~128.
 	stickCenter = 127.5
@@ -240,6 +245,10 @@ type fbdevPlatform struct {
 	// stability separates them where "time since last press" could not
 	// (chatter gaps overlapped human tap rates).
 	keyReleasedAt map[uint16]time.Time
+	// keySettleNeed is the settle window currently required for each key:
+	// normally keySettleTime, raised to keyChatterHold while a chatter burst
+	// is being suppressed.
+	keySettleNeed map[uint16]time.Duration
 	// hatXAt/hatYAt stamp when the physical d-pad axis last changed value;
 	// hatXPosted/hatYPosted track what the game currently believes. The axes
 	// are levels, not edges, and a held d-pad briefly drops to neutral as
@@ -336,6 +345,7 @@ func (p *fbdevPlatform) Init() error {
 	p.held = make(map[uint16]time.Time)
 	p.seenCodes = make(map[uint16]bool)
 	p.keyReleasedAt = make(map[uint16]time.Time)
+	p.keySettleNeed = make(map[uint16]time.Duration)
 	p.startInput()
 	go p.cursorLoop()
 	go p.quitWatcher()
@@ -873,6 +883,9 @@ func (p *fbdevPlatform) traceKeyEvent(f *os.File) int {
 	if p.keyReleasedAt == nil {
 		p.keyReleasedAt = make(map[uint16]time.Time)
 	}
+	if p.keySettleNeed == nil {
+		p.keySettleNeed = make(map[uint16]time.Duration)
+	}
 	p.keyTraces[name]++
 	return p.keyTraces[name]
 }
@@ -1004,8 +1017,18 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	} else {
 		p.inputMu.Lock()
 		releasedAt, seen := p.keyReleasedAt[code]
+		need := p.keySettleNeed[code]
+		if need == 0 {
+			need = keySettleTime
+		}
+		chatter := seen && time.Since(releasedAt) < need
+		if chatter {
+			p.keySettleNeed[code] = keyChatterHold
+		} else {
+			p.keySettleNeed[code] = keySettleTime
+		}
 		p.inputMu.Unlock()
-		if seen && time.Since(releasedAt) < keySettleTime {
+		if chatter {
 			return
 		}
 	}

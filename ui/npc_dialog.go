@@ -65,8 +65,9 @@ type NPCDialog struct {
 	status      string
 	input       string
 	inputField  *textfield.Widget
-	menuRow       int
-	menuRowMovedAt time.Time
+	menuRow     int
+	menuNavDir  int
+	menuNavNext time.Time
 	menuScrollY state.Signal[float32]
 
 	dialogWindow Window
@@ -259,13 +260,14 @@ func (d *NPCDialog) Update(ctx Context) bool {
 	}
 	// Handheld navigation: the d-pad moves the menu selection through the
 	// options and down to the Cancel row; Confirm (Enter or the gamepad A)
-	// activates whatever is selected.
+	// activates whatever is selected. This is the only writer — the listview
+	// widget used to consume the same arrow keys through the widget event
+	// system (fired during event polling, before Update), so one physical
+	// press moved the selection twice and the menu skipped a row. The
+	// listview keeps handling mouse clicks; it is no longer focused, and it
+	// could never reach the Cancel row anyway (-2 clamps to its first item).
 	if d.action == npcDialogActionMenu {
-		if ctx.Input.JustPressed(input.KeyArrowUp) || ctx.Input.JustPressed(input.KeyArrowDown) {
-			step := 1
-			if ctx.Input.JustPressed(input.KeyArrowUp) {
-				step = -1
-			}
+		if step := d.menuNavStep(ctx.Input, time.Now()); step != 0 {
 			d.moveMenuSelection(step)
 			d.publish(ctx)
 			return true
@@ -423,14 +425,48 @@ func (d *NPCDialog) chooseSelected(ctx Context) {
 // the last stop for d-pad navigation.
 const npcMenuCancelRow = -2
 
-// moveMenuSelection steps the selection over the options list; past the
-// last option it lands on the Cancel row, and back up from there. Debounced
-// — the polled d-pad can emit bounce transitions that would skip rows.
-func (d *NPCDialog) moveMenuSelection(step int) {
-	if time.Since(d.menuRowMovedAt) < 300*time.Millisecond {
-		return
+// Held-d-pad repeat for the option list: the first press moves at once, then
+// a held direction repeats after a short delay. The handheld platform
+// collapses the firmware's key chatter into one press-and-hold, so the repeat
+// has to come from here.
+const (
+	npcMenuRepeatDelay  = 320 * time.Millisecond
+	npcMenuRepeatPeriod = 150 * time.Millisecond
+)
+
+// menuNavStep reports the selection step for this frame: 0 when nothing is
+// held or the repeat delay has not elapsed. Direction changes act at once.
+func (d *NPCDialog) menuNavStep(in *input.State, now time.Time) int {
+	if in == nil {
+		return 0
 	}
-	d.menuRowMovedAt = time.Now()
+	step := 0
+	if in.Pressed(input.KeyArrowUp) {
+		step--
+	}
+	if in.Pressed(input.KeyArrowDown) {
+		step++
+	}
+	if step == 0 {
+		d.menuNavDir = 0
+		return 0
+	}
+	if step != d.menuNavDir {
+		d.menuNavDir = step
+		d.menuNavNext = now.Add(npcMenuRepeatDelay)
+		return step
+	}
+	if d.menuNavNext.IsZero() || now.Before(d.menuNavNext) {
+		return 0
+	}
+	d.menuNavNext = now.Add(npcMenuRepeatPeriod)
+	return step
+}
+
+// moveMenuSelection steps the selection over the options list; past the
+// last option it lands on the Cancel row, and back up from there. Pacing
+// lives in menuNavStep.
+func (d *NPCDialog) moveMenuSelection(step int) {
 	switch {
 	case d.menuRow == npcMenuCancelRow:
 		if step > 0 {
@@ -759,7 +795,13 @@ func (d *NPCDialog) menuList() widget.Widget {
 		listview.SelectionModeOpt(listview.SelectionSingle),
 		listview.SelectedIndex(d.menuRow),
 		listview.OnSelectionChange(func(index int) {
-			d.menuRow = index
+			// Mouse/touch only: the widget is not focused, so keyboard
+			// navigation cannot reach it and cannot double-step the row.
+			// Guard the range anyway — an out-of-range write would leave
+			// menuRow invalid (Confirm then silently did nothing).
+			if index >= 0 && index < len(d.options) {
+				d.menuRow = index
+			}
 		}),
 		listview.PainterOpt(rotheme.SelectListPainter{EmptyText: "No options."}),
 		listview.BuildItem(func(item listview.ItemContext) widget.Widget {
@@ -770,7 +812,6 @@ func (d *NPCDialog) menuList() widget.Widget {
 			return rotheme.SelectListRow(trimRunes(label, 34), true, npcMenuRowH)
 		}),
 	)
-	lv.SetFocused(true)
 	return lv
 }
 

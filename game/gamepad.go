@@ -34,10 +34,10 @@ const (
 	// gamepadActionFloor paces A actions (attack/pickup/talk/confirm). The
 	// platform already collapses the firmware's press/release chatter into a
 	// single press per tap, so this floor no longer has to fight repeat — it
-	// only stops two taps landing on the same target, and 600ms made pickup
-	// feel sticky. Attack and NPC confirm go through the same knob: dialog
-	// pages and swing pacing are close enough that one floor stays honest.
-	gamepadActionFloor = 250 * time.Millisecond
+	// only keeps one press from firing two actions and stops the fastest
+	// mashing from double-hitting the same target. The old 600ms made pickup
+	// feel sticky; at 150ms the pickup pace follows the player's tapping.
+	gamepadActionFloor = 150 * time.Millisecond
 	// gamepadNavFloor paces d-pad menu navigation everywhere: one physical
 	// tap posts exactly one edge now, so this is a comfort floor, not a
 	// chatter filter (220ms felt sluggish after the platform fix).

@@ -250,13 +250,74 @@ func drawFixedSpriteShadowBillboard3D(screen *render.Frame, projection sceneProj
 	return drawSpriteShadowBillboard3D(screen, projection, billboard, worldX, worldY, worldZ, scale, alpha, shadow)
 }
 
+// drawSpriteShadowBillboard3D draws the shadow as a flat decal lying on the
+// ground plane — the shape that reads as a soft blob under the actor. Both
+// the visual position and the depth position use the ground axes (camera
+// yaw), so the quad is foreshortened exactly like the terrain under it.
+// Commit fd38f65 had switched this to the generic camera-facing billboard to
+// stop sloped terrain clipping the quad; the two things that actually fixed
+// that clipping are kept — the small terrain lift applied by the caller
+// (actorShadowTerrainLift) and the depth bias below. Camera-facing, the
+// 35x17 binary shadow mask stood upright at full size and read as a
+// hard-edged slab instead of a shadow.
 func drawSpriteShadowBillboard3D(screen *render.Frame, projection sceneProjection, billboard *spriteBillboard, worldX, worldY, worldZ, scale float64, alpha float64, shadow float64) bool {
-	if billboard == nil {
+	if billboard == nil || billboard.image == nil {
 		return false
 	}
-	options := spriteBillboardTriangleDrawOptions()
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = 1
+	}
+	if alpha < 0 || math.IsNaN(alpha) {
+		alpha = 0
+	}
+	if alpha > 1 || math.IsInf(alpha, 0) {
+		alpha = 1
+	}
+	if shadow < 0 || math.IsNaN(shadow) {
+		shadow = 0
+	}
+	if shadow > 1 || math.IsInf(shadow, 0) {
+		shadow = 1
+	}
+	_, _, unitsPerPixel, ok := projection.BillboardBasis(worldX, worldY, worldZ)
+	if !ok {
+		return false
+	}
+	yaw := degreesToRadians(projection.cameraYaw)
+	right := normalize3(modelPoint3{x: math.Cos(yaw), z: math.Sin(yaw)})
+	down := normalize3(modelPoint3{x: math.Sin(yaw), z: -math.Cos(yaw)})
+	if right == (modelPoint3{}) {
+		right = modelPoint3{x: 1}
+	}
+	if down == (modelPoint3{}) {
+		down = modelPoint3{z: -1}
+	}
+	bounds := billboard.image.Bounds()
+	w := float64(bounds.Dx())
+	h := float64(bounds.Dy())
+	center := modelPoint3{x: worldX, y: worldZ, z: worldY}
+	tint := colorRGBAFromFloats(shadow, shadow, shadow, alpha)
+	axisScale := scale * unitsPerPixel
+	options := triangleDrawOptions(spriteDrawFilter(), render.AddressClampToZero)
+	options.Blend = render.BlendSourceOver
 	options.DepthBias = actorShadowDepthBias
-	drawSpriteBillboardTintAlpha3DWithOptions(screen, projection, billboard, worldX, worldY, worldZ, scale, alpha, shadow, color.RGBA{R: 255, G: 255, B: 255, A: 255}, options)
+	screen.DrawWorldBillboard(render.WorldBillboardCommand{
+		Texture:     billboard.image,
+		Options:     *options,
+		Center:      [3]float32{float32(center.x), float32(center.y), float32(center.z)},
+		RightAxis:   [3]float32{float32(right.x * axisScale), float32(right.y * axisScale), float32(right.z * axisScale)},
+		UpAxis:      [3]float32{float32(down.x * axisScale), float32(down.y * axisScale), float32(down.z * axisScale)},
+		DepthUpAxis: [3]float32{float32(down.x * axisScale), float32(down.y * axisScale), float32(down.z * axisScale)},
+		Width:       float32(w),
+		Height:      float32(h),
+		AnchorX:     float32(billboard.anchorX),
+		AnchorY:     float32(billboard.anchorY),
+		ColorR:      float32(tint.R) / 255,
+		ColorG:      float32(tint.G) / 255,
+		ColorB:      float32(tint.B) / 255,
+		ColorA:      float32(tint.A) / 255,
+		DepthBias:   options.DepthBias,
+	})
 	return true
 }
 

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"sync/atomic"
 	"bytes"
 	"fmt"
 	"image"
@@ -894,6 +895,7 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	if err := r.drawFPSMeter(r.screen, deviceScale); err != nil {
 		return err
 	}
+	r.drawVolumeHUD(r.screen)
 	if err := r.drawFullscreenButton(r.screen, width, height, deviceScale); err != nil {
 		return err
 	}
@@ -2370,6 +2372,83 @@ func procStatusKb(field []byte) int {
 		break
 	}
 	return value
+}
+
+// volumeHUD carries the transient on-screen volume indicator state set by
+// the app layer when a volume key is pressed.
+type volumeHUDState struct {
+	level  float64
+	muted  bool
+	at     time.Time
+}
+
+var volumeHUD atomic.Pointer[volumeHUDState]
+
+// ShowVolumeHUD displays the volume indicator for a short spell. Level is
+// 0..1; muted swaps the icon's look.
+func ShowVolumeHUD(level float64, muted bool) {
+	volumeHUD.Store(&volumeHUDState{level: level, muted: muted, at: time.Now()})
+}
+
+const volumeHUDDuration = 1200 * time.Millisecond
+
+// drawVolumeHUD renders the transient volume overlay: a vertical bar on the
+// left edge with a speaker glyph underneath, mobile-OS style.
+func (r *runner) drawVolumeHUD(screen *Frame) {
+	state := volumeHUD.Load()
+	if state == nil || screen == nil {
+		return
+	}
+	if time.Since(state.at) > volumeHUDDuration {
+		volumeHUD.Store(nil)
+		return
+	}
+	bounds := screen.Bounds()
+	height := float64(bounds.Dy())
+	const barW = 14.0
+	const barHFactor = 0.34
+	const margin = 18.0
+	barH := height * barHFactor
+	barX := margin
+	barY := (height - barH) / 2
+
+	// Track
+	render_DrawRect(screen, barX-2, barY-2, barW+4, barH+4, color.RGBA{A: 130})
+	render_DrawRect(screen, barX, barY, barW, barH, color.RGBA{R: 40, G: 40, B: 40, A: 200})
+	// Fill (bottom-up)
+	level := state.level
+	if level < 0 {
+		level = 0
+	}
+	if level > 1 {
+		level = 1
+	}
+	fillH := barH * level
+	fillColor := color.RGBA{R: 250, G: 220, B: 120, A: 235}
+	if state.muted {
+		fillColor = color.RGBA{R: 160, G: 160, B: 160, A: 235}
+	}
+	if fillH > 0 {
+		render_DrawRect(screen, barX, barY+barH-fillH, barW, fillH, fillColor)
+	}
+
+	// Speaker glyph below the bar: a small box body plus a wider base.
+	gx := barX - 1
+	gy := barY + barH + 10
+	if state.muted {
+		render_DrawRect(screen, gx, gy, barW+2, barW+2, color.RGBA{R: 160, G: 160, B: 160, A: 235})
+		// Mute slash
+		render_DrawRect(screen, gx+barW/2, gy, 3, barW+2, color.RGBA{R: 255, G: 90, B: 90, A: 255})
+		return
+	}
+	render_DrawRect(screen, gx+3, gy+2, 5, barW-2, color.RGBA{R: 250, G: 220, B: 120, A: 235})
+	render_DrawRect(screen, gx, gy+4, 3, barW-6, color.RGBA{R: 250, G: 220, B: 120, A: 235})
+}
+
+// render_DrawRect is a tiny indirection so this file can call the package
+// rect helper without colliding with embedded names.
+func render_DrawRect(dst *Frame, x, y, w, h float64, c color.Color) {
+	DrawRect(dst, x, y, w, h, c)
 }
 
 func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {

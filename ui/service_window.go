@@ -91,11 +91,33 @@ func (w *ServiceWindow) Update(ctx client.Context) bool {
 		}
 		return false
 	}
+	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyArrowUp) {
+		w.moveSelection(-1)
+		return true
+	}
+	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyArrowDown) {
+		w.moveSelection(1)
+		return true
+	}
 	if ctx.Input != nil && ctx.Input.JustPressed(input.KeyEnter) {
 		w.confirm()
 		return true
 	}
 	return w.Window.Update(ctx)
+}
+
+// moveSelection steps the highlighted service for d-pad navigation.
+func (w *ServiceWindow) moveSelection(step int) {
+	index := w.SelectedIndex()
+	if index < 0 {
+		index = 0
+	} else {
+		index += step
+	}
+	w.selected.Set(clampServiceIndex(index, len(w.services)))
+	if w.callbacks.OnSelect != nil {
+		w.callbacks.OnSelect(w.SelectedIndex())
+	}
 }
 
 func (w *ServiceWindow) SelectedIndex() int {

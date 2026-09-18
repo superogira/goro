@@ -1260,6 +1260,17 @@ func (c *ChatConsole) setInput(text string) {
 	c.invalidate()
 }
 
+// OpenForTyping activates the chat input field programmatically (the
+// handheld menu's Chat item); the same path Enter takes.
+func (c *ChatConsole) OpenForTyping(ctx client.Context) {
+	if c == nil || c.Active() {
+		return
+	}
+	c.ctx = ctx
+	c.inputWidget()
+	c.setActive(true)
+}
+
 func (c *ChatConsole) setActive(active bool) {
 	c.active = active
 	if c.inputField != nil {

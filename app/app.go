@@ -38,9 +38,10 @@ type Game struct {
 	quitting          bool
 	pendingScreenshot string
 	// Handheld audio state: side-key volume steps and the power-key mute.
-	muted    bool
-	mutedBGM float64
-	mutedSFX float64
+	muted      bool
+	mutedBGM   float64
+	mutedSFX   float64
+	enterPulse bool
 }
 
 func New(cfg config.Config) (*Game, error) {
@@ -88,6 +89,12 @@ func New(cfg config.Config) (*Game, error) {
 }
 
 func (g *Game) Update() error {
+	// Release the previous frame's A-as-Enter pulse (login mode): the press
+	// edge must be visible for exactly one frame.
+	if g.enterPulse {
+		g.input.SetKey(input.KeyEnter, false)
+		g.enterPulse = false
+	}
 	defer g.input.EndFrame()
 	g.network.Pump()
 	g.modes.UpdateContext(g.modeContext())
@@ -165,14 +172,24 @@ func (g *Game) PrepareKeyInput(code input.KeyCode, mods gpucontext.Modifiers) {
 		}
 	}
 	// Handheld side keys: volume steps (both BGM and SFX together) and the
-	// power-key screen toggle, whose KeyF14 edge mutes/unmutes the game.
+	// power-key screen cycle, whose F14/F16 edges mute/unmute the game.
 	switch code {
 	case gpucontext.KeyAudioVolumeUp:
-		g.stepVolume(0.1)
+		g.stepVolume(0.05)
 	case gpucontext.KeyAudioVolumeDown:
-		g.stepVolume(-0.1)
+		g.stepVolume(-0.05)
 	case gpucontext.KeyF14:
-		g.toggleMute()
+		g.muteForScreenOff()
+	case gpucontext.KeyF16:
+		g.unmuteFromScreenOn()
+	case gpucontext.KeyF13:
+		// A doubles as Enter on the login screens (account/password/service/
+		// character select all advance on Enter); in the world the gamepad
+		// layer routes it instead.
+		if g.modes != nil && g.modes.ModeName() == "login" {
+			g.input.SetKey(input.KeyEnter, true)
+			g.enterPulse = true
+		}
 	}
 	if g.modes != nil {
 		g.modes.PrepareKeyInput(g.modeContext(), code, mods)
@@ -180,7 +197,7 @@ func (g *Game) PrepareKeyInput(code input.KeyCode, mods gpucontext.Modifiers) {
 }
 
 // stepVolume nudges both volume channels and clears any mute so the change
-// is audible immediately.
+// is audible immediately; the on-screen volume HUD follows.
 func (g *Game) stepVolume(delta float64) {
 	if g.audio == nil {
 		return
@@ -189,26 +206,31 @@ func (g *Game) stepVolume(delta float64) {
 	g.audio.SetBGMVolume(g.audio.BGMVolume() + delta)
 	g.audio.SetSFXVolume(g.audio.SFXVolume() + delta)
 	glog.Infof("volume changed bgm=%.2f sfx=%.2f", g.audio.BGMVolume(), g.audio.SFXVolume())
+	render.ShowVolumeHUD(g.audio.BGMVolume(), false)
 }
 
-// toggleMute remembers the levels before silencing so the power-key screen
-// toggle can restore them exactly.
-func (g *Game) toggleMute() {
-	if g.audio == nil {
-		return
-	}
-	if g.muted {
-		g.muted = false
-		g.audio.SetBGMVolume(g.mutedBGM)
-		g.audio.SetSFXVolume(g.mutedSFX)
-		glog.Infof("audio unmuted bgm=%.2f sfx=%.2f", g.mutedBGM, g.mutedSFX)
+// muteForScreenOff silences the game when the power cycle blanks the panel.
+func (g *Game) muteForScreenOff() {
+	if g.audio == nil || g.muted {
 		return
 	}
 	g.mutedBGM = g.audio.BGMVolume()
 	g.mutedSFX = g.audio.SFXVolume()
 	g.muted = true
 	g.audio.SetVolume(0)
-	glog.Infof("audio muted (was bgm=%.2f sfx=%.2f)", g.mutedBGM, g.mutedSFX)
+	glog.Infof("audio muted for screen off (was bgm=%.2f sfx=%.2f)", g.mutedBGM, g.mutedSFX)
+}
+
+// unmuteFromScreenOn restores the levels captured at mute time when the
+// power cycle returns to the on state.
+func (g *Game) unmuteFromScreenOn() {
+	if g.audio == nil || !g.muted {
+		return
+	}
+	g.muted = false
+	g.audio.SetBGMVolume(g.mutedBGM)
+	g.audio.SetSFXVolume(g.mutedSFX)
+	glog.Infof("audio unmuted bgm=%.2f sfx=%.2f", g.mutedBGM, g.mutedSFX)
 }
 
 func (g *Game) SetQuitFunc(quit func()) {

@@ -2,10 +2,10 @@ package ui
 
 import (
 	"fmt"
-	"github.com/kivutar/goro/input"
 	"image/color"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gogpu/ui/core/listview"
@@ -14,6 +14,7 @@ import (
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/state"
+	"github.com/kivutar/goro/input"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/ui/rotheme"
@@ -64,7 +65,8 @@ type NPCDialog struct {
 	status      string
 	input       string
 	inputField  *textfield.Widget
-	menuRow     int
+	menuRow       int
+	menuRowMovedAt time.Time
 	menuScrollY state.Signal[float32]
 
 	dialogWindow Window
@@ -422,8 +424,13 @@ func (d *NPCDialog) chooseSelected(ctx Context) {
 const npcMenuCancelRow = -2
 
 // moveMenuSelection steps the selection over the options list; past the
-// last option it lands on the Cancel row, and back up from there.
+// last option it lands on the Cancel row, and back up from there. Debounced
+// — the polled d-pad can emit bounce transitions that would skip rows.
 func (d *NPCDialog) moveMenuSelection(step int) {
+	if time.Since(d.menuRowMovedAt) < 150*time.Millisecond {
+		return
+	}
+	d.menuRowMovedAt = time.Now()
 	switch {
 	case d.menuRow == npcMenuCancelRow:
 		if step > 0 {

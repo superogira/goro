@@ -95,7 +95,7 @@ func (p *pipeOutput) NewPlayer(r io.Reader) audioPlayer {
 		reader: r,
 		// One mix chunk (framesPerChunk*4 bytes), so every voice read
 		// aligns with the pump chunk size.
-		scratch: make([]byte, 2048*4),
+		scratch: make([]byte, 1024*4),
 	}
 	v.active.Store(true)
 	v.volume.Store(1.0)
@@ -131,9 +131,10 @@ func (p *pipeOutput) startMaster() {
 
 // pump writes realtime-paced mixed chunks into the player's stdin. Pacing
 // matters: an unpaced writer outruns playback and mpv balloons its cache
-// (150MB observed on the 1GB device before this fix).
+// (150MB observed on the 1GB device before this fix). 1024 frames (~23ms)
+// keeps SFX latency low.
 func (p *pipeOutput) pump(stdin io.WriteCloser) {
-	const framesPerChunk = 2048
+	const framesPerChunk = 1024
 	chunk := make([]byte, framesPerChunk*4)
 	chunkDur := time.Duration(framesPerChunk) * time.Second / time.Duration(p.rate)
 	ticker := time.NewTicker(chunkDur)
@@ -222,14 +223,15 @@ func (v *mixerVoice) Close() error {
 }
 
 // resolveAudioBackend picks the output backend: an explicit name wins;
-// "auto" prefers external players on linux (mpv, then aplay) and falls back
-// to the in-process oto driver everywhere else.
+// "auto" prefers aplay on linux (its ALSA-only path has the least latency —
+// mpv's stream buffering delays SFX behind the action on the rg35xx), then
+// mpv, then falls back to the in-process oto driver elsewhere.
 func resolveAudioBackend(preferred string) string {
 	if preferred != "" && preferred != "auto" {
 		return preferred
 	}
 	if runtime.GOOS == "linux" {
-		for _, name := range []string{"mpv", "aplay"} {
+		for _, name := range []string{"aplay", "mpv"} {
 			if _, err := exec.LookPath(name); err == nil {
 				return name
 			}

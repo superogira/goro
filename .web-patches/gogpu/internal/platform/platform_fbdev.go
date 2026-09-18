@@ -225,17 +225,13 @@ type fbdevPlatform struct {
 	// (0x138) release. Swallow that echo so a MENU tap does not also open
 	// the in-game escape menu.
 	suppressSel0Until time.Time
-	// Power-key screen state: blanked toggles the panel backlight through
-	// sysfs (Rockbox-style: /sys/class/backlight/*/bl_power, falling back
-	// to /sys/class/graphics/fb0/blank) without any system sleep.
-	screenBlanked   bool
-	screenBlankPath string
-	// dispdbgRestoreLevel is the backlight level captured before the power
-	// key turned the panel off, so unblanking restores the user's level.
+	// Power-key panel cycle: on → dim (backlight off, mute) → off (fb
+	// blanked too) → on (restore). Not a sleep — sockets stay alive.
+	powerState          int
 	dispdbgRestoreLevel int
-	buttons           gpucontext.Buttons
-	axes              map[uint16]int32
-	hatX, hatY        int
+	buttons             gpucontext.Buttons
+	axes                map[uint16]int32
+	hatX, hatY          int
 	shift, ctrl, alt  bool
 }
 
@@ -901,7 +897,7 @@ func (p *fbdevPlatform) quitWatcher() {
 		now := time.Now()
 		p.inputMu.Lock()
 		via := ""
-		if t0, ok := p.held[btnMenu]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+		if t0, ok := p.held[btnMenu]; ok && now.Sub(t0) >= 3*time.Second {
 			via = "MENU(0x138)"
 		} else if t0, ok := p.held[btnSel0]; ok && now.Sub(t0) >= 1200*time.Millisecond {
 			via = "SELECT(0x162)"
@@ -934,6 +930,15 @@ func (p *fbdevPlatform) quitWatcher() {
 func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	var button gpucontext.Buttons
 	var key gpucontext.Key
+	// While MENU is held, every other key is a system combo (d-pad camera,
+	// volume backlight) — restart the quit timer so combos never exit.
+	if code != btnMenu {
+		p.inputMu.Lock()
+		if _, menuHeld := p.held[btnMenu]; menuHeld {
+			p.held[btnMenu] = time.Now()
+		}
+		p.inputMu.Unlock()
+	}
 	switch code {
 	case btnLeft: // real mouse left button
 		button = gpucontext.ButtonsLeft
@@ -964,9 +969,19 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	case btnR2:
 		key = gpucontext.KeyF4
 	case btnMenu:
-		// Physical MENU (0x138 on this hardware): hold ≥1.2s quits via the
-		// quit watcher; a short tap fires the PrintScreen key, which the
-		// app layer turns into a screenshot.
+		// Physical MENU (0x138 on this hardware): hold ≥3s quits via the
+		// quit watcher (long, because MENU+d-pad / MENU+volume are camera
+		// and backlight combos while held); a short tap fires KeyF15,
+		// which the world layer turns into the handheld menu overlay.
+		if down {
+			// Any other key while MENU is held is a combo (camera zoom or
+			// backlight) — restart the quit timer so the combo never exits.
+			p.inputMu.Lock()
+			if _, held := p.held[btnMenu]; held {
+				p.held[btnMenu] = time.Now()
+			}
+			p.inputMu.Unlock()
+		}
 		p.inputMu.Lock()
 		t0, menuHeld := p.held[btnMenu]
 		p.inputMu.Unlock()
@@ -976,13 +991,13 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			p.inputMu.Lock()
 			p.suppressSel0Until = time.Now().Add(250 * time.Millisecond)
 			p.inputMu.Unlock()
-			if menuHeld && time.Since(t0) < 500*time.Millisecond {
-				p.dispatchKey(gpucontext.KeyPrintScreen, true)
+			if menuHeld && time.Since(t0) < 800*time.Millisecond {
+				p.dispatchKey(gpucontext.KeyF15, true)
 				// Release shortly after so the key does not stay held; the
 				// press edge lands in the current event batch.
 				go func() {
 					time.Sleep(120 * time.Millisecond)
-					p.dispatchKey(gpucontext.KeyPrintScreen, false)
+					p.dispatchKey(gpucontext.KeyF15, false)
 				}()
 			}
 		}
@@ -998,16 +1013,12 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			key = gpucontext.KeyAudioVolumeDown
 		}
 	case keyPower:
-		// Short power press: blank/unblank the panel and mute/unmute the
-		// game (KeyF14 edge). Not a sleep — the process and its sockets
-		// stay alive.
+		// Power cycles the panel: on → dim (backlight off, audio muted,
+		// rendering continues) → off (fb blanked too, fully dark) → on.
+		// Not a sleep — the process and its sockets stay alive. F14 edges
+		// the app to mute, F16 to unmute.
 		if down {
-			p.toggleScreenBlank()
-			p.dispatchKey(gpucontext.KeyF14, true)
-			go func() {
-				time.Sleep(120 * time.Millisecond)
-				p.dispatchKey(gpucontext.KeyF14, false)
-			}()
+			p.advancePowerCycle()
 		}
 	case btnStart:
 		key = gpucontext.KeyEnter
@@ -1082,136 +1093,107 @@ func (p *fbdevPlatform) mods() gpucontext.Modifiers {
 	return m
 }
 
-// toggleScreenBlank flips the panel off for the power key, trying several
-// firmware strategies in order: the standard backlight node (Rockbox
-// TYPE2), the framebuffer blank node, then the FBIOBLANK ioctl on fb0, and
-// finally the Allwinner dispdbg debugfs interface (Rockbox TYPE1 setbl).
-// Rendering and the network connection continue — display mute, no sleep.
-func (p *fbdevPlatform) toggleScreenBlank() {
-	value := byte(0)
-	if !p.screenBlanked {
-		value = 4 // FB_BLANK_POWERDOWN
+// advancePowerCycle steps the power-key panel state:
+//
+//	on  → dim : backlight off (dispdbg setbl 0), audio muted, image keeps
+//	            rendering invisibly — the "music screen-off" mode
+//	dim → off : additionally blank the framebuffer — fully dark
+//	off → on  : unblank and restore the captured backlight level, unmute
+//
+// Not a sleep: the process, its sockets, and the render loop continue.
+func (p *fbdevPlatform) advancePowerCycle() {
+	next := (p.powerState + 1) % 3
+	switch next {
+	case 1: // dim
+		if p.powerState == 0 {
+			p.captureBacklightLevel()
+		}
+		p.setPanelBacklight(0)
+		p.dispatchKey(gpucontext.KeyF14, true)
+		go func() {
+			time.Sleep(120 * time.Millisecond)
+			p.dispatchKey(gpucontext.KeyF14, false)
+		}()
+	case 2: // off
+		p.setFbBlank(true)
+	case 0: // on
+		p.setFbBlank(false)
+		p.setPanelBacklight(p.dispdbgRestoreLevel)
+		p.dispatchKey(gpucontext.KeyF16, true)
+		go func() {
+			time.Sleep(120 * time.Millisecond)
+			p.dispatchKey(gpucontext.KeyF16, false)
+		}()
 	}
-	if p.applyScreenBlank(value) {
-		p.screenBlanked = !p.screenBlanked
-		logger().Info("fbdev: power key toggled screen", "blanked", p.screenBlanked)
+	p.powerState = next
+	logger().Info("fbdev: power cycle state", "state", []string{"on", "dim", "off"}[next])
+}
+
+// captureBacklightLevel remembers the panel brightness before the first dim
+// so the on state can restore it exactly.
+func (p *fbdevPlatform) captureBacklightLevel() {
+	if p.dispdbgRestoreLevel > 0 {
 		return
 	}
-	logger().Warn("fbdev: no screen blank mechanism worked; power key will only mute audio")
-}
-
-// applyScreenBlank pushes a blank level (0 active, 4 powerdown for the
-// fbdev paths; 0/previous brightness for backlight) through whichever
-// mechanism this firmware exposes. The Allwinner dispdbg backlight comes
-// before the fbdev blank paths: game frames re-activate a blanked fb layer
-// within one frame (observed as a black flash), while the backlight stays
-// off no matter how much renders.
-func (p *fbdevPlatform) applyScreenBlank(level byte) bool {
-	if p.screenBlankPath != "" && p.screenBlankPath != " " && p.screenBlankPath != "ioctl" && p.screenBlankPath != "dispdbg" {
-		if err := os.WriteFile(p.screenBlankPath, []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
-			return true
-		}
-		p.screenBlankPath = ""
-	}
-	if matches, err := filepath.Glob("/sys/class/backlight/*/bl_power"); err == nil {
-		for _, path := range matches {
-			if err := os.WriteFile(path, []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
-				p.screenBlankPath = path
-				logger().Info("fbdev: screen blank via backlight", "path", path)
-				return true
-			}
-		}
-	}
-	if dispdbgSetBacklight(p, level) {
-		p.screenBlankPath = "dispdbg"
-		logger().Info("fbdev: screen blank via dispdbg setbl", "restore_level", p.dispdbgRestoreLevel)
-		return true
-	}
-	if err := os.WriteFile("/sys/class/graphics/fb0/blank", []byte(fmt.Sprintf("%d", level)), 0o644); err == nil {
-		p.screenBlankPath = "/sys/class/graphics/fb0/blank"
-		logger().Info("fbdev: screen blank via fb sysfs", "path", p.screenBlankPath)
-		return true
-	}
-	if fbBlankViaioctl(level) {
-		p.screenBlankPath = "ioctl"
-		logger().Info("fbdev: screen blank via FBIOBLANK ioctl")
-		return true
-	}
-	return false
-}
-
-// fbBlankViaioctl issues FBIOBLANK (0x461B) on /dev/fb0 — the fbdev-native
-// blank path some Allwinner builds honor even when sysfs is absent.
-func fbBlankViaioctl(level byte) bool {
-	fb, err := os.OpenFile("/dev/fb0", os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	defer fb.Close()
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fb.Fd(), 0x461B, uintptr(level))
-	if errno != 0 {
-		logger().Warn("fbdev: FBIOBLANK failed", "errno", errno.Error())
-		return false
-	}
-	return true
-}
-
-// dispdbgSetBacklight drives the Allwinner disp engine debugfs interface
-// the way Rockbox TYPE1 does: name=lcd0, param=level, command=setbl.
-// Blanking (level 4) captures the current brightness via getbl first so
-// the panel restores to the level the user had, not a hardcoded value.
-func dispdbgSetBacklight(p *fbdevPlatform, level byte) bool {
 	base := "/sys/kernel/debug/dispdbg"
 	if _, err := os.Stat(base + "/command"); err != nil {
-		return false
+		return
 	}
-	param := fmt.Sprintf("%d", level)
-	if level == 4 && p.dispdbgRestoreLevel == 0 {
-		// Remember the current brightness before turning it off.
-		p.dispdbgRestoreLevel = dispdbgGetBacklight(base)
-	} else if level == 0 && p.dispdbgRestoreLevel > 0 {
-		// "Unblank" restores the remembered brightness level.
-		param = fmt.Sprintf("%d", p.dispdbgRestoreLevel)
-	}
-	writes := [][2]string{
-		{base + "/name", "lcd0"},
-		{base + "/param", param},
-		{base + "/command", "setbl"},
-		{base + "/start", "1"},
-	}
-	for _, w := range writes {
-		if err := os.WriteFile(w[0], []byte(w[1]), 0o644); err != nil {
-			logger().Warn("fbdev: dispdbg write failed", "file", w[0], "err", err.Error())
-			return false
-		}
-	}
-	return true
-}
-
-// dispdbgGetBacklight asks the disp engine for the current backlight level
-// through the debugfs getbl command; 0 (with a log) when unsupported.
-func dispdbgGetBacklight(base string) int {
-	writes := [][2]string{
+	for _, w := range [][2]string{
 		{base + "/name", "lcd0"},
 		{base + "/command", "getbl"},
 		{base + "/start", "1"},
-	}
-	for _, w := range writes {
+	} {
 		if err := os.WriteFile(w[0], []byte(w[1]), 0o644); err != nil {
-			return 0
+			return
 		}
 	}
 	data, err := os.ReadFile(base + "/param")
 	if err != nil {
-		return 0
+		return
 	}
 	level, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || level <= 0 || level > 255 {
-		return 0
+		return
 	}
-	logger().Info("fbdev: dispdbg getbl", "level", level)
-	return level
+	p.dispdbgRestoreLevel = level
+	logger().Info("fbdev: captured backlight level", "level", level)
 }
+
+// setPanelBacklight writes a brightness level through the Allwinner dispdbg
+// interface; no-op when the node is absent.
+func (p *fbdevPlatform) setPanelBacklight(level int) {
+	base := "/sys/kernel/debug/dispdbg"
+	if _, err := os.Stat(base + "/command"); err != nil {
+		return
+	}
+	if level <= 0 {
+		level = 0
+	}
+	for _, w := range [][2]string{
+		{base + "/name", "lcd0"},
+		{base + "/param", strconv.Itoa(level)},
+		{base + "/command", "setbl"},
+		{base + "/start", "1"},
+	} {
+		if err := os.WriteFile(w[0], []byte(w[1]), 0o644); err != nil {
+			logger().Warn("fbdev: dispdbg setbl write failed", "file", w[0], "err", err.Error())
+			return
+		}
+	}
+}
+
+// setFbBlank blanks or unblanks the framebuffer layer.
+func (p *fbdevPlatform) setFbBlank(blank bool) {
+	value := byte(0)
+	if blank {
+		value = 4
+	}
+	if err := os.WriteFile("/sys/class/graphics/fb0/blank", []byte(fmt.Sprintf("%d", value)), 0o644); err != nil {
+		logger().Warn("fbdev: fb blank write failed", "err", err.Error())
+	}
+}
+
 
 func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {	typ := EventKeyUp
 	if down {

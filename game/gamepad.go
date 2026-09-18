@@ -8,6 +8,7 @@ import (
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
+	gameui "github.com/kivutar/goro/ui"
 	"github.com/kivutar/goro/world"
 )
 
@@ -28,6 +29,45 @@ const (
 	gamepadWalkScreenLead = 160.0
 )
 
+// ensureHeldMenu lazily builds the MENU-tap overlay with its item actions.
+func (m *WorldMode) ensureHeldMenu() {
+	if m.ui.heldMenu != nil {
+		return
+	}
+	m.ui.heldMenu = gameui.NewHandheldMenu([]string{
+		"Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
+	}, func(ctx client.Context, index int) {
+		switch index {
+		case 0:
+			m.ui.inventoryBag.Toggle(ctx)
+		case 1:
+			m.ui.equipmentWindow.Toggle(ctx)
+		case 2:
+			m.ui.skillWindow.Toggle(ctx)
+		case 3:
+			m.ui.statsWindow.Toggle(ctx)
+		case 4:
+			m.ui.questWindow.Toggle(ctx)
+		case 5:
+			if err := m.ui.worldMap.Toggle(ctx); err != nil {
+				m.ui.console.AddErrorMessage("%s", err.Error())
+			}
+		case 6:
+			m.ui.console.OpenForTyping(ctx)
+		case 7:
+			if path, err := ctx.RequestScreenshot(); err == nil {
+				m.ui.console.AddSystemMessage("Screenshot: %s", path)
+			} else {
+				m.ui.console.AddErrorMessage("screenshot failed: %s", err.Error())
+			}
+		case 8:
+			if ctx.RequestQuit != nil {
+				ctx.RequestQuit()
+			}
+		}
+	})
+}
+
 // updateGamepadControls runs the handheld input layer each world frame. It
 // returns true when the A press was consumed as a gamepad action, so the
 // same-frame mouse click (the platform emits both) must not also walk.
@@ -35,18 +75,32 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	if ctx.Input == nil || ctx.World == nil {
 		return false
 	}
+	// The MENU-tap overlay owns every button while open: d-pad moves its
+	// selection (its own Update), A activates, MENU closes, walking is
+	// suspended.
+	if m.ui.heldMenu.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			m.ui.heldMenu.Activate(ctx)
+		} else if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) {
+			m.ui.heldMenu.Close(ctx)
+		}
+		return true
+	}
 	if m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx) {
 		return false
+	}
+	// While an NPC dialog is open, A acts as its confirm button — even
+	// though the dialog blocks the pointer (it is a modal).
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+		if m.ui.npcDialog.IsOpen() {
+			m.ui.npcDialog.Confirm(ctx)
+			return true
+		}
 	}
 	if m.pendingSkill.skill.ID != 0 || m.pendingPetCapture.active {
 		return false
 	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) && !pointerBlocked {
-		// While an NPC dialog is open, A acts as its confirm button.
-		if m.ui.npcDialog.IsOpen() {
-			m.ui.npcDialog.Confirm(ctx)
-			return true
-		}
 		if m.gamepadPrimaryAction(ctx, now) {
 			return true
 		}

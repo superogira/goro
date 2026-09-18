@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
@@ -168,6 +169,7 @@ type worldUI struct {
 	poptips              gameui.Poptips
 	console              gameui.ChatConsole
 	npcDialog            gameui.NPCDialog
+	heldMenu             *gameui.HandheldMenu
 	npcCutin             gameui.NPCCutinOverlay
 	escapeMenu           gameui.EscapeMenu
 	teleportModal        gameui.TeleportModal
@@ -1219,6 +1221,18 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	}
 	m.updateCompanionAI(ctx, now)
 	m.updateBot(ctx, now)
+
+	// MENU tap: toggle the handheld menu overlay. While open it owns every
+	// button (d-pad selection, A activates) and world input pauses.
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) {
+		m.ensureHeldMenu()
+		m.ui.heldMenu.Toggle(ctx)
+	}
+	if m.ui.heldMenu.IsOpen() {
+		m.updateGamepadControls(ctx, pointerBlocked, now)
+		m.ui.heldMenu.Update(ctx)
+		return nil, nil
+	}
 
 	// Handheld layer: d-pad walk + A-button context action. When A acts as
 	// a gamepad action, the companion mouse click it also produced must not

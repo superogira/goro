@@ -218,9 +218,12 @@ type fbdevPlatform struct {
 	// quit watcher closes the window once a quit combo stays held long
 	// enough (MENU / SELECT / SELECT+START / L1+R1 — several paths so a
 	// mis-mapped MENU button can never trap the user inside the app).
-	held             map[uint16]time.Time
-	seenCodes        map[uint16]bool
-	keyTraces        map[string]int
+	held      map[uint16]time.Time
+	seenCodes map[uint16]bool
+	keyTraces map[string]int
+	// lastKeyPress debounces same-key press pairs (firmware key repeat is
+	// full 1/0 cycles, not value=2).
+	lastKeyPress map[uint16]time.Time
 	// The firmware emits a SELECT (0x162) press right after every MENU
 	// (0x138) release. Swallow that echo so a MENU tap does not also open
 	// the in-game escape menu.
@@ -233,7 +236,7 @@ type fbdevPlatform struct {
 	buttons             gpucontext.Buttons
 	axes                map[uint16]int32
 	hatX, hatY          int
-	shift, ctrl, alt  bool
+	shift, ctrl, alt    bool
 }
 
 func newFBDevPlatform() PlatformManager {
@@ -836,6 +839,7 @@ func (p *fbdevPlatform) traceKeyEvent(f *os.File) int {
 	defer p.inputMu.Unlock()
 	if p.keyTraces == nil {
 		p.keyTraces = make(map[string]int)
+		p.lastKeyPress = make(map[uint16]time.Time)
 	}
 	p.keyTraces[name]++
 	return p.keyTraces[name]
@@ -951,6 +955,20 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		}
 		p.inputMu.Unlock()
 	}
+	// This firmware's held keys repeat as full press/release pairs (~5/s),
+	// not value=2 autorepeat — the volume keys machine-gunned and menus
+	// skipped. Floor the interval between presses of the same key.
+	if down {
+		p.inputMu.Lock()
+		last, repeated := p.lastKeyPress[code]
+		p.inputMu.Unlock()
+		if repeated && time.Since(last) < 180*time.Millisecond {
+			return
+		}
+		p.inputMu.Lock()
+		p.lastKeyPress[code] = time.Now()
+		p.inputMu.Unlock()
+	}
 	switch code {
 	case btnLeft: // real mouse left button
 		button = gpucontext.ButtonsLeft
@@ -1000,6 +1018,17 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			p.inputMu.Lock()
 			p.suppressSel0Until = time.Now().Add(250 * time.Millisecond)
 			p.inputMu.Unlock()
+			// MENU tap while START is held is also the screenshot combo
+			// (press order shouldn't matter).
+			if p.isHeld(btnStart) {
+				logger().Info("fbdev: start+menu — screenshot")
+				p.dispatchKey(gpucontext.KeyPrintScreen, true)
+				go func() {
+					time.Sleep(120 * time.Millisecond)
+					p.dispatchKey(gpucontext.KeyPrintScreen, false)
+				}()
+				return
+			}
 			if menuHeld && time.Since(t0) < 1500*time.Millisecond {
 				logger().Info("fbdev: menu tap — handheld menu key")
 				p.dispatchKey(gpucontext.KeyF15, true)
@@ -1041,6 +1070,7 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// START is Enter, except while MENU is held — that combo captures
 		// the screen instead.
 		if down && p.isHeld(btnMenu) {
+			logger().Info("fbdev: menu+start — screenshot")
 			p.dispatchKey(gpucontext.KeyPrintScreen, true)
 			go func() {
 				time.Sleep(120 * time.Millisecond)
@@ -1131,19 +1161,21 @@ func (p *fbdevPlatform) mods() gpucontext.Modifiers {
 func (p *fbdevPlatform) advancePowerCycle() {
 	next := (p.powerState + 1) % 3
 	switch next {
-	case 1: // dim
+	case 1: // dim: backlight at its floor (barely visible), audio muted —
+		// the image keeps rendering; a "music screen-off" rest state.
 		if p.powerState == 0 {
 			p.captureBacklightLevel()
 		}
-		p.setPanelBacklight(0)
+		p.setPanelBacklight(10)
 		p.dispatchKey(gpucontext.KeyF14, true)
 		go func() {
 			time.Sleep(120 * time.Millisecond)
 			p.dispatchKey(gpucontext.KeyF14, false)
 		}()
-	case 2: // off
+	case 2: // off: backlight fully cut and the fb layer blanked — dark.
+		p.setPanelBacklight(0)
 		p.setFbBlank(true)
-	case 0: // on
+	case 0: // on: unblank and restore the captured backlight level, unmute.
 		p.setFbBlank(false)
 		p.setPanelBacklight(p.dispdbgRestoreLevel)
 		p.dispatchKey(gpucontext.KeyF16, true)
@@ -1254,8 +1286,8 @@ func (p *fbdevPlatform) setFbBlank(blank bool) {
 	}
 }
 
-
-func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {	typ := EventKeyUp
+func (p *fbdevPlatform) dispatchKey(key gpucontext.Key, down bool) {
+	typ := EventKeyUp
 	if down {
 		typ = EventKeyDown
 	}

@@ -8,8 +8,9 @@ import (
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
-	gameui "github.com/kivutar/goro/ui"
+	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/world"
+	"image/color"
 )
 
 // Handheld controls (rg35xx and friends): the d-pad walks the character
@@ -19,8 +20,11 @@ import (
 // click, so mouse-driven platforms are untouched.
 
 const (
-	// gamepadActionRange bounds the A-button attack/pickup search in tiles.
-	gamepadActionRange = 9.0
+	// gamepadActionRange bounds the A-button attack/pickup search in tiles;
+	// NPC talk is capped tighter (walking up to an NPC 9 tiles away just to
+	// have the request drop server-side feels broken).
+	gamepadActionRange  = 9.0
+	gamepadNPCTalkRange = 5.0
 	// gamepadWalkScreenLead is how far ahead of the player's screen
 	// position a d-pad walk aims, in pixels. The world target comes from
 	// projecting that point back through the camera, so the walk direction
@@ -29,43 +33,121 @@ const (
 	gamepadWalkScreenLead = 80.0
 )
 
-// ensureHeldMenu lazily builds the MENU-tap overlay with its item actions.
-func (m *WorldMode) ensureHeldMenu() {
-	if m.ui.heldMenu != nil {
+// ensureHeldMenu lazily builds the handheld menu item actions.
+func (m *WorldMode) heldMenuActivate(ctx client.Context) {
+	glog.Infof("handheld menu activate item=%d %q", m.heldMenuSel, heldMenuItems[m.heldMenuSel])
+	switch m.heldMenuSel {
+	case 0:
+		m.ui.inventoryBag.Toggle(ctx)
+	case 1:
+		m.ui.equipmentWindow.Toggle(ctx)
+	case 2:
+		m.ui.skillWindow.Toggle(ctx)
+	case 3:
+		m.ui.statsWindow.Toggle(ctx)
+	case 4:
+		m.ui.questWindow.Toggle(ctx)
+	case 5:
+		if err := m.ui.worldMap.Toggle(ctx); err != nil {
+			m.ui.console.AddErrorMessage("%s", err.Error())
+		}
+	case 6:
+		m.ui.console.OpenForTyping(ctx)
+	case 7:
+		if path, err := ctx.RequestScreenshot(); err == nil {
+			m.ui.console.AddSystemMessage("Screenshot: %s", path)
+		} else {
+			m.ui.console.AddErrorMessage("screenshot failed: %s", err.Error())
+		}
+	case 8:
+		if ctx.RequestQuit != nil {
+			ctx.RequestQuit()
+		}
+	}
+}
+
+var heldMenuItems = []string{
+	"Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
+}
+
+// updateHeldMenuInput drives the direct-drawn MENU overlay: d-pad moves the
+// selection (debounced — the polled d-pad bounces), A or START activates,
+// MENU or SELECT closes.
+func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) || ctx.Input.JustPressed(input.KeyEscape) {
+		m.heldMenuOpen = false
 		return
 	}
-	m.ui.heldMenu = gameui.NewHandheldMenu([]string{
-		"Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
-	}, func(ctx client.Context, index int) {
-		switch index {
-		case 0:
-			m.ui.inventoryBag.Toggle(ctx)
-		case 1:
-			m.ui.equipmentWindow.Toggle(ctx)
-		case 2:
-			m.ui.skillWindow.Toggle(ctx)
-		case 3:
-			m.ui.statsWindow.Toggle(ctx)
-		case 4:
-			m.ui.questWindow.Toggle(ctx)
-		case 5:
-			if err := m.ui.worldMap.Toggle(ctx); err != nil {
-				m.ui.console.AddErrorMessage("%s", err.Error())
-			}
-		case 6:
-			m.ui.console.OpenForTyping(ctx)
-		case 7:
-			if path, err := ctx.RequestScreenshot(); err == nil {
-				m.ui.console.AddSystemMessage("Screenshot: %s", path)
-			} else {
-				m.ui.console.AddErrorMessage("screenshot failed: %s", err.Error())
-			}
-		case 8:
-			if ctx.RequestQuit != nil {
-				ctx.RequestQuit()
-			}
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) || ctx.Input.JustPressed(input.KeyEnter) {
+		m.heldMenuOpen = false
+		m.heldMenuActivate(ctx)
+		return
+	}
+	dx, dy := 0, 0
+	if ctx.Input.JustPressed(input.KeyArrowUp) {
+		dy--
+	}
+	if ctx.Input.JustPressed(input.KeyArrowDown) {
+		dy++
+	}
+	if ctx.Input.JustPressed(input.KeyArrowLeft) {
+		dx--
+	}
+	if ctx.Input.JustPressed(input.KeyArrowRight) {
+		dx++
+	}
+	if dx == 0 && dy == 0 {
+		return
+	}
+	if now.Sub(m.heldMenuMovedAt) < 180*time.Millisecond {
+		return
+	}
+	m.heldMenuMovedAt = now
+	step := dy
+	if step == 0 {
+		step = dx
+	}
+	m.heldMenuSel += step
+	if m.heldMenuSel < 0 {
+		m.heldMenuSel = 0
+	}
+	if m.heldMenuSel >= len(heldMenuItems) {
+		m.heldMenuSel = len(heldMenuItems) - 1
+	}
+}
+
+// drawHeldMenu renders the overlay with plain rects and outlined text —
+// the same direct-draw path as tooltips and damage labels, which renders
+// on the device (an earlier widget-window version never appeared).
+func (m *WorldMode) drawHeldMenu(screen *render.Frame) {
+	if !m.heldMenuOpen || screen == nil {
+		return
+	}
+	const itemH = 18.0
+	const pad = 10.0
+	const menuW = 190.0
+	titleH := 22.0
+	menuH := titleH + pad + float64(len(heldMenuItems))*itemH + pad
+	bounds := screen.Bounds()
+	x := (float64(bounds.Dx()) - menuW) / 2
+	y := (float64(bounds.Dy()) - menuH) / 2
+
+	// Panel and title bar.
+	render.DrawUIRect(screen, x, y, menuW, menuH, color.RGBA{R: 24, G: 20, B: 34, A: 235})
+	render.DrawUIRect(screen, x, y, menuW, titleH, color.RGBA{R: 60, G: 48, B: 84, A: 245})
+	render.DrawUIRect(screen, x, y+titleH-2, menuW, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
+	render.DrawUIOutlinedTextAt(screen, "MENU", x+pad, y+4, color.RGBA{R: 250, G: 240, B: 210, A: 255}, color.RGBA{A: 200})
+
+	// Items; the selection inverts its row.
+	for i, label := range heldMenuItems {
+		rowY := y + titleH + pad + float64(i)*itemH
+		if i == m.heldMenuSel {
+			render.DrawUIRect(screen, x+4, rowY-1, menuW-8, itemH, color.RGBA{R: 214, G: 178, B: 92, A: 235})
+			render.DrawUIOutlinedTextAt(screen, label, x+pad, rowY+2, color.RGBA{R: 30, G: 22, B: 12, A: 255}, color.RGBA{A: 0})
+			continue
 		}
-	})
+		render.DrawUIOutlinedTextAt(screen, label, x+pad, rowY+2, color.RGBA{R: 235, G: 232, B: 240, A: 255}, color.RGBA{A: 200})
+	}
 }
 
 // updateGamepadControls runs the handheld input layer each world frame. It
@@ -82,15 +164,9 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		m.ui.npcDialog.Confirm(ctx)
 		return true
 	}
-	// The MENU-tap overlay owns every button while open: d-pad moves its
-	// selection (its own Update), A activates, MENU closes, walking is
-	// suspended.
-	if m.ui.heldMenu.IsOpen() {
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
-			m.ui.heldMenu.Activate(ctx)
-		} else if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) {
-			m.ui.heldMenu.Close(ctx)
-		}
+	// The direct-drawn MENU overlay owns every button while open.
+	if m.heldMenuOpen {
+		m.updateHeldMenuInput(ctx, now)
 		return true
 	}
 	if m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx) {
@@ -173,7 +249,7 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 			bestTalkActor = actor
 		}
 	}
-	if bestTalkDistance <= gamepadActionRange {
+	if bestTalkDistance <= gamepadNPCTalkRange {
 		glog.Infof("gamepad a npc talk target id=%d name=%q distance=%.1f player=%d,%d", bestTalkActor.ID, bestTalkActor.Name, bestTalkDistance, playerX, playerY)
 		m.requestNPCTalk(ctx, bestTalkActor, "gamepad a")
 		return true

@@ -28,10 +28,13 @@ type WorldMode struct {
 	mail               mailState
 	walkCooldownUntil  time.Time
 	nextHeldWalkAt     time.Time
-	gamepadDirLogged  bool
-	gamepadCameraAt   time.Time
-	mapLoad           *mapLoadState
-	mapLoadRSWSource  string
+	gamepadDirLogged   bool
+	gamepadCameraAt    time.Time
+	heldMenuOpen       bool
+	heldMenuSel        int
+	heldMenuMovedAt    time.Time
+	mapLoad            *mapLoadState
+	mapLoadRSWSource   string
 	camera             followCamera
 	cameraShakeStart   time.Time
 	cameraShakeEnd     time.Time
@@ -170,7 +173,6 @@ type worldUI struct {
 	poptips              gameui.Poptips
 	console              gameui.ChatConsole
 	npcDialog            gameui.NPCDialog
-	heldMenu             *gameui.HandheldMenu
 	npcCutin             gameui.NPCCutinOverlay
 	escapeMenu           gameui.EscapeMenu
 	teleportModal        gameui.TeleportModal
@@ -1226,12 +1228,14 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// MENU tap: toggle the handheld menu overlay. While open it owns every
 	// button (d-pad selection, A activates) and world input pauses.
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) {
-		m.ensureHeldMenu()
-		m.ui.heldMenu.Toggle(ctx)
+		m.heldMenuOpen = !m.heldMenuOpen
+		if m.heldMenuOpen && m.heldMenuSel < 0 {
+			m.heldMenuSel = 0
+		}
+		glog.Infof("handheld menu toggled open=%t", m.heldMenuOpen)
 	}
-	if m.ui.heldMenu.IsOpen() {
+	if m.heldMenuOpen {
 		m.updateGamepadControls(ctx, pointerBlocked, now)
-		m.ui.heldMenu.Update(ctx)
 		return nil, nil
 	}
 
@@ -1731,6 +1735,7 @@ func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
 	m.drawMapFade(ctx, screen, now)
+	m.drawHeldMenu(screen)
 	if !ctx.Config.Render.NoUI && !hudHidden(ctx) {
 		// Small-screen mode hides the pointer sprite: nothing moves it (no
 		// mouse on the device) and it would sit frozen in the corner.

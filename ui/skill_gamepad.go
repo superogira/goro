@@ -166,6 +166,23 @@ func (w *SkillWindow) GamepadInfo(ctx Context) {
 	w.detail.openSkill(ctx, skill, icon, w.x+width+8, w.y)
 }
 
+// GamepadToggleMode flips between the table and tree views — the handheld
+// equivalent of the window's minus title button.
+func (w *SkillWindow) GamepadToggleMode(ctx Context) {
+	if !w.IsOpen() {
+		return
+	}
+	w.resetGamepadSelection()
+	w.toggleGridMode(ctx, w.assets, w.actions)
+}
+
+// GamepadScrollDetail scrolls the open skill detail window's text (dir < 0
+// up, dir > 0 down). It reports whether the text actually scrolled, so the
+// d-pad can fall through to skill navigation at the scroll edges.
+func (w *SkillWindow) GamepadScrollDetail(dir int) bool {
+	return w.detail.GamepadScroll(dir)
+}
+
 // CloseTopDetail closes the skill detail window; it reports whether one was
 // open, so the handheld B stack can close it before the skill window itself.
 func (w *SkillWindow) CloseTopDetail(ctx Context) bool {

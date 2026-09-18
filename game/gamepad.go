@@ -389,7 +389,8 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	// The skill tree follows the same handheld scheme: d-pad walks the skill
 	// cells (table rows in list mode) and then the footer's Reset/Confirm
 	// buttons, A stages a level-up (or presses the footer button), Y opens
-	// the skill detail window, L1/R1 cycle the class tabs.
+	// the skill detail window, L1/R1 cycle the class tabs, X flips between
+	// the table and tree views.
 	if m.ui.skillWindow.IsOpen() {
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
 			m.ui.skillWindow.GamepadTab(ctx, -1)
@@ -397,6 +398,13 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
 			m.ui.skillWindow.GamepadTab(ctx, 1)
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.skillWindow.GamepadToggleMode(ctx)
+			}
 			return true
 		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
@@ -430,7 +438,14 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		if dx != 0 || dy != 0 {
 			if now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
 				m.invSelMovedAt = now
-				m.ui.skillWindow.GamepadNavigate(ctx, dx, dy)
+				// An open detail window with overflowing text takes the
+				// d-pad for scrolling; at the scroll edges (and whenever the
+				// text fits) the press falls through to the skill navigation.
+				if dy != 0 && m.ui.skillWindow.GamepadScrollDetail(dy) {
+					m.invSelMovedAt = now
+				} else {
+					m.ui.skillWindow.GamepadNavigate(ctx, dx, dy)
+				}
 			}
 			return true
 		}

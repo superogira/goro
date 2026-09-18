@@ -146,3 +146,63 @@ func TestSkillGamepadNavigateGridWalksTreePositions(t *testing.T) {
 		t.Fatalf("down should land on a cell or the footer, got position %d", window.gamepadPosition)
 	}
 }
+
+func TestSkillGamepadToggleModeFlipsView(t *testing.T) {
+	s := skillGamepadTestSession()
+	window := &SkillWindow{}
+	window.Toggle(Context{Session: s, ScreenW: 1280, ScreenH: 720})
+	ctx := Context{Session: s, ScreenW: 1280, ScreenH: 720}
+	if window.gridMode {
+		t.Fatal("window should open in table mode")
+	}
+	window.GamepadNavigate(ctx, 0, 1)
+	window.GamepadToggleMode(ctx)
+	if !window.gridMode {
+		t.Fatal("toggle should switch to the tree view")
+	}
+	if window.gamepadRow != -1 || window.gamepadPosition != -1 {
+		t.Fatal("mode toggle should reset the gamepad selection")
+	}
+	window.GamepadToggleMode(ctx)
+	if window.gridMode {
+		t.Fatal("second toggle should return to the table view")
+	}
+}
+
+func TestSkillDetailScrollsOnlyWhenTextOverflows(t *testing.T) {
+	detail := &SkillDetailWindow{}
+	// Fits: no scrolling, GamepadScroll reports false.
+	detail.openSkill(Context{ScreenW: 1280, ScreenH: 720}, session.Skill{ID: db.SkillSMBash}, nil, 10, 10)
+	if detail.maxScroll > 0 {
+		t.Fatalf("short detail should not scroll, maxScroll = %v", detail.maxScroll)
+	}
+	if detail.GamepadScroll(1) {
+		t.Fatal("scroll on non-overflowing detail should report false")
+	}
+
+	// Long text: scrolls down, stops reporting at the bottom edge.
+	lines := make([]string, 80)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	detail.lines = lines
+	detail.layout()
+	if detail.maxScroll <= 0 {
+		t.Fatal("long detail should be scrollable")
+	}
+	if !detail.GamepadScroll(1) {
+		t.Fatal("first down should scroll")
+	}
+	for i := 0; i < 100; i++ {
+		detail.GamepadScroll(1)
+	}
+	if detail.scrollY.Get() != detail.maxScroll {
+		t.Fatalf("scroll should clamp at the bottom: %v / %v", detail.scrollY.Get(), detail.maxScroll)
+	}
+	if detail.GamepadScroll(1) {
+		t.Fatal("scroll at the bottom edge should report false so the d-pad falls through")
+	}
+	if !detail.GamepadScroll(-1) {
+		t.Fatal("up from the bottom should scroll")
+	}
+}

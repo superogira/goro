@@ -1075,16 +1075,27 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		button = gpucontext.ButtonsRight
 	case btnMiddle: // real mouse middle button
 		button = gpucontext.ButtonsMiddle
-	case btnY, btnNorth:
-		// Y button (and X as an alias — which of 0x132/0x133 carries the
-		// "Y" label on this hardware is not fully pinned down, so both fire
-		// the action): a KeyF19 edge the game layer turns into "open the
-		// description of the selected thing" (inventory item, card slot).
+	case btnY:
+		// Y button (0x132 — confirmed by the 23:10 field log: the user's
+		// repeated "Y" presses all carried this code): a KeyF19 edge the
+		// game layer turns into "open the description of the selected
+		// inventory item". X (0x133) fires KeyF22 instead — the selected
+		// card slot inside an open description.
 		if down {
 			p.dispatchKey(gpucontext.KeyF19, true)
 			go func() {
 				time.Sleep(120 * time.Millisecond)
 				p.dispatchKey(gpucontext.KeyF19, false)
+			}()
+			return
+		}
+	case btnNorth:
+		// X button: KeyF22 — "inspect the selected card slot".
+		if down {
+			p.dispatchKey(gpucontext.KeyF22, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF22, false)
 			}()
 			return
 		}

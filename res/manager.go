@@ -460,3 +460,21 @@ var clientInfoCandidates = []string{
 	"System/clientinfo.xml",
 	"System/sclientinfo.xml",
 }
+
+// NamesWithPrefix lists resource names across all archives under a folder
+// prefix (lowercase, '/'-separated, e.g. "data/sprite/npc/"), deduplicated
+// and sorted. Loose-file trees are not scanned — archive entries only.
+func (m *Manager) NamesWithPrefix(prefix string) []string {
+	seen := make(map[string]struct{})
+	var names []string
+	for _, archive := range m.Archives {
+		for _, name := range archive.NamesWithPrefix(prefix) {
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	return names
+}

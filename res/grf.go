@@ -118,6 +118,20 @@ func (g *GRF) NamesWithSuffix(suffix string) []string {
 	return names
 }
 
+// NamesWithPrefix returns the sorted entry names under a folder prefix
+// (normalized: lowercase, '/'-separated — pass e.g. "data/sprite/npc/").
+func (g *GRF) NamesWithPrefix(prefix string) []string {
+	prefix = normalizeGRFName(prefix)
+	var names []string
+	for key, entry := range g.entries {
+		if strings.HasPrefix(key, prefix) {
+			names = append(names, entry.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func grfPathSuffixMatch(name, suffix string) bool {
 	if suffix == "" {
 		return false

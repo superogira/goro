@@ -3,7 +3,6 @@ package game
 import (
 	"image"
 	"image/color"
-	"math"
 
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -19,10 +18,10 @@ type retainedWorldMesh struct {
 }
 
 type gndRetainedMeshCache struct {
-	gnd           *res.GND
-	rsw           *res.RSW
-	lightmapAtlas gndLightmapAtlas
-	chunks        map[gndRetainedChunkKey][]retainedWorldMesh
+	gnd            *res.GND
+	rsw            *res.RSW
+	groundLightmap gndGroundLightmap
+	chunks         map[gndRetainedChunkKey][]retainedWorldMesh
 }
 
 type gndRetainedChunkKey struct {
@@ -89,7 +88,7 @@ func (m *WorldMode) drawGNDMeshes(screen *render.Frame, manager *res.Manager, gn
 	}
 	cache := m.gndMeshCache
 	if cache == nil || cache.gnd != gnd || cache.rsw != rsw {
-		cache = &gndRetainedMeshCache{gnd: gnd, rsw: rsw, lightmapAtlas: buildGNDLightmapAtlas(gnd), chunks: make(map[gndRetainedChunkKey][]retainedWorldMesh)}
+		cache = &gndRetainedMeshCache{gnd: gnd, rsw: rsw, groundLightmap: buildGNDGroundLightmap(gnd), chunks: make(map[gndRetainedChunkKey][]retainedWorldMesh)}
 		m.gndMeshCache = cache
 	}
 	width := screen.Bounds().Dx()
@@ -111,7 +110,7 @@ func (m *WorldMode) drawGNDMeshes(screen *render.Frame, manager *res.Manager, gn
 				y0 := chunkY * gndRetainedChunkSize
 				x1 := minInt(gnd.Width-1, x0+gndRetainedChunkSize-1)
 				y1 := minInt(gnd.Height-1, y0+gndRetainedChunkSize-1)
-				meshes = m.buildGNDMeshChunk(manager, gnd, rsw, cache.lightmapAtlas, x0, x1, y0, y1)
+				meshes = m.buildGNDMeshChunk(manager, gnd, rsw, cache.groundLightmap, x0, x1, y0, y1)
 				cache.chunks[key] = meshes
 			}
 			for _, mesh := range meshes {
@@ -121,7 +120,7 @@ func (m *WorldMode) drawGNDMeshes(screen *render.Frame, manager *res.Manager, gn
 	}
 }
 
-func (m *WorldMode) buildGNDMeshChunk(manager *res.Manager, gnd *res.GND, rsw *res.RSW, lightmapAtlas gndLightmapAtlas, startX, endX, startY, endY int) []retainedWorldMesh {
+func (m *WorldMode) buildGNDMeshChunk(manager *res.Manager, gnd *res.GND, rsw *res.RSW, groundLightmap gndGroundLightmap, startX, endX, startY, endY int) []retainedWorldMesh {
 	if gnd == nil {
 		return nil
 	}
@@ -177,8 +176,8 @@ func (m *WorldMode) buildGNDMeshChunk(manager *res.Manager, gnd *res.GND, rsw *r
 			coloredSurfaceVertex3D(verts[3], 0, 1, tints[3]),
 		}, indices)
 	}
-	addLightmapped := func(texture *render.Image, verts [4]modelPoint3, uvs [4]texturePoint, baseTints [4]color.RGBA, lightmapID int, lightmap res.GNDLightmap, lightScales [4]modelPoint3) {
-		if texture == nil || lightmapAtlas.image == nil {
+	addLightmapped := func(texture *render.Image, verts [4]modelPoint3, uvs [4]texturePoint, baseTints [4]color.RGBA, lightUVs [4]texturePoint, lightScales [4]modelPoint3) {
+		if texture == nil || groundLightmap.image == nil {
 			addTextured(texture, verts, uvs, quadIndices012023, scaleSurfaceVertexTints(baseTints, lightScales), groundTextureDrawOptions())
 			return
 		}
@@ -186,11 +185,10 @@ func (m *WorldMode) buildGNDMeshChunk(manager *res.Manager, gnd *res.GND, rsw *r
 		textureWidth := float32(textureBounds.Dx())
 		textureHeight := float32(textureBounds.Dy())
 		options := groundTextureDrawOptions()
-		builder := builderFor(texture, lightmapAtlas.image, options)
+		builder := builderFor(texture, groundLightmap.image, options)
 		if builder == nil {
 			return
 		}
-		lightUVs := lightmapAtlas.uvs(lightmapID)
 		var vertices [4]render.Vertex3D
 		for i := range vertices {
 			base := baseTints[i]
@@ -225,8 +223,8 @@ func (m *WorldMode) buildGNDMeshChunk(manager *res.Manager, gnd *res.GND, rsw *r
 					baseTints := topGNDSurfaceBaseTints(gnd, x, y, surface.Color)
 					normals := gndTopNormalsAt(topNormals, gnd, x, y)
 					if texture := m.groundTexture(manager, gndTextureName(gnd, surface.TextureID)); texture != nil {
-						if lightmap, ok := gnd.Lightmap(surface.LightmapID); ok {
-							addLightmapped(texture, verts, uvs, baseTints, surface.LightmapID, lightmap, vertexLightScales(lighting, normals))
+						if _, ok := gnd.Lightmap(surface.LightmapID); ok {
+							addLightmapped(texture, verts, uvs, baseTints, groundLightmapTileUVs(x, y), vertexLightScales(lighting, normals))
 						} else {
 							addTextured(texture, verts, uvs, quadIndices012023, surfaceVertexTints(baseTints, cell.Heights, normals, lighting), groundTextureDrawOptions())
 						}
@@ -277,67 +275,172 @@ func (m *WorldMode) buildGNDMeshChunk(manager *res.Manager, gnd *res.GND, rsw *r
 	return meshes
 }
 
-type gndLightmapAtlas struct {
-	image  *render.Image
-	perRow int
+// gndLightmapTexelsPerTile is the resolution of the world-aligned lightmap
+// texture per GND tile. Source lightmaps are 8x8 per tile; 4x4 keeps the
+// full-map texture small while still capturing the shadow gradients, and the
+// 2x2 block average absorbs the dithered intermediate texels.
+const gndLightmapTexelsPerTile = 4
+
+// gndLightmapBlurRadius softens the per-tile shadow masks. The baked GND
+// shadows jump straight between lit and shadowed values, so without a blur
+// they render as angular blobs whose edges follow the tile grid.
+const gndLightmapBlurRadius = 2
+
+type gndGroundLightmap struct {
+	image *render.Image
 }
 
-func buildGNDLightmapAtlas(gnd *res.GND) gndLightmapAtlas {
-	if gnd == nil || len(gnd.Lightmaps) == 0 {
-		return gndLightmapAtlas{}
+func buildGNDGroundLightmap(gnd *res.GND) gndGroundLightmap {
+	if gnd == nil || gnd.Width <= 0 || gnd.Height <= 0 || len(gnd.Lightmaps) == 0 {
+		return gndGroundLightmap{}
 	}
-	count := len(gnd.Lightmaps)
-	perRow := int(math.Round(math.Sqrt(float64(count))))
-	if perRow < 1 {
-		perRow = 1
-	}
-	rows := (count + perRow - 1) / perRow
-	width := nextPowerOfTwoInt(perRow * 8)
-	height := nextPowerOfTwoInt(rows * 8)
+	width := gnd.Width * gndLightmapTexelsPerTile
+	height := gnd.Height * gndLightmapTexelsPerTile
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	for index, lightmap := range gnd.Lightmaps {
-		baseX := (index % perRow) * 8
-		baseY := (index / perRow) * 8
-		for y := 0; y < 8; y++ {
-			for x := 0; x < 8; x++ {
-				pixel := img.PixOffset(baseX+x, baseY+y)
-				lm := posterizeGNDLightmapColor(lightmap.Color[y][x])
-				img.Pix[pixel+0] = lm.R
-				img.Pix[pixel+1] = lm.G
-				img.Pix[pixel+2] = lm.B
-				img.Pix[pixel+3] = lightmap.Alpha[y][x]
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	for y := 0; y < gnd.Height; y++ {
+		for x := 0; x < gnd.Width; x++ {
+			cell, ok := gnd.Cell(x, y)
+			if !ok || cell.Top < 0 {
+				continue
+			}
+			surface, ok := gnd.Surface(cell.Top)
+			if !ok {
+				continue
+			}
+			lightmap, ok := gnd.Lightmap(surface.LightmapID)
+			if !ok {
+				continue
+			}
+			for ty := 0; ty < gndLightmapTexelsPerTile; ty++ {
+				for tx := 0; tx < gndLightmapTexelsPerTile; tx++ {
+					r, g, b, a := downsampleGNDLightmapTexel(lightmap, tx, ty)
+					pixel := img.PixOffset(x*gndLightmapTexelsPerTile+tx, y*gndLightmapTexelsPerTile+ty)
+					img.Pix[pixel+0] = r
+					img.Pix[pixel+1] = g
+					img.Pix[pixel+2] = b
+					img.Pix[pixel+3] = a
+				}
 			}
 		}
 	}
-	return gndLightmapAtlas{
-		image:  render.NewImageFromImage(img),
-		perRow: perRow,
+	blurGNDLightmap(img, gndLightmapBlurRadius)
+	return gndGroundLightmap{image: render.NewImageFromImage(img)}
+}
+
+func downsampleGNDLightmapTexel(lightmap res.GNDLightmap, tx, ty int) (uint8, uint8, uint8, uint8) {
+	step := 8 / gndLightmapTexelsPerTile
+	sumR, sumG, sumB, sumA, count := 0, 0, 0, 0, 0
+	for y := ty * step; y < (ty+1)*step; y++ {
+		for x := tx * step; x < (tx+1)*step; x++ {
+			c := posterizeGNDLightmapColor(lightmap.Color[y][x])
+			sumR += int(c.R)
+			sumG += int(c.G)
+			sumB += int(c.B)
+			sumA += int(lightmap.Alpha[y][x])
+			count++
+		}
+	}
+	return uint8(sumR / count), uint8(sumG / count), uint8(sumB / count), uint8(sumA / count)
+}
+
+// blurGNDLightmap applies two box-blur sweeps (≈ a triangular kernel) over the
+// RGBA texels with edge clamping.
+func blurGNDLightmap(img *image.RGBA, radius int) {
+	if radius <= 0 {
+		return
+	}
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width < 2 || height < 2 {
+		return
+	}
+	temp := image.NewRGBA(bounds)
+	for pass := 0; pass < 2; pass++ {
+		boxBlurRGBAHorizontal(img, temp, radius)
+		boxBlurRGBAVertical(temp, img, radius)
 	}
 }
 
-func (a gndLightmapAtlas) uvs(index int) [4]texturePoint {
-	if a.image == nil || a.perRow <= 0 || index < 0 {
-		return [4]texturePoint{}
+func boxBlurRGBAHorizontal(src, dst *image.RGBA, radius int) {
+	bounds := src.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	window := radius*2 + 1
+	for y := 0; y < height; y++ {
+		row := src.Pix[y*src.Stride:]
+		out := dst.Pix[y*dst.Stride:]
+		sumR, sumG, sumB, sumA := 0, 0, 0, 0
+		for i := -radius; i <= radius; i++ {
+			p := clampInt(i, 0, width-1) * 4
+			sumR += int(row[p])
+			sumG += int(row[p+1])
+			sumB += int(row[p+2])
+			sumA += int(row[p+3])
+		}
+		for x := 0; x < width; x++ {
+			p := x * 4
+			out[p] = uint8(sumR / window)
+			out[p+1] = uint8(sumG / window)
+			out[p+2] = uint8(sumB / window)
+			out[p+3] = uint8(sumA / window)
+			add := clampInt(x+radius+1, 0, width-1) * 4
+			sub := clampInt(x-radius, 0, width-1) * 4
+			sumR += int(row[add]) - int(row[sub])
+			sumG += int(row[add+1]) - int(row[sub+1])
+			sumB += int(row[add+2]) - int(row[sub+2])
+			sumA += int(row[add+3]) - int(row[sub+3])
+		}
 	}
-	baseX := float32((index % a.perRow) * 8)
-	baseY := float32((index / a.perRow) * 8)
+}
+
+func boxBlurRGBAVertical(src, dst *image.RGBA, radius int) {
+	bounds := src.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	window := radius*2 + 1
+	for x := 0; x < width; x++ {
+		sumR, sumG, sumB, sumA := 0, 0, 0, 0
+		for i := -radius; i <= radius; i++ {
+			y := clampInt(i, 0, height-1)
+			p := y*src.Stride + x*4
+			sumR += int(src.Pix[p])
+			sumG += int(src.Pix[p+1])
+			sumB += int(src.Pix[p+2])
+			sumA += int(src.Pix[p+3])
+		}
+		for y := 0; y < height; y++ {
+			p := y*dst.Stride + x*4
+			dst.Pix[p] = uint8(sumR / window)
+			dst.Pix[p+1] = uint8(sumG / window)
+			dst.Pix[p+2] = uint8(sumB / window)
+			dst.Pix[p+3] = uint8(sumA / window)
+			addY := clampInt(y+radius+1, 0, height-1)
+			subY := clampInt(y-radius, 0, height-1)
+			add := addY*src.Stride + x*4
+			sub := subY*src.Stride + x*4
+			sumR += int(src.Pix[add]) - int(src.Pix[sub])
+			sumG += int(src.Pix[add+1]) - int(src.Pix[sub+1])
+			sumB += int(src.Pix[add+2]) - int(src.Pix[sub+2])
+			sumA += int(src.Pix[add+3]) - int(src.Pix[sub+3])
+		}
+	}
+}
+
+// groundLightmapTileUVs maps the four corners of tile (x, y) onto the
+// world-aligned lightmap texture. Tile corners land exactly on texel
+// boundaries so bilinear sampling stays continuous across neighboring tiles.
+func groundLightmapTileUVs(x, y int) [4]texturePoint {
+	x0 := float32(x * gndLightmapTexelsPerTile)
+	y0 := float32(y * gndLightmapTexelsPerTile)
+	x1 := float32((x + 1) * gndLightmapTexelsPerTile)
+	y1 := float32((y + 1) * gndLightmapTexelsPerTile)
 	return [4]texturePoint{
-		{u: baseX + 1, v: baseY + 1},
-		{u: baseX + 7, v: baseY + 1},
-		{u: baseX + 7, v: baseY + 7},
-		{u: baseX + 1, v: baseY + 7},
+		{u: x0, v: y0},
+		{u: x1, v: y0},
+		{u: x1, v: y1},
+		{u: x0, v: y1},
 	}
-}
-
-func nextPowerOfTwoInt(value int) int {
-	if value <= 1 {
-		return 1
-	}
-	out := 1
-	for out < value {
-		out *= 2
-	}
-	return out
 }
 
 func lightmappedSurfaceVertex3D(point modelPoint3, uv texturePoint, lightUV texturePoint, tint color.RGBA, textureWidth, textureHeight float32) render.Vertex3D {

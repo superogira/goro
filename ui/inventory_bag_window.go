@@ -702,11 +702,8 @@ func (w *inventoryGridWidget) Draw(ctx widget.Context, canvas widget.Canvas) {
 		item := w.cfg.items[i]
 		cell := w.cellBounds(i)
 		if w.cfg.selected != nil && i == *w.cfg.selected {
-			// Gamepad cursor: a translucent fill plus an outline, so the
-			// selected cell reads even over the icon and its amount label.
-			fill := rotheme.Default.Colors.InputFocus
-			fill.A = 110
-			canvas.DrawRect(cell, fill)
+			// Gamepad cursor: outline only — a fill read as a black
+			// background behind the icon on the device.
 			canvas.StrokeRect(cell, rotheme.Default.Colors.InputFocus, 1.5)
 		}
 		if i < len(w.cfg.icons) && w.cfg.icons[i] != nil {

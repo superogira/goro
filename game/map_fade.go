@@ -110,6 +110,7 @@ func (m *WorldMode) drawMapFade(ctx client.Context, screen *render.Frame, now ti
 	// image when configured, plus the Now Loading label).
 	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
 		drawLoadingScreen(screen, m.loadingBackground(ctx))
+		drawLoadingShowcase(screen, m.showcase)
 		return
 	}
 	bounds := screen.Bounds()

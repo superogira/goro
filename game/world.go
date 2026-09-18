@@ -162,6 +162,7 @@ type WorldMode struct {
 	pendingTradeName    string
 	mapFade             mapFadeState
 	loadingBG           *render.Image
+	showcase            *loadingShowcase
 	hoveredWalk         hoveredWalkCellCache
 	bot                 *luaBot
 	companionAI         companionAISystem
@@ -1730,8 +1731,10 @@ func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
 func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 	if m.mapLoad.loading() {
 		// Loading cover with progress: the fade system's background image
-		// when configured, plus the step-based progress bar.
+		// when configured, the random NPC/monster showcase, and the
+		// step-based progress bar.
 		drawLoadingScreen(screen, m.loadingBackground(ctx))
+		drawLoadingShowcase(screen, m.showcase)
 		drawMapLoadProgress(screen, m.mapLoad)
 		return
 	}

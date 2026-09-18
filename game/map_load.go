@@ -48,6 +48,7 @@ func (l *mapLoadState) progress() float64 {
 // load runs because Update and Draw take the loading early-out.
 func (m *WorldMode) startMapLoad(ctx client.Context) {
 	load := &mapLoadState{}
+	m.showcase = nil
 
 	character := ctx.Session.SelectedCharacter()
 	visualCharacter := localPlayerVisualCharacter(ctx)
@@ -58,6 +59,13 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 		name string
 		run  func() error
 	}{
+		{"showcase", func() error {
+			// The loading-cover mascot: a random NPC or monster, picked
+			// fresh for every map load. First on purpose — the cover shows
+			// for the whole load, so the sooner it lands the better.
+			m.showcase = loadLoadingShowcase(ctx.Resources)
+			return nil
+		}},
 		{"sprites", func() error {
 			playerStatus := ""
 			if view, status := loadPlayerHumanoidSpriteView(ctx.Resources, visualCharacter, ctx.Session.Sex, localPlayerIsAdmin(ctx)); view != nil {

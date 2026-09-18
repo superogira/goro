@@ -257,79 +257,78 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		}
 		return true
 	}
-	// The inventory owns every handheld button while open: d-pad moves the
-	// cell selection, A activates the item (use/equip, the double-click
-	// path), Y opens its description, L1/R1 cycle the Item/Equip/Etc tabs.
-	// While a description window sits on top, the d-pad and Y drive its card
-	// slots instead; B is handled by the branch above and closes the stack
-	// top-down.
-	if m.ui.inventoryBag.IsOpen() {
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
-			m.ui.inventoryBag.GamepadTab(ctx, -1)
-			return true
-		}
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
-			m.ui.inventoryBag.GamepadTab(ctx, 1)
-			return true
-		}
-		if m.ui.itemWindows.HasOpenDescriptions() {
+		// The inventory owns every handheld button while open: d-pad moves the
+		// cell selection, A activates the item (use/equip, the double-click
+		// path), Y opens its description, L1/R1 cycle the Item/Equip/Etc
+		// tabs. While a description window sits on top, the d-pad drives its
+		// card slots (when it has any) and X opens the selected card; B is
+		// handled by the branch above and closes the stack top-down.
+		if m.ui.inventoryBag.IsOpen() {
+			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+				m.ui.inventoryBag.GamepadTab(ctx, -1)
+				return true
+			}
+			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
+				m.ui.inventoryBag.GamepadTab(ctx, 1)
+				return true
+			}
+			// Y always opens the selected inventory item's description —
+			// pressing it again on another item stacks another window, the
+			// way the upstream client's right-click does.
 			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
+				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+					m.gamepadActionAt = now
+					m.ui.inventoryBag.GamepadInfo(ctx)
+				}
+				return true
+			}
+			// X inspects the card in the selected slot of the top-most
+			// description window.
+			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) && m.ui.itemWindows.HasOpenDescriptions() {
 				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 					m.gamepadActionAt = now
 					m.ui.itemWindows.GamepadOpenSelectedCard(ctx)
 				}
 				return true
 			}
+			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+					m.gamepadActionAt = now
+					m.ui.inventoryBag.GamepadActivate(ctx)
+				}
+				return true
+			}
 			dx := 0
-			if ctx.Input.JustPressed(input.KeyArrowLeft) || ctx.Input.JustPressed(input.KeyArrowUp) {
+			dy := 0
+			if ctx.Input.JustPressed(input.KeyArrowLeft) {
 				dx--
 			}
-			if ctx.Input.JustPressed(input.KeyArrowRight) || ctx.Input.JustPressed(input.KeyArrowDown) {
+			if ctx.Input.JustPressed(input.KeyArrowRight) {
 				dx++
 			}
-			if dx != 0 && now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
-				m.invSelMovedAt = now
-				// A description without card slots (a plain item) does not
-				// want the d-pad — route it to the inventory grid beneath.
-				if !m.ui.itemWindows.GamepadCardNavigate(ctx, dx) {
-					m.ui.inventoryBag.GamepadNavigate(ctx, dx, 0)
+			if ctx.Input.JustPressed(input.KeyArrowUp) {
+				dy--
+			}
+			if ctx.Input.JustPressed(input.KeyArrowDown) {
+				dy++
+			}
+			if dx != 0 || dy != 0 {
+				if now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+					m.invSelMovedAt = now
+					// A description with card slots on top takes the d-pad
+					// for its slot row (left/right, up/down both work);
+					// anything else routes to the inventory grid beneath.
+					if m.ui.itemWindows.HasOpenDescriptions() &&
+						m.ui.itemWindows.GamepadCardNavigate(ctx, dx+dy) {
+						m.invSelMovedAt = now
+					} else {
+						m.ui.inventoryBag.GamepadNavigate(ctx, dx, dy)
+					}
 				}
+				return true
 			}
 			return true
 		}
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
-			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
-				m.gamepadActionAt = now
-				m.ui.inventoryBag.GamepadActivate(ctx)
-			}
-			return true
-		}
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
-			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
-				m.gamepadActionAt = now
-				m.ui.inventoryBag.GamepadInfo(ctx)
-			}
-			return true
-		}
-		dx, dy := 0, 0
-		if ctx.Input.JustPressed(input.KeyArrowLeft) {
-			dx--
-		}
-		if ctx.Input.JustPressed(input.KeyArrowRight) {
-			dx++
-		}
-		if ctx.Input.JustPressed(input.KeyArrowUp) {
-			dy--
-		}
-		if ctx.Input.JustPressed(input.KeyArrowDown) {
-			dy++
-		}
-		if (dx != 0 || dy != 0) && now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
-			m.invSelMovedAt = now
-			m.ui.inventoryBag.GamepadNavigate(ctx, dx, dy)
-		}
-		return true
-	}
 	if m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx) {
 		return false
 	}

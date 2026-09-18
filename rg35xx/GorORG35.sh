@@ -144,11 +144,18 @@ export GOGPU_FB_GLES=1
 echo "goro exited: $?"
 sync
 
-# Safety: if the game died while the power key had the panel blanked, the
-# screen would stay black — restore the backlight unconditionally.
+# Safety: if the game died while the power key had the panel off, the
+# screen would stay black — restore the framebuffer AND the backlight
+# unconditionally (dispdbg setbl with a sane default level).
 for f in /sys/class/backlight/*/bl_power /sys/class/graphics/fb0/blank; do
   [ -w "$f" ] && echo 0 > "$f" 2>/dev/null
 done
+if [ -w /sys/kernel/debug/dispdbg/command ]; then
+  echo lcd0 > /sys/kernel/debug/dispdbg/name 2>/dev/null
+  echo 200 > /sys/kernel/debug/dispdbg/param 2>/dev/null
+  echo setbl > /sys/kernel/debug/dispdbg/command 2>/dev/null
+  echo 1 > /sys/kernel/debug/dispdbg/start 2>/dev/null
+fi
 
 # If the GPU driver or kernel oopsed, dmesg holds the fingerprints.
 echo "-- dmesg tail after goro exit:"

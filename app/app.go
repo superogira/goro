@@ -41,7 +41,6 @@ type Game struct {
 	muted      bool
 	mutedBGM   float64
 	mutedSFX   float64
-	enterPulse bool
 }
 
 func New(cfg config.Config) (*Game, error) {
@@ -70,6 +69,11 @@ func New(cfg config.Config) (*Game, error) {
 	// Preferred resolver (e.g. 8.8.8.8 on the rg35xx, whose local DNS
 	// NXDOMAINs DDNS hostnames); no-op when unset.
 	network.SetPreferredDNS(cfg.Network.DNS)
+	// Login screens: the gamepad A button behaves as Enter (render fanout
+	// translates the F13 event while this hook says so).
+	render.GamepadAEnterMode = func() bool {
+		return g.modes != nil && g.modes.ModeName() == "login"
+	}
 	g.session.KeepLoginID = cfg.Login.KeepID
 	g.session.SavedUsername = cfg.Login.SavedUsername
 	g.session.NoShift = cfg.Gameplay.NoShift
@@ -89,12 +93,6 @@ func New(cfg config.Config) (*Game, error) {
 }
 
 func (g *Game) Update() error {
-	// Release the previous frame's A-as-Enter pulse (login mode): the press
-	// edge must be visible for exactly one frame.
-	if g.enterPulse {
-		g.input.SetKey(input.KeyEnter, false)
-		g.enterPulse = false
-	}
 	defer g.input.EndFrame()
 	g.network.Pump()
 	g.modes.UpdateContext(g.modeContext())
@@ -173,6 +171,8 @@ func (g *Game) PrepareKeyInput(code input.KeyCode, mods gpucontext.Modifiers) {
 	}
 	// Handheld side keys: volume steps (both BGM and SFX together) and the
 	// power-key screen cycle, whose F14/F16 edges mute/unmute the game.
+	// A-as-Enter on login screens is handled at the render fanout level
+	// (GamepadAEnterMode below) so text fields receive a real Enter event.
 	switch code {
 	case gpucontext.KeyAudioVolumeUp:
 		g.stepVolume(0.05)
@@ -182,14 +182,6 @@ func (g *Game) PrepareKeyInput(code input.KeyCode, mods gpucontext.Modifiers) {
 		g.muteForScreenOff()
 	case gpucontext.KeyF16:
 		g.unmuteFromScreenOn()
-	case gpucontext.KeyF13:
-		// A doubles as Enter on the login screens (account/password/service/
-		// character select all advance on Enter); in the world the gamepad
-		// layer routes it instead.
-		if g.modes != nil && g.modes.ModeName() == "login" {
-			g.input.SetKey(input.KeyEnter, true)
-			g.enterPulse = true
-		}
 	}
 	if g.modes != nil {
 		g.modes.PrepareKeyInput(g.modeContext(), code, mods)

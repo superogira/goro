@@ -68,6 +68,7 @@ func (m *HandheldMenu) Toggle(ctx client.Context) {
 	m.Window.SetContent(m.tree(ctx))
 	m.Window.OpenAt(x, y, m.tree(ctx))
 	m.open = true
+	m.Window.Publish(ctx)
 }
 
 // Close hides the overlay.
@@ -111,6 +112,9 @@ func (m *HandheldMenu) Update(ctx client.Context) bool {
 	if moved {
 		m.Window.SetContent(m.tree(ctx))
 	}
+	// Keep the window in the UI manager's publish set every frame — an
+	// unpublished window never renders.
+	m.Window.Publish(ctx)
 	if ctx.Input.JustPressed(input.KeyEnter) {
 		m.Activate(ctx)
 		return true

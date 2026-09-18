@@ -508,10 +508,20 @@ type fanoutEventSource struct {
 	gesture              []func(gpucontext.GestureEvent)
 }
 
+// GamepadAEnterMode reports whether the gamepad A button should behave as
+// Enter for the active mode (the login screens). The app layer installs
+// this; when true the fanout translates F13 presses into Enter key events,
+// so text fields (which listen to the widget event system, not input.State)
+// advance exactly as they do for a real Enter.
+var GamepadAEnterMode func() bool
+
 func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 	f := &fanoutEventSource{}
 	keyCode := gpucontext.KeyUnknown
 	source.OnKeyPress(func(key gpucontext.Key, mods gpucontext.Modifiers) {
+		if key == gpucontext.KeyF13 && GamepadAEnterMode != nil && GamepadAEnterMode() {
+			key = gpucontext.KeyEnter
+		}
 		keyCode = key
 		repeated := false
 		if f.inputState != nil {
@@ -537,6 +547,9 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 		}
 	})
 	source.OnKeyRelease(func(key gpucontext.Key, mods gpucontext.Modifiers) {
+		if key == gpucontext.KeyF13 && GamepadAEnterMode != nil && GamepadAEnterMode() {
+			key = gpucontext.KeyEnter
+		}
 		if f.inputState != nil {
 			f.inputState.SetKeyCode(key, false)
 		}

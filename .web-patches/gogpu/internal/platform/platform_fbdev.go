@@ -851,6 +851,14 @@ func errString(err error) string {
 }
 
 // setHeld records press/release of a quit-combo button.
+// isHeld reports whether a button is currently in the held map.
+func (p *fbdevPlatform) isHeld(code uint16) bool {
+	p.inputMu.Lock()
+	defer p.inputMu.Unlock()
+	_, ok := p.held[code]
+	return ok
+}
+
 func (p *fbdevPlatform) setHeld(code uint16, down bool) {
 	p.inputMu.Lock()
 	defer p.inputMu.Unlock()
@@ -970,12 +978,14 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		key = gpucontext.KeyF4
 	case btnMenu:
 		// Physical MENU (0x138 on this hardware): hold ≥3s quits via the
-		// quit watcher (long, because MENU+d-pad / MENU+volume are camera
-		// and backlight combos while held); a short tap fires KeyF15,
-		// which the world layer turns into the handheld menu overlay.
+		// quit watcher (long, because MENU+d-pad is the camera combo and
+		// MENU+START captures); while held a KeyF17 modifier tracks the
+		// state for the game layer. A short tap fires KeyF15 — the
+		// handheld menu overlay.
+		p.dispatchKey(gpucontext.KeyF17, down)
 		if down {
-			// Any other key while MENU is held is a combo (camera zoom or
-			// backlight) — restart the quit timer so the combo never exits.
+			// Any other key while MENU is held is a combo (camera, capture,
+			// backlight) — restart the quit timer so combos never exit.
 			p.inputMu.Lock()
 			if _, held := p.held[btnMenu]; held {
 				p.held[btnMenu] = time.Now()
@@ -1021,6 +1031,16 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			p.advancePowerCycle()
 		}
 	case btnStart:
+		// START is Enter, except while MENU is held — that combo captures
+		// the screen instead.
+		if down && p.isHeld(btnMenu) {
+			p.dispatchKey(gpucontext.KeyPrintScreen, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyPrintScreen, false)
+			}()
+			return
+		}
 		key = gpucontext.KeyEnter
 		p.setHeld(btnStart, down)
 	case btnMode:
@@ -1130,13 +1150,17 @@ func (p *fbdevPlatform) advancePowerCycle() {
 }
 
 // captureBacklightLevel remembers the panel brightness before the first dim
-// so the on state can restore it exactly.
+// so the on state can restore it exactly. getbl failed silently on this
+// firmware in the field (screen stayed black after the cycle), so a sane
+// default is used when the query yields nothing.
 func (p *fbdevPlatform) captureBacklightLevel() {
 	if p.dispdbgRestoreLevel > 0 {
 		return
 	}
+	const fallbackLevel = 200
 	base := "/sys/kernel/debug/dispdbg"
 	if _, err := os.Stat(base + "/command"); err != nil {
+		p.dispdbgRestoreLevel = fallbackLevel
 		return
 	}
 	for _, w := range [][2]string{
@@ -1145,15 +1169,21 @@ func (p *fbdevPlatform) captureBacklightLevel() {
 		{base + "/start", "1"},
 	} {
 		if err := os.WriteFile(w[0], []byte(w[1]), 0o644); err != nil {
+			p.dispdbgRestoreLevel = fallbackLevel
+			logger().Warn("fbdev: getbl write failed; backlight restore falls back", "level", fallbackLevel)
 			return
 		}
 	}
 	data, err := os.ReadFile(base + "/param")
 	if err != nil {
+		p.dispdbgRestoreLevel = fallbackLevel
+		logger().Warn("fbdev: getbl read failed; backlight restore falls back", "level", fallbackLevel)
 		return
 	}
 	level, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || level <= 0 || level > 255 {
+		p.dispdbgRestoreLevel = fallbackLevel
+		logger().Warn("fbdev: getbl returned no usable level; backlight restore falls back", "level", fallbackLevel)
 		return
 	}
 	p.dispdbgRestoreLevel = level

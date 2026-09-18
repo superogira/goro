@@ -185,7 +185,8 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 // updateGamepadWalk issues walk requests toward the held d-pad direction.
 // The direction is interpreted in screen space and projected through the
 // camera, so "up" always walks toward the top of the screen. Two held axes
-// combine into a diagonal.
+// combine into a diagonal. While MENU is held (KeyF17), the d-pad steers
+// the camera instead — up/down zoom, left/right rotate — and walking stops.
 func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, now time.Time) {
 	if pointerBlocked {
 		return
@@ -204,6 +205,24 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 		dy++
 	}
 	if dx == 0 && dy == 0 {
+		m.gamepadDirLogged = false
+		return
+	}
+	if ctx.Input.KeyCodeDown(gpucontext.KeyF17) {
+		if !cameraZoomLockedForMap(ctx) {
+			if dy < 0 {
+				m.camera.ZoomBy(1 / cameraButtonZoomStep)
+			} else if dy > 0 {
+				m.camera.ZoomBy(cameraButtonZoomStep)
+			}
+		}
+		if !cameraRotationLockedForMap(ctx) {
+			if dx < 0 {
+				m.camera.Rotate(-cameraButtonRotateStep)
+			} else if dx > 0 {
+				m.camera.Rotate(cameraButtonRotateStep)
+			}
+		}
 		m.gamepadDirLogged = false
 		return
 	}

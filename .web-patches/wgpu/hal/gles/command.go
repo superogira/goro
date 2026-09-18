@@ -1763,13 +1763,13 @@ func (c *CopyTextureToBufferCommand) Execute(ctx *gl.Context) {
 	swapBR := c.srcTexture.format == gputypes.TextureFormatBGRA8Unorm ||
 		c.srcTexture.format == gputypes.TextureFormatBGRA8UnormSrgb
 
-	// Copy the pixel data into the destination buffer's CPU-side storage.
-	// OpenGL reads bottom-to-top, but callers expect top-to-bottom order.
-	// Flip the rows during copy, swapping B/R per pixel for BGRA textures.
+	// No row flip: the GLES backend renders upside-down (naga's in-shader
+	// Y-flip; the present blit un-flips), and ReadPixels returns rows
+	// bottom-to-top — the two inversions cancel, leaving the buffer already
+	// in top-to-bottom order. Flipping here produced upside-down
+	// screenshots on the device.
 	for row := int32(0); row < height; row++ {
-		// OpenGL row 0 = bottom. We want row 0 = top.
-		srcRow := (height - 1 - row)
-		srcStart := uint64(srcRow) * uint64(rowBytes)
+		srcStart := uint64(row) * uint64(rowBytes)
 		dstStart := c.dstOffset + uint64(row)*uint64(rowBytes)
 		if !swapBR {
 			copy(c.dstBuffer.data[dstStart:dstStart+uint64(rowBytes)], tmpBuf[srcStart:srcStart+uint64(rowBytes)])

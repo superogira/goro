@@ -36,6 +36,10 @@ type StatsWindow struct {
 	Window
 	snapshot string
 
+	// selected is the handheld d-pad selection over the six primary stat
+	// rows (STR/AGI/VIT/INT/DEX/LUK); A raises it.
+	selected int
+
 	webOpen      bool
 	webSyncedKey string
 }
@@ -217,14 +221,22 @@ func (w *StatsWindow) statsBodyWidget(ctx Context) widget.Widget {
 
 func (w *StatsWindow) statRowsWidget(ctx Context) widget.Widget {
 	rows := statsRows(ctx.Session)
+	if w.selected < 0 || w.selected >= len(rows) {
+		w.selected = 0
+	}
 	children := make([]widget.Widget, 0, len(rows))
-	for _, row := range rows {
+	for i, row := range rows {
 		row := row
+		labelCell := statsLabelCell(row.label, statsPrimaryLabelWidth).
+			Height(statsRowH)
+		if i == w.selected {
+			labelCell = labelCell.Background(rotheme.Default.Colors.InputFocus)
+		} else {
+			labelCell = labelCell.Background(rotheme.Default.Colors.ButtonHover)
+		}
 		children = append(children,
 			primitives.HBox(
-				statsLabelCell(row.label, statsPrimaryLabelWidth).
-					Height(statsRowH).
-					Background(rotheme.Default.Colors.ButtonHover),
+				labelCell,
 				statsTextCell(formatStatValue(row.value, row.bonus), statsPrimaryValueWidth, rotheme.Default.Colors.Text),
 				statsTextCell(fmt.Sprintf("%d", statCost(row)), statsPrimaryCostWidth, rotheme.Default.Colors.MutedText),
 				primitives.Expanded(primitives.Box()),
@@ -238,6 +250,47 @@ func (w *StatsWindow) statRowsWidget(ctx Context) widget.Widget {
 		)
 	}
 	return primitives.Box(children...).Gap(statsRowGap)
+}
+
+// GamepadNavigate moves the handheld selection over the primary stat rows.
+func (w *StatsWindow) GamepadNavigate(ctx Context, delta int) {
+	if w == nil || !w.IsOpen() || delta == 0 {
+		return
+	}
+	rows := statsRows(ctx.Session)
+	next := w.selected + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(rows) {
+		next = len(rows) - 1
+	}
+	if next == w.selected {
+		return
+	}
+	w.selected = next
+	if ctx.UIManager != nil {
+		w.SetContent(w.widgetTree(ctx))
+		w.Publish(ctx)
+	}
+}
+
+// GamepadConfirm raises the currently selected stat (the A button).
+func (w *StatsWindow) GamepadConfirm(ctx Context) {
+	if w == nil || !w.IsOpen() {
+		return
+	}
+	rows := statsRows(ctx.Session)
+	if w.selected < 0 || w.selected >= len(rows) {
+		return
+	}
+	row := rows[w.selected]
+	if !canIncreaseStat(ctx.Session, row) {
+		glog.Debugf("status increase blocked stat=%s", row.label)
+		return
+	}
+	w.requestStatIncrease(ctx, row)
+	glog.Infof("status increase requested stat=%s via gamepad", row.label)
 }
 
 func (w *StatsWindow) requestStatIncrease(ctx Context, row statRow) {

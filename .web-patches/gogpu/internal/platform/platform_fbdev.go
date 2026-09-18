@@ -818,7 +818,7 @@ func (p *fbdevPlatform) readEvents(f *os.File) {
 				// Trace the first key events of the session: the physical
 				// button → evdev code map, including codes that map to
 				// game keys and would otherwise stay silent.
-				if n := p.traceKeyEvent(f); n <= 40 {
+				if n := p.traceKeyEvent(f); n <= 400 {
 					logger().Info("fbdev: key event",
 						"code", fmt.Sprintf("0x%x (%d)", code, code),
 						"value", value)
@@ -1068,7 +1068,12 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		}
 	case btnStart:
 		// START is Enter, except while MENU is held — that combo captures
-		// the screen instead.
+		// the screen instead. The log line also proves whether START even
+		// reaches the game while MENU is held (field rounds showed no
+		// combo hits at all).
+		if down {
+			logger().Info("fbdev: start press", "menu_held", p.isHeld(btnMenu))
+		}
 		if down && p.isHeld(btnMenu) {
 			logger().Info("fbdev: menu+start — screenshot")
 			p.dispatchKey(gpucontext.KeyPrintScreen, true)

@@ -173,6 +173,26 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		m.updateHeldMenuInput(ctx, now)
 		return true
 	}
+	// The stats window owns the d-pad while open: up/down (or left/right)
+	// move the stat selection, A raises it, walking is suspended.
+	if m.ui.statsWindow.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			m.ui.statsWindow.GamepadConfirm(ctx)
+			return true
+		}
+		delta := 0
+		if ctx.Input.JustPressed(input.KeyArrowUp) || ctx.Input.JustPressed(input.KeyArrowLeft) {
+			delta--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowDown) || ctx.Input.JustPressed(input.KeyArrowRight) {
+			delta++
+		}
+		if delta != 0 && now.Sub(m.statsSelMovedAt) >= 180*time.Millisecond {
+			m.statsSelMovedAt = now
+			m.ui.statsWindow.GamepadNavigate(ctx, delta)
+		}
+		return true
+	}
 	if m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx) {
 		return false
 	}

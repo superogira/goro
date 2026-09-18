@@ -427,7 +427,7 @@ const npcMenuCancelRow = -2
 // last option it lands on the Cancel row, and back up from there. Debounced
 // — the polled d-pad can emit bounce transitions that would skip rows.
 func (d *NPCDialog) moveMenuSelection(step int) {
-	if time.Since(d.menuRowMovedAt) < 220*time.Millisecond {
+	if time.Since(d.menuRowMovedAt) < 300*time.Millisecond {
 		return
 	}
 	d.menuRowMovedAt = time.Now()

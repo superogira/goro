@@ -215,6 +215,17 @@ func (m *Manager) ItemCardPostfix(itemID int) bool {
 	return ok && metadata.CardPostfix
 }
 
+// WarmItemTables forces the lazy item metadata load (display names, resource
+// names, descriptions, slot counts, card prefixes) so the first item window a
+// player opens does not pay the table parse as a frame hitch. On the handheld
+// that parse costs ~100ms, long enough to read as a short freeze.
+func (m *Manager) WarmItemTables() {
+	if m == nil {
+		return
+	}
+	m.loadItemMetadata()
+}
+
 func (m *Manager) loadItemMetadata() {
 	if m.itemMetadataLoaded {
 		return

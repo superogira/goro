@@ -158,6 +158,11 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			// Server-driven digit displays load their sprite on first use;
 			// warm them with the rest of the map.
 			ctx.Resources.Prefetch(serverDigitSpritePrefetchGroups()...)
+			// The item tables (names, descriptions, slot counts, card
+			// prefixes) parse lazily on the first item window open — a
+			// ~100ms frame hitch on the handheld. Warm them here while the
+			// loading cover is still up.
+			ctx.Resources.WarmItemTables()
 			if hasMap {
 				_ = ctx.Network.SendLoadEndAck()
 			}

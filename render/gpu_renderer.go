@@ -60,6 +60,7 @@ type gpuRenderer struct {
 	textures               map[*Image]*gpuImageTexture
 	bindGroups             map[bindGroupKey]*wgpu.BindGroup
 	worldMeshes            map[*WorldMesh]*gpuWorldMesh
+	frame                  uint64
 	depthTex               *wgpu.Texture
 	depthView              *wgpu.TextureView
 	depthWidth             int
@@ -90,10 +91,11 @@ type gpuRenderer struct {
 }
 
 type gpuImageTexture struct {
-	tex     *gogpu.Texture
-	version uint64
-	width   int
-	height  int
+	tex      *gogpu.Texture
+	version  uint64
+	width    int
+	height   int
+	lastUsed uint64
 }
 
 type dynamicGPUBuffer struct {
@@ -106,6 +108,7 @@ type gpuWorldMesh struct {
 	indexBuf   *wgpu.Buffer
 	indexCount uint32
 	version    uint64
+	lastUsed   uint64
 }
 
 type worldMeshBatch struct {
@@ -501,6 +504,10 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 	if screen == nil {
 		return false, nil
 	}
+	r.frame++
+	if r.frame%gpuTrimInterval == 0 {
+		r.trimStaleResources()
+	}
 	surface := ctx.SurfaceView()
 	if surface == nil {
 		return false, nil
@@ -767,6 +774,7 @@ func (r *gpuRenderer) ensureTexture(ctx *gogpu.Context, img *Image, opts DrawTri
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
 	existing := r.textures[img]
 	if existing != nil && existing.version == img.version && existing.width == w && existing.height == h {
+		existing.lastUsed = r.frame
 		return existing, nil
 	}
 	if existing != nil {
@@ -775,6 +783,7 @@ func (r *gpuRenderer) ensureTexture(ctx *gogpu.Context, img *Image, opts DrawTri
 				return nil, fmt.Errorf("update render texture: %w", err)
 			}
 			existing.version = img.version
+			existing.lastUsed = r.frame
 			return existing, nil
 		}
 		r.releaseTexture(existing.tex)
@@ -790,7 +799,7 @@ func (r *gpuRenderer) ensureTexture(ctx *gogpu.Context, img *Image, opts DrawTri
 	if err != nil {
 		return nil, fmt.Errorf("create render texture: %w", err)
 	}
-	out := &gpuImageTexture{tex: tex, version: img.version, width: w, height: h}
+	out := &gpuImageTexture{tex: tex, version: img.version, width: w, height: h, lastUsed: r.frame}
 	r.textures[img] = out
 	return out, nil
 }
@@ -1170,6 +1179,7 @@ func appendBillboardInstanceData(dst []float32, cmd WorldBillboardCommand) []flo
 
 func (r *gpuRenderer) ensureWorldMesh(mesh *WorldMesh) (*gpuWorldMesh, error) {
 	if cached := r.worldMeshes[mesh]; cached != nil && cached.version == mesh.version {
+		cached.lastUsed = r.frame
 		return cached, nil
 	}
 	if old := r.worldMeshes[mesh]; old != nil {
@@ -1217,6 +1227,7 @@ func (r *gpuRenderer) ensureWorldMesh(mesh *WorldMesh) (*gpuWorldMesh, error) {
 		indexBuf:   indexBuf,
 		indexCount: uint32(len(indices)),
 		version:    mesh.version,
+		lastUsed:   r.frame,
 	}
 	r.worldMeshes[mesh] = gpuMesh
 	return gpuMesh, nil
@@ -1326,6 +1337,48 @@ func (r *gpuRenderer) ensureDepth(width, height int) error {
 	r.depthWidth = width
 	r.depthHeight = height
 	return nil
+}
+
+// gpuTrimInterval is how often the renderer checks its strong resource caches
+// for entries nothing has drawn in a while, and gpuStaleResourceFrames is the
+// no-draw age after which a cached GPU texture or retained mesh is released.
+// Map changes rebuild every texture and mesh as fresh objects; without this
+// trim the caches kept every visited map's CPU pixels and GPU resources alive
+// forever, which OOMed the 1GB handheld after a few warp round trips.
+const (
+	gpuTrimInterval        = 120
+	gpuStaleResourceFrames = 600
+)
+
+// trimStaleResources drops cache entries that no frame has referenced within
+// gpuStaleResourceFrames. Released entries are not destroyed in use: the only
+// criterion is a long gap since the last draw, and anything that comes back
+// simply re-uploads through ensureTexture/ensureWorldMesh.
+func (r *gpuRenderer) trimStaleResources() {
+	if r.frame <= gpuStaleResourceFrames {
+		return
+	}
+	for img, entry := range r.textures {
+		if entry == nil || r.frame-entry.lastUsed >= gpuStaleResourceFrames {
+			if entry != nil && entry.tex != nil {
+				r.releaseTexture(entry.tex)
+			}
+			delete(r.textures, img)
+		}
+	}
+	for mesh, entry := range r.worldMeshes {
+		if entry == nil || r.frame-entry.lastUsed >= gpuStaleResourceFrames {
+			if entry != nil {
+				if entry.vertexBuf != nil {
+					entry.vertexBuf.Release()
+				}
+				if entry.indexBuf != nil {
+					entry.indexBuf.Release()
+				}
+			}
+			delete(r.worldMeshes, mesh)
+		}
+	}
 }
 
 func (r *gpuRenderer) release() {

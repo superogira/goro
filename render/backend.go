@@ -909,6 +909,7 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 		return err
 	}
 	r.drawVolumeHUD(r.screen)
+	r.drawScreenNotice(r.screen)
 	if err := r.drawFullscreenButton(r.screen, width, height, deviceScale); err != nil {
 		return err
 	}
@@ -2462,6 +2463,54 @@ func (r *runner) drawVolumeHUD(screen *Frame) {
 // rect helper without colliding with embedded names.
 func render_DrawRect(dst *Frame, x, y, w, h float64, c color.Color) {
 	DrawRect(dst, x, y, w, h, c)
+}
+
+// screenNotice carries a transient on-screen toast (e.g. "Screenshot saved").
+type screenNoticeState struct {
+	text string
+	at   time.Time
+}
+
+var screenNotice atomic.Pointer[screenNoticeState]
+
+// ShowScreenNotice displays a short toast at the bottom-center of the screen
+// for ~1.6s.
+func ShowScreenNotice(text string) {
+	if text == "" {
+		return
+	}
+	screenNotice.Store(&screenNoticeState{text: text, at: time.Now()})
+}
+
+const screenNoticeDuration = 1600 * time.Millisecond
+
+// drawScreenNotice renders the transient toast — the screenshot
+// confirmation the handheld needs (there is no console message visible in
+// small-screen mode's compact console).
+func (r *runner) drawScreenNotice(screen *Frame) {
+	state := screenNotice.Load()
+	if state == nil || screen == nil {
+		return
+	}
+	if time.Since(state.at) > screenNoticeDuration {
+		screenNotice.Store(nil)
+		return
+	}
+	bounds := screen.Bounds()
+	const pillH = 26.0
+	const pad = 14.0
+	x := float64(bounds.Dx()) / 2
+	y := float64(bounds.Dy()) - pillH - 24
+	// Fading background pill + outlined text (drawn every frame while the
+	// toast lives; the fade multiplies alpha of the pill only).
+	age := time.Since(state.at).Seconds()
+	alpha := uint8(200)
+	if age > screenNoticeDuration.Seconds()-0.3 {
+		alpha = uint8(200 * (screenNoticeDuration.Seconds() - age) / 0.3)
+	}
+	render_DrawRect(screen, x-110, y, 220, pillH, color.RGBA{R: 20, G: 18, B: 28, A: alpha})
+	render_DrawRect(screen, x-110, y, 220, 2, color.RGBA{R: 214, G: 178, B: 92, A: alpha})
+	DrawUIOutlinedTextAt(screen, state.text, x-100, y+6, color.RGBA{R: 250, G: 240, B: 210, A: 255}, color.RGBA{A: 190})
 }
 
 func (r *runner) drawFPSMeter(screen *Frame, deviceScale float64) error {

@@ -273,9 +273,11 @@ func (g *Game) ConsumeScreenshotRequest() (string, bool) {
 func (g *Game) CompleteScreenshot(path string, err error) {
 	if err != nil {
 		glog.Errorf("screenshot failed path=%s error=%v", path, err)
+		render.ShowScreenNotice("Screenshot failed")
 		return
 	}
 	glog.Infof("screenshot saved path=%s", path)
+	render.ShowScreenNotice("Screenshot saved")
 }
 
 func (g *Game) RuntimeFullscreen() bool {

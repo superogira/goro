@@ -72,9 +72,12 @@ var heldMenuItems = []string{
 
 // updateHeldMenuInput drives the direct-drawn MENU overlay: d-pad moves the
 // selection (debounced — the polled d-pad bounces), A or START activates,
-// MENU or SELECT closes.
+// SELECT closes. MENU itself toggles at the world level and must NOT be
+// re-checked here — the same JustPressed edge that opened the menu would
+// close it within the same frame (observed as open=true logs with nothing
+// rendered and walking continuing underneath).
 func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
-	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF15) || ctx.Input.JustPressed(input.KeyEscape) {
+	if ctx.Input.JustPressed(input.KeyEscape) {
 		m.heldMenuOpen = false
 		return
 	}

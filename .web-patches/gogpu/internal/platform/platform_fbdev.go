@@ -1142,7 +1142,7 @@ func fbBlankViaioctl(level byte) bool {
 		return false
 	}
 	defer fb.Close()
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fb.Fd(), 0x461B, uintptr(level))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fb.Fd(), 0x461B, uintptr(level))
 	if errno != 0 {
 		logger().Warn("fbdev: FBIOBLANK failed", "errno", errno.Error())
 		return false

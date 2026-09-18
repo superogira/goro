@@ -1057,9 +1057,11 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		return nil, nil
 	}
 	// The upstream character info window rides the handheld MENU: it shows
-	// while the menu overlay is open and hides again when it closes.
+	// while the menu overlay is open and hides again when it closes. HideHUD
+	// does not gate it — on the handheld the permanent HUD is custom-drawn
+	// and the flag no longer means "no panels, ever".
 	characterWindowConsumed := false
-	if m.menuPanelsShown && !hudHidden(ctx) {
+	if m.menuPanelsShown {
 		characterWindowConsumed = m.ui.characterWindow.Update(ctx)
 	} else if m.ui.characterWindow.IsOpen() {
 		m.ui.characterWindow.Close()
@@ -1230,7 +1232,9 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 			return nil, nil
 		}
 	}
-	minimapDragging := !hudHidden(ctx) && m.ui.minimap.Update(ctx)
+	// The minimap rides the handheld MENU panels, so it updates whenever the
+	// menu shows it — HideHUD only gates the permanent HUD placement.
+	minimapDragging := (m.menuPanelsShown || !hudHidden(ctx)) && m.ui.minimap.Update(ctx)
 	m.syncLevel99AuraEffects(ctx, now)
 	pointerBlocked := minimapDragging || m.mapPointerBlocked(ctx)
 	if !pointerBlocked {

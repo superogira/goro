@@ -46,6 +46,16 @@ func (c *followCamera) ResetTracking() {
 	}
 }
 
+// ResetView restores the default camera angles and zoom (the handheld menu's
+// Reset Camera entry).
+func (c *followCamera) ResetView() {
+	c.yawOffset = 0
+	c.yawTarget = 0
+	c.pitch = defaultSceneCameraPitch
+	c.zoom = defaultSceneCameraZoom
+	c.zoomTarget = defaultSceneCameraZoom
+}
+
 func (c *followCamera) Update(ctx client.Context, now time.Time) {
 	targetX, targetY, targetZ := playerCameraTarget(ctx.World, now)
 	if !c.initialized {

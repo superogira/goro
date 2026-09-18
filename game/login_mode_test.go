@@ -39,19 +39,19 @@ func TestCharacterSwitchKeepsConsolePublishableAfterLoginClear(t *testing.T) {
 	mode := NewWorldMode()
 	mode.ui.console.AddSystemMessage("ready")
 	mode.ui.console.Update(ctx)
-	if !manager.PointerBlocked(20, 500) {
+	if !manager.PointerBlocked(400, 500) {
 		t.Fatal("console did not publish before character switch")
 	}
 
 	login := mode.nextCharacterSelectMode(ctx)
 	login.clearLoginWindows(ctx)
-	if manager.PointerBlocked(20, 500) {
+	if manager.PointerBlocked(400, 500) {
 		t.Fatal("login clear left the world console overlay published")
 	}
 
 	next := login.nextWorldMode(ctx)
 	next.ui.console.Update(ctx)
-	if !manager.PointerBlocked(20, 500) {
+	if !manager.PointerBlocked(400, 500) {
 		t.Fatal("console did not republish after returning from character select")
 	}
 }

@@ -416,8 +416,8 @@ func TestScreenEdgeAnchorsUseWindowMargin(t *testing.T) {
 	if x, y, _, _ := MinimapBounds(ctx.ScreenW, ctx.ScreenH); x != ctx.ScreenW-minimapWidth-windowScreenMargin || y != windowScreenMargin {
 		t.Fatalf("minimap position = %d,%d; want x=%d y=%d", x, y, ctx.ScreenW-minimapWidth-windowScreenMargin, windowScreenMargin)
 	}
-	if x, y, _, _ := consoleBounds(ctx.ScreenW, ctx.ScreenH); x != windowScreenMargin || y != ctx.ScreenH-consoleHeight-windowScreenMargin {
-		t.Fatalf("console position = %d,%d; want x=%d y=%d", x, y, windowScreenMargin, ctx.ScreenH-consoleHeight-windowScreenMargin)
+	if x, y, w, _ := consoleBounds(ctx.ScreenW, ctx.ScreenH); x != (ctx.ScreenW-w)/2 || y != ctx.ScreenH-consoleHeight-windowScreenMargin {
+		t.Fatalf("console position = %d,%d; want x=%d y=%d", x, y, (ctx.ScreenW-w)/2, ctx.ScreenH-consoleHeight-windowScreenMargin)
 	}
 	if x, _ := storageDefaultPosition(ctx); x != ctx.ScreenW-storageWindowWidth-windowScreenMargin {
 		t.Fatalf("storage x = %d; want %d", x, ctx.ScreenW-storageWindowWidth-windowScreenMargin)

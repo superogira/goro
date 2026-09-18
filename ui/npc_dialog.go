@@ -14,8 +14,8 @@ import (
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/state"
-	"github.com/kivutar/goro/input"
 	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/ui/rotheme"
 )
@@ -920,11 +920,10 @@ func npcDialogEstimatedTextWidth(text string) float32 {
 func npcDialogBounds(width, height int) (int, int, int, int) {
 	w := minInt(npcDialogWidth, maxInt(260, width-2*windowScreenMargin))
 	h := minInt(npcDialogHeight, maxInt(130, height-2*windowScreenMargin))
-	x := (width - w) / 2
+	// Docked left: the NPC cut-in illustration occupies the right side of
+	// the screen and a centered dialog covered it.
+	x := windowScreenMargin
 	y := (height - h) / 2
-	if x < windowScreenMargin {
-		x = windowScreenMargin
-	}
 	if y < windowScreenMargin {
 		y = windowScreenMargin
 	}

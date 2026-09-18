@@ -1357,7 +1357,9 @@ func (c *ChatConsole) Messages() []ConsoleMessage {
 func consoleBounds(screenW, screenH int) (x, y, w, h int) {
 	w = minInt(consoleWidth, maxInt(260, screenW-2*consoleMargin))
 	h = minInt(consoleHeight, maxInt(128, screenH-2*consoleMargin))
-	x = consoleMargin
+	// Bottom center: the handheld chat entry opens from the menu, and the
+	// old bottom-left corner collided with the NPC dialog column.
+	x = maxInt(consoleMargin, (screenW-w)/2)
 	y = maxInt(consoleMargin, screenH-h-consoleMargin)
 	return x, y, w, h
 }

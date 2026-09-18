@@ -83,12 +83,16 @@ func (m *WorldMode) heldMenuActivate(ctx client.Context) {
 	case 7:
 		m.ui.console.OpenForTyping(ctx)
 	case 8:
+		m.camera.ResetView()
+	case 9:
+		m.ui.settingsWindow.OpenWindow(ctx)
+	case 10:
 		if path, err := ctx.RequestScreenshot(); err == nil {
 			m.ui.console.AddSystemMessage("Screenshot: %s", path)
 		} else {
 			m.ui.console.AddErrorMessage("screenshot failed: %s", err.Error())
 		}
-	case 9:
+	case 11:
 		if ctx.RequestQuit != nil {
 			ctx.RequestQuit()
 		}
@@ -96,7 +100,7 @@ func (m *WorldMode) heldMenuActivate(ctx client.Context) {
 }
 
 var heldMenuItems = []string{
-	"Sit/Stand", "Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Screenshot", "Exit Game",
+	"Sit/Stand", "Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Reset Camera", "Settings", "Screenshot", "Exit Game",
 }
 
 // closeActiveHandheldWindow closes whatever the handheld layer opened last
@@ -115,6 +119,8 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) {
 		return
 	}
 	switch {
+	case m.ui.settingsWindow.IsOpen():
+		m.ui.settingsWindow.Toggle(ctx)
 	case m.ui.statsWindow.IsOpen():
 		m.ui.statsWindow.Toggle(ctx)
 	case m.ui.inventoryBag.IsOpen():
@@ -458,6 +464,44 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 					m.invSelMovedAt = now
 				} else {
 					m.ui.skillWindow.GamepadNavigate(ctx, dx, dy)
+				}
+			}
+			return true
+		}
+		return true
+	}
+	// The settings window rows: d-pad up/down walks the entries, left/right
+	// adjusts the selected value, A toggles booleans (or steps the value up).
+	if m.ui.settingsWindow.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.settingsWindow.GamepadActivate(ctx)
+			}
+			return true
+		}
+		dx := 0
+		dy := 0
+		if ctx.Input.JustPressed(input.KeyArrowLeft) {
+			dx--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowRight) {
+			dx++
+		}
+		if ctx.Input.JustPressed(input.KeyArrowUp) {
+			dy--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowDown) {
+			dy++
+		}
+		if dx != 0 || dy != 0 {
+			if now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+				m.invSelMovedAt = now
+				if dy != 0 {
+					m.ui.settingsWindow.GamepadNavigate(ctx, dy)
+				}
+				if dx != 0 {
+					m.ui.settingsWindow.GamepadAdjust(ctx, dx)
 				}
 			}
 			return true

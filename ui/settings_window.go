@@ -3,8 +3,6 @@ package ui
 import (
 	"fmt"
 
-	"github.com/gogpu/ui/core/checkbox"
-	"github.com/gogpu/ui/core/slider"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
@@ -22,6 +20,26 @@ type SettingsWindow struct {
 	Window
 	webOpen    bool
 	webSyncKey string
+	// gamepadSelected is the handheld row selection over the settings rows.
+	gamepadSelected int
+}
+
+// Toggle opens or closes the settings window (the handheld menu entry and
+// the B close stack use it).
+func (w *SettingsWindow) Toggle(ctx client.Context) {
+	if settingsWebEnabled() {
+		w.webOpen = !w.webOpen
+		w.webSyncKey = ""
+		w.webSync(ctx)
+		return
+	}
+	w.EnsureWindow(settingsWindowW, settingsWindowH)
+	if w.IsOpen() {
+		w.Close()
+		w.Publish(ctx)
+		return
+	}
+	w.OpenWindow(ctx)
 }
 
 // IsOpen reports the settings window's open state. On web the DOM panel
@@ -42,6 +60,7 @@ func (w *SettingsWindow) OpenWindow(ctx client.Context) {
 	}
 	w.EnsureWindow(settingsWindowW, settingsWindowH)
 	w.ctx = ctx
+	w.gamepadSelected = 0
 	w.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
 }
@@ -103,180 +122,51 @@ func (w *SettingsWindow) widgetTree(ctx client.Context) widget.Widget {
 	)
 }
 
+// contentTree renders the handheld settings rows: d-pad up/down moves the
+// selection, left/right adjusts the value, A toggles booleans. The same
+// setters and persistence the upstream mouse widgets used back every row.
 func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
-	return primitives.Box(
-		rotheme.Label("Display"),
+	rows := w.settingsRows()
+	children := make([]widget.Widget, 0, len(rows)+3)
+	section := func(label string) {
+		children = append(children, rotheme.Label(label))
+	}
 
-		rotheme.Checkbox(
-			checkbox.Checked(settingsRuntimeFullscreen(ctx)),
-			checkbox.LabelOpt("Fullscreen"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Runtime != nil {
-					ctx.Runtime.SetFullscreen(enabled)
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsRuntimeVSync(ctx)),
-			checkbox.LabelOpt("VSync (Restart)"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Runtime != nil {
-					ctx.Runtime.SetVSync(enabled)
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsRuntimeFPS(ctx)),
-			checkbox.LabelOpt("FPS meter"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Runtime != nil {
-					ctx.Runtime.SetFPS(enabled)
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		primitives.HBox(
-			rotheme.Text("Resolution"),
-			resolutionScaleButtons(ctx, func(scale float64) {
-				if ctx.Runtime != nil {
-					ctx.Runtime.SetResolutionScale(scale)
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		).Gap(6),
-
-		rotheme.Label("Sound"),
-
-		primitives.HBox(
-			rotheme.Text("BGM Vol"),
+	rowWidget := func(index int, row settingsRow) widget.Widget {
+		selected := index == w.gamepadSelected
+		background := rotheme.Default.Colors.PanelBody
+		if selected {
+			background = rotheme.Default.Colors.ButtonHover
+		}
+		return primitives.HBox(
+			primitives.Box(
+				rotheme.Text(row.label).
+					Color(itemInfoWidgetColor(inventoryTextColor)),
+			).Width(130),
 			primitives.Expanded(
-				rotheme.Slider(
-					slider.Min(0),
-					slider.Max(1),
-					slider.Value(float32(settingsVolumeBGM(ctx))),
-					slider.OnChange(func(v float32) {
-						if ctx.Audio != nil {
-							ctx.Audio.SetBGMVolume(float64(v))
-						}
-						w.saveSettings(ctx)
-						w.refresh(ctx)
-					}),
-				),
+				rotheme.Text(row.value(ctx)).
+					Color(itemInfoWidgetColor(inventoryTextColor)),
 			),
-		).Gap(8),
+		).
+			Height(22).
+			Background(background)
+	}
 
-		primitives.HBox(
-			rotheme.Text("SFX Vol"),
-			primitives.Expanded(
-				rotheme.Slider(
-					slider.Min(0),
-					slider.Max(1),
-					slider.Value(float32(settingsVolumeSFX(ctx))),
-					slider.OnChange(func(v float32) {
-						if ctx.Audio != nil {
-							ctx.Audio.SetSFXVolume(float64(v))
-						}
-						w.saveSettings(ctx)
-						w.refresh(ctx)
-					}),
-				),
-			),
-		).Gap(8),
-
-		rotheme.Label("Gameplay"),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsNoShift(ctx)),
-			checkbox.LabelOpt("No Shift"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Session != nil {
-					ctx.Session.NoShift = enabled
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsNoCtrl(ctx)),
-			checkbox.LabelOpt("No Ctrl"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Session != nil {
-					ctx.Session.NoCtrl = enabled
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsLessEffects(ctx)),
-			checkbox.LabelOpt("Less Effects"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Session != nil {
-					ctx.Session.LessEffects = enabled
-				}
-				if ctx.Network != nil {
-					_ = ctx.Network.SendLessEffect(enabled)
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsSnapTargets(ctx)),
-			checkbox.LabelOpt("Snap to targets"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Session != nil {
-					ctx.Session.SnapTargets = enabled
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		rotheme.Checkbox(
-			checkbox.Checked(settingsSnapItems(ctx)),
-			checkbox.LabelOpt("Snap to items"),
-			checkbox.OnToggle(func(enabled bool) {
-				if ctx.Session != nil {
-					ctx.Session.SnapItems = enabled
-				}
-				w.saveSettings(ctx)
-				w.refresh(ctx)
-			}),
-		),
-
-		primitives.HBox(
-			rotheme.Text("Snap Radius"),
-			primitives.Expanded(
-				rotheme.Slider(
-					slider.Min(0.5),
-					slider.Max(3),
-					slider.Value(float32(settingsSnapRadius(ctx))),
-					slider.OnChange(func(v float32) {
-						if ctx.Session != nil {
-							ctx.Session.SnapRadius = float64(v)
-						}
-						w.saveSettings(ctx)
-						w.refresh(ctx)
-					}),
-				),
-			),
-		).Gap(8),
-	).
+	section("Display")
+	for i := 0; i < 4; i++ {
+		children = append(children, rowWidget(i, rows[i]))
+	}
+	section("Sound")
+	for i := 4; i < 6; i++ {
+		children = append(children, rowWidget(i, rows[i]))
+	}
+	section("Gameplay")
+	for i := 6; i < len(rows); i++ {
+		children = append(children, rowWidget(i, rows[i]))
+	}
+	return primitives.Box(children...).
 		Padding(14).
-		Gap(8)
+		Gap(4)
 }
 
 func (w *SettingsWindow) refresh(ctx client.Context) {

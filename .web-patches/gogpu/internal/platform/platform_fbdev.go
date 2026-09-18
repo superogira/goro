@@ -945,10 +945,12 @@ func (p *fbdevPlatform) logUnknownCode(code uint16, down bool) {
 }
 
 // quitWatcher closes the window once a quit combo has stayed held long
-// enough: MENU ≥1.2s, SELECT ≥3s, SELECT+START ≥1.2s, or L1+R1 ≥1.5s.
-// Several paths because the MENU button's evdev code is not confirmed on
-// this hardware yet, while SELECT/START/L1/R1 mappings are proven. The
-// ticker fires even if the release event never arrives.
+// enough: SELECT ≥1.2s, SELECT+START ≥1.2s, or L1+R1 ≥1.5s. Several paths
+// because the MENU button's evdev code was unconfirmed early on, while
+// SELECT/START/L1/R1 mappings are proven. MENU alone must NOT quit: held
+// MENU is the camera-steer modifier for the d-pad, and a 3s hold was
+// exiting the game mid-steer (observed in the field). The ticker fires
+// even if the release event never arrives.
 func (p *fbdevPlatform) quitWatcher() {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
@@ -959,14 +961,10 @@ func (p *fbdevPlatform) quitWatcher() {
 		now := time.Now()
 		p.inputMu.Lock()
 		via := ""
-		if t0, ok := p.held[btnMenu]; ok && now.Sub(t0) >= 3*time.Second {
-			via = "MENU(0x138)"
-		} else if t0, ok := p.held[btnSel0]; ok && now.Sub(t0) >= 1200*time.Millisecond {
+		if t0, ok := p.held[btnSel0]; ok && now.Sub(t0) >= 1200*time.Millisecond {
 			via = "SELECT(0x162)"
 		} else if t0, ok := p.held[btnMode]; ok && now.Sub(t0) >= 1200*time.Millisecond {
 			via = "MODE(0x13d)"
-		} else if t0, ok := p.held[keyEsc]; ok && now.Sub(t0) >= 3000*time.Millisecond {
-			via = "ESC"
 		} else if ts, okS := p.held[btnSel0]; okS {
 			if tt, okT := p.held[btnStart]; okT &&
 				now.Sub(ts) >= 1200*time.Millisecond && now.Sub(tt) >= 1200*time.Millisecond {

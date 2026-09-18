@@ -31,13 +31,22 @@ const (
 	// is exactly the direction shown on screen regardless of the isometric
 	// camera rotation or zoom.
 	gamepadWalkScreenLead = 80.0
-	// gamepadActionFloor paces A actions (attack/pickup/talk/confirm):
-	// the firmware repeats held keys as press pairs and every path that
-	// skipped this floor machine-gunned (four pickups per second, several
-	// dialog pages per press).
-	gamepadActionFloor = 600 * time.Millisecond
-	// gamepadNavFloor paces d-pad menu navigation everywhere.
-	gamepadNavFloor = 220 * time.Millisecond
+	// gamepadActionFloor paces A actions (attack/pickup/talk/confirm). The
+	// platform already collapses the firmware's press/release chatter into a
+	// single press per tap, so this floor no longer has to fight repeat — it
+	// only stops two taps landing on the same target, and 600ms made pickup
+	// feel sticky. Attack and NPC confirm go through the same knob: dialog
+	// pages and swing pacing are close enough that one floor stays honest.
+	gamepadActionFloor = 250 * time.Millisecond
+	// gamepadNavFloor paces d-pad menu navigation everywhere: one physical
+	// tap posts exactly one edge now, so this is a comfort floor, not a
+	// chatter filter (220ms felt sluggish after the platform fix).
+	gamepadNavFloor = 160 * time.Millisecond
+	// gamepadWalkRepeatInterval re-aims the held d-pad walk. The shared
+	// held-click interval (500ms) is tuned for a mouse held on a far-away
+	// spot; with the short 80px gamepad lead it ran the character in visible
+	// bursts — walk, stop, walk. Re-aiming faster keeps the pace even.
+	gamepadWalkRepeatInterval = 250 * time.Millisecond
 )
 
 // ensureHeldMenu lazily builds the handheld menu item actions.
@@ -402,7 +411,7 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 	if !m.walkReady(now) || (!m.nextHeldWalkAt.IsZero() && now.Before(m.nextHeldWalkAt)) {
 		return
 	}
-	m.nextHeldWalkAt = now.Add(heldWalkRepeatInterval)
+	m.nextHeldWalkAt = now.Add(gamepadWalkRepeatInterval)
 
 	screenW, screenH := ctx.ScreenSize()
 	projection := m.sceneProjection(ctx, screenW, screenH, now)

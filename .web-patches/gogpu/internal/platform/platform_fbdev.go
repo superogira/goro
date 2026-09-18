@@ -157,6 +157,16 @@ const (
 	// btnSel0 is SELECT on this device — the one non-gamepad code the
 	// ANBERNIC-keys device advertises (from its /proc caps bitmap).
 	btnSel0 = 0x162
+
+	// keySettleTime is how long a key must stay released before the next
+	// press is accepted; hatReleaseHold is how long the d-pad must sit at
+	// neutral before a release is published. keySettleTime clears the
+	// measured press/release chatter, whose UP phase lasts 50-150ms, while
+	// deliberate taps leave the key up 450ms+. hatReleaseHold is the same
+	// measurement applied to the axis levels, with margin above the 150ms
+	// slow end so a chatter drop is absorbed instead of stopping the walk.
+	keySettleTime  = 180 * time.Millisecond
+	hatReleaseHold = 200 * time.Millisecond
 	keyEsc  = 0x001
 
 	// Stick handling: RG35XX-style pads report 0..255 with center ~128.
@@ -222,13 +232,22 @@ type fbdevPlatform struct {
 	held      map[uint16]time.Time
 	seenCodes map[uint16]bool
 	keyTraces map[string]int
-	// lastKeyPress debounces same-key press pairs (firmware key repeat is
-	// full 1/0 cycles, not value=2).
-	lastKeyPress map[uint16]time.Time
-	// hatXAt/hatYAt floor d-pad axis edges; hatXPosted/hatYPosted track
-	// what the game currently believes. The sync loop coalesces: it always
-	// converges the posted value to the physical one, so a release can
-	// never be swallowed (swallowed edges left the character walking).
+	// keyReleasedAt debounces same-key chatter (firmware key repeat is full
+	// 1/0 cycles, not value=2). The model is release-stability, not
+	// press-spacing: a new press is accepted only once the key has been UP
+	// for keySettleTime. Measured chatter keeps the key up for only 50-150ms
+	// between pairs, while deliberate taps stay up 450ms+, so release
+	// stability separates them where "time since last press" could not
+	// (chatter gaps overlapped human tap rates).
+	keyReleasedAt map[uint16]time.Time
+	// hatXAt/hatYAt stamp when the physical d-pad axis last changed value;
+	// hatXPosted/hatYPosted track what the game currently believes. The axes
+	// are levels, not edges, and a held d-pad briefly drops to neutral as
+	// part of its chatter — so a release is published only after the neutral
+	// has held for hatReleaseHold, while a press or a direction flip goes out
+	// at once. A chatter drop therefore produces no edges at all (the menu
+	// stopped skipping), and a real release always converges (the character
+	// never kept walking).
 	hatXAt     time.Time
 	hatYAt     time.Time
 	hatXPosted int
@@ -316,6 +335,7 @@ func (p *fbdevPlatform) Init() error {
 	}
 	p.held = make(map[uint16]time.Time)
 	p.seenCodes = make(map[uint16]bool)
+	p.keyReleasedAt = make(map[uint16]time.Time)
 	p.startInput()
 	go p.cursorLoop()
 	go p.quitWatcher()
@@ -849,7 +869,9 @@ func (p *fbdevPlatform) traceKeyEvent(f *os.File) int {
 	defer p.inputMu.Unlock()
 	if p.keyTraces == nil {
 		p.keyTraces = make(map[string]int)
-		p.lastKeyPress = make(map[uint16]time.Time)
+	}
+	if p.keyReleasedAt == nil {
+		p.keyReleasedAt = make(map[uint16]time.Time)
 	}
 	p.keyTraces[name]++
 	return p.keyTraces[name]
@@ -965,19 +987,27 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		}
 		p.inputMu.Unlock()
 	}
-	// This firmware's held keys repeat as full press/release pairs, at
-	// intervals measured 200-360ms depending on the key (MENU ~330ms) — not
-	// value=2 autorepeat. The floor must clear the slowest observed pair.
-	if down {
+	// Debounce by release stability, not by press spacing. A held key on this
+	// firmware repeats as full press/release pairs (measured on A: pairs
+	// ~90ms apart with the key up only 90-150ms between them, ten in a row),
+	// so "time since last press" cannot separate chatter from deliberate
+	// taps — chatter gaps overlap human tap rates, and every pair that got
+	// through fired an action (on the login screens, where A also becomes
+	// Enter, one held press walked through several pages). A press is only
+	// accepted once the key has been released for keySettleTime; every
+	// release is recorded, so the settle window keeps resetting for as long
+	// as the burst lasts and the whole burst collapses to its first press.
+	if !down {
 		p.inputMu.Lock()
-		last, repeated := p.lastKeyPress[code]
+		p.keyReleasedAt[code] = time.Now()
 		p.inputMu.Unlock()
-		if repeated && time.Since(last) < 400*time.Millisecond {
+	} else {
+		p.inputMu.Lock()
+		releasedAt, seen := p.keyReleasedAt[code]
+		p.inputMu.Unlock()
+		if seen && time.Since(releasedAt) < keySettleTime {
 			return
 		}
-		p.inputMu.Lock()
-		p.lastKeyPress[code] = time.Now()
-		p.inputMu.Unlock()
 	}
 	switch code {
 	case btnLeft: // real mouse left button
@@ -987,13 +1017,20 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// plus a KeyF13 edge tagging it as a gamepad press — the world
 		// layer turns that into attack-nearest / pickup-nearest. The click
 		// auto-releases so a held A never turns into held-click walking.
-		p.pointerButton(gpucontext.ButtonsLeft, true)
-		p.dispatchKey(gpucontext.KeyF13, true)
-		go func() {
-			time.Sleep(80 * time.Millisecond)
-			p.dispatchKey(gpucontext.KeyF13, false)
-			p.pointerButton(gpucontext.ButtonsLeft, false)
-		}()
+		// Press only: this case used to fire on the release too, so every
+		// physical tap dispatched the action twice (double advance on the
+		// login screens, which is why they skipped even with the press
+		// floor in place — the floor never ran on the release path).
+		if down {
+			p.pointerButton(gpucontext.ButtonsLeft, true)
+			p.dispatchKey(gpucontext.KeyF13, true)
+			go func() {
+				time.Sleep(80 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF13, false)
+				p.pointerButton(gpucontext.ButtonsLeft, false)
+			}()
+			return
+		}
 	case btnEast:
 		// B button: a KeyF18 edge the game layer turns into "close the
 		// active window" (or the handheld menu). No companion right-click:
@@ -1402,25 +1439,31 @@ func (p *fbdevPlatform) pointerButton(button gpucontext.Buttons, down bool) {
 func (p *fbdevPlatform) handleAbs(code uint16, value int32) {
 	p.inputMu.Lock()
 	defer p.inputMu.Unlock()
-	// Record the physical state only; hatSyncLoop posts coalesced edges.
 	switch code {
 	case evAbsHat0X:
-		p.hatX = int(value)
+		if int(value) != p.hatX {
+			p.hatX = int(value)
+			p.hatXAt = time.Now()
+		}
 	case evAbsHat0Y:
-		p.hatY = int(value)
+		if int(value) != p.hatY {
+			p.hatY = int(value)
+			p.hatYAt = time.Now()
+		}
 	default:
 		p.axes[code] = value
 	}
 }
 
-// hatSyncLoop publishes d-pad axis state to the game with edge coalescing:
-// at most one key edge per axis per floor interval, always converging the
-// posted value to the physical one. The earlier inline floor dropped
-// edges outright — a release swallowed inside the window left the
-// character walking (field report: movement stuck or wrong direction).
+// hatSyncLoop turns the d-pad axes (levels) into key edges for the game.
+// The axes chatter: a held direction briefly reports neutral, and publishing
+// those drops would emit a release/press pair that the menus see as a skip
+// and the walk layer sees as a stutter. A press or direction flip is posted
+// immediately (that is always a real intent); a drop to neutral is posted
+// only once the neutral has held for hatReleaseHold. Holding a direction
+// still repeats nothing — the game walks from the held key state.
 func (p *fbdevPlatform) hatSyncLoop() {
-	const hatFloor = 180 * time.Millisecond
-	ticker := time.NewTicker(30 * time.Millisecond)
+	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
 		if p.isClosing() {
@@ -1428,20 +1471,26 @@ func (p *fbdevPlatform) hatSyncLoop() {
 		}
 		p.inputMu.Lock()
 		now := time.Now()
-		if p.hatX != p.hatXPosted && now.Sub(p.hatXAt) >= hatFloor {
-			old := p.hatXPosted
-			p.hatXPosted = p.hatX
-			p.hatXAt = now
-			p.queueHatKeys(old, p.hatXPosted, gpucontext.KeyLeft, gpucontext.KeyRight)
-		}
-		if p.hatY != p.hatYPosted && now.Sub(p.hatYAt) >= hatFloor {
-			old := p.hatYPosted
-			p.hatYPosted = p.hatY
-			p.hatYAt = now
-			p.queueHatKeys(old, p.hatYPosted, gpucontext.KeyUp, gpucontext.KeyDown)
-		}
+		p.syncHatAxis(now, p.hatX, &p.hatXPosted, p.hatXAt, gpucontext.KeyLeft, gpucontext.KeyRight)
+		p.syncHatAxis(now, p.hatY, &p.hatYPosted, p.hatYAt, gpucontext.KeyUp, gpucontext.KeyDown)
 		p.inputMu.Unlock()
 	}
+}
+
+// syncHatAxis publishes one axis change. Caller holds inputMu.
+func (p *fbdevPlatform) syncHatAxis(now time.Time, physical int, posted *int, at time.Time, negKey, posKey gpucontext.Key) {
+	if physical == *posted {
+		return
+	}
+	// A drop to neutral is only real once it persists; anything else (a
+	// press, or a flip straight from one direction to the other) is intent
+	// and goes out at once.
+	if physical == 0 && now.Sub(at) < hatReleaseHold {
+		return
+	}
+	old := *posted
+	*posted = physical
+	p.queueHatKeys(old, physical, negKey, posKey)
 }
 
 // queueHatKeys posts key events for a d-pad axis change. Caller holds inputMu.

@@ -208,6 +208,12 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	if !osk.open {
 		return false
 	}
+	// The A button's companion mouse click must not reach the form under
+	// the keyboard — clear both buttons every frame while the OSK is open.
+	if ctx.Input != nil {
+		ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
+		ctx.Input.SetMouseButton(input.MouseButtonRight, false)
+	}
 	switch {
 	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13):
 		// A: type the key.
@@ -221,12 +227,12 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 		osk.row, osk.col = len(osk.rows())-1, 2
 		osk.inject(ctx)
 		return true
-	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF17):
-		// START held (F17): close without submitting.
+	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18):
+		// B (already handled above for backspace, but also close).
 		osk.open = false
 		return true
 	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyEnter):
-		// START tap: submit.
+		// START tap: submit the focused field.
 		osk.row, osk.col = len(osk.rows())-1, len(osk.rows()[len(osk.rows())-1])-1
 		osk.inject(ctx)
 		return true
@@ -294,7 +300,7 @@ func drawOSK(screen *render.Frame) {
 	if osk.shift {
 		shiftLabel = " (Shift)"
 	}
-	render.DrawUIOutlinedTextAt(screen, fmt.Sprintf("%s%s: %s", label, shiftLabel, osk.preview), x+12, y+10, c.muted, c.outline)
+	render.DrawOutlinedTextAt(screen, fmt.Sprintf("%s%s: %s", label, shiftLabel, osk.preview), int(x+12), int(y+10), c.muted, c.outline)
 
 	// Grid.
 	gy := y + 34
@@ -335,7 +341,7 @@ func drawOSK(screen *render.Frame) {
 			if key.special != "" {
 				labelColor = c.muted
 			}
-			render.DrawUIOutlinedTextAt(screen, text, tx, ty, labelColor, c.outline)
+			render.DrawOutlinedTextAt(screen, text, int(tx), int(ty), labelColor, c.outline)
 		}
 	}
 }

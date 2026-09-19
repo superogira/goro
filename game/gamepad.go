@@ -309,8 +309,8 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	}
 	// START opens the on-screen keyboard when a text field has focus (the
 	// chat console, or any modal input).
-	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF17) && (m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx)) {
-		tryOpenOSK(m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx))
+	if ctx.Input.JustPressed(input.KeyEnter) && (m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx)) {
+		tryOpenOSK(true)
 		return true
 	}
 	// B closes the active (topmost relevant) window. Checked before the

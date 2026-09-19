@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
@@ -207,12 +206,15 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	}
 
 	// The on-screen keyboard overlays every login phase: the account form,
-	// character creation's name field, and any modal text input.
+	// character creation's name field, and any modal text input. START
+	// opens it (when no modal dialog claims the key first), and while open
+	// every button feeds the keyboard.
 	if ctx.Input != nil {
 		if updateGamepadOSK(ctx, now) {
 			return nil, nil
 		}
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF17) {
+		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
+		if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
 			return nil, nil
 		}

@@ -207,25 +207,30 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	}
 
 	// The on-screen keyboard overlays every login phase. While open, the
-	// OSK handles the gamepad buttons and injects text via AddTextInput,
-	// but the login form's widget tree must still Update so the focused
-	// text field can consume the injected characters — so we suppress the
-	// mouse clicks and navigation keys the form would otherwise interpret,
-	// rather than returning early.
-	if ctx.Input != nil && oskState().open {
-		updateGamepadOSK(ctx, now)
-		// Clear the companion mouse click and form navigation keys.
-		ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
-		ctx.Input.SetMouseButton(input.MouseButtonRight, false)
-		ctx.Input.SetKeyCode(gpucontext.KeyTab, false)
-		if !oskJustSubmitted() {
-			ctx.Input.SetKeyCode(gpucontext.KeyEnter, false)
-		}
-		// Fall through: the form updates and reads the injected text.
-	} else if ctx.Input != nil {
-		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
-		if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
-			tryOpenOSK(true)
+	// OSK types directly into the login form's focused text field via
+	// TypeIntoFocusedField (bypassing the widget event dispatch that
+	// AddTextInput can't reach from the game layer).
+	if ctx.Input != nil {
+		if oskState().open {
+			oskCallback = func(ch string, action string) {
+				if m.loginWindow != nil {
+					m.loginWindow.TypeIntoFocusedField(ch, action)
+				}
+			}
+			updateGamepadOSK(ctx, now)
+			// Clear the companion mouse click and form navigation keys.
+			ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
+			ctx.Input.SetMouseButton(input.MouseButtonRight, false)
+			ctx.Input.SetKeyCode(gpucontext.KeyTab, false)
+			if !oskJustSubmitted() {
+				ctx.Input.SetKeyCode(gpucontext.KeyEnter, false)
+			}
+		} else {
+			oskCallback = nil
+			dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
+			if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
+				tryOpenOSK(true)
+			}
 		}
 	}
 

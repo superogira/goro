@@ -270,6 +270,34 @@ func (w *LoginWindow) fieldFocus() (bool, bool) {
 	return userFocused, passwordFocused
 }
 
+// TypeIntoFocusedField appends or removes a character from the focused
+// text field (the on-screen keyboard's typing path — it bypasses the
+// widget event dispatch entirely).
+func (w *LoginWindow) TypeIntoFocusedField(ch string, action string) {
+	if w == nil {
+		return
+	}
+	_, passwordFocused := w.fieldFocus()
+	target := w.user
+	if passwordFocused {
+		target = w.password
+	}
+	if target == nil {
+		return
+	}
+	switch action {
+	case "type":
+		target.SetText(target.Text() + ch)
+	case "bksp":
+		text := target.Text()
+		if runes := []rune(text); len(runes) > 0 {
+			target.SetText(string(runes[:len(runes)-1]))
+		}
+	case "submit":
+		// Let the form's normal Enter handling take over.
+	}
+}
+
 func (w *LoginWindow) fieldValues() (string, string) {
 	username, password := w.Username, w.Password
 	if w.user != nil {

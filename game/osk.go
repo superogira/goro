@@ -138,7 +138,12 @@ func (osk *onScreenKeyboard) move(dx, dy int) {
 	}
 }
 
-// inject sends the key's effect into the input state.
+// oskCallback delivers a typed character or action to the host mode.
+// The host sets this before showing the keyboard; nil callbacks are
+// ignored (the preview still tracks what was typed).
+var oskCallback func(ch string, action string) // action: "type", "bksp", "submit"
+
+// inject sends the key's effect to the host via the callback.
 func (osk *onScreenKeyboard) inject(ctx client.Context) {
 	key := osk.currentKey()
 	if key.special == "shift" {
@@ -146,25 +151,28 @@ func (osk *onScreenKeyboard) inject(ctx client.Context) {
 		return
 	}
 	if key.special == "space" {
-		ctx.Input.AddTextInput(" ")
 		osk.preview += " "
+		if oskCallback != nil {
+			oskCallback(" ", "type")
+		}
 		return
 	}
 	if key.special == "bksp" {
-		// Feed a backspace press+release into the input state so the
-		// focused widget deletes a character.
-		ctx.Input.SetKeyCode(gpucontext.KeyBackspace, true)
-		ctx.Input.SetKeyCode(gpucontext.KeyBackspace, false)
 		if len(osk.preview) > 0 {
 			runes := []rune(osk.preview)
 			osk.preview = string(runes[:len(runes)-1])
+		}
+		if oskCallback != nil {
+			oskCallback("", "bksp")
 		}
 		return
 	}
 	if key.special == "enter" {
 		oskSubmittedFlag = true
-		ctx.Input.SetKeyCode(gpucontext.KeyEnter, true)
 		osk.open = false
+		if oskCallback != nil {
+			oskCallback("", "submit")
+		}
 		return
 	}
 	if key.special == "abc" {
@@ -177,10 +185,12 @@ func (osk *onScreenKeyboard) inject(ctx client.Context) {
 	if osk.shift && key.upper != "" {
 		ch = key.upper
 	}
-	ctx.Input.AddTextInput(ch)
 	osk.preview += ch
 	if osk.shift {
 		osk.shift = false
+	}
+	if oskCallback != nil {
+		oskCallback(ch, "type")
 	}
 }
 

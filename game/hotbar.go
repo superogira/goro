@@ -107,23 +107,25 @@ var (
 	hotbarOutline     = color.RGBA{R: 10, G: 12, B: 16, A: 210}
 )
 
-// draw renders the hotbar window: nine cells along the bottom-left. Icons
-// reuse the WorldMode's cached item/skill painters, so nothing here
-// allocates per frame.
+// draw renders the hotbar as a vertical column docked to the right screen
+// edge, vertically centered — the right margin is otherwise unused and
+// nothing on screen collides with it. Icons reuse the WorldMode's cached
+// item/skill painters, so nothing here allocates per frame.
 func (h *hotbar) draw(screen *render.Frame, ctx client.Context, m *WorldMode) {
 	if screen == nil || !h.shown {
 		return
 	}
 	bounds := screen.Bounds()
-	width := hotbarSlotCount*hotbarCellSize + hotbarWindowPad*2
-	x := 10
-	y := bounds.Dy() - hotbarCellSize - hotbarWindowPad*2 - 10
-	render.DrawRect(screen, float64(x), float64(y), float64(width), float64(hotbarCellSize+hotbarWindowPad*2), hotbarPanelColor)
-	render.DrawRect(screen, float64(x), float64(y), float64(width), 1, hotbarBorderColor)
-	render.DrawRect(screen, float64(x), float64(y+hotbarCellSize+hotbarWindowPad*2-1), float64(width), 1, hotbarBorderColor)
+	width := hotbarCellSize + hotbarWindowPad*2
+	height := hotbarSlotCount*hotbarCellSize + hotbarWindowPad*2
+	x := bounds.Dx() - width - 10
+	y := (bounds.Dy() - height) / 2
+	render.DrawRect(screen, float64(x), float64(y), float64(width), float64(height), hotbarPanelColor)
+	render.DrawRect(screen, float64(x), float64(y), 1, float64(height), hotbarBorderColor)
+	render.DrawRect(screen, float64(x+width-1), float64(y), 1, float64(height), hotbarBorderColor)
 
 	for i := 0; i < hotbarSlotCount; i++ {
-		h.drawCell(screen, ctx, m, x+hotbarWindowPad+i*hotbarCellSize, y+hotbarWindowPad, i)
+		h.drawCell(screen, ctx, m, x+hotbarWindowPad, y+hotbarWindowPad+i*hotbarCellSize, i)
 	}
 }
 

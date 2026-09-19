@@ -203,7 +203,16 @@ func (m *WorldMode) drawHeldMenu(screen *render.Frame) {
 	menuH := titleH + pad + len(heldMenuItems)*itemH + pad
 	bounds := screen.Bounds()
 	x := (float64(bounds.Dx()) - menuW) / 2
+	// Below the MENU companion panels: the character info window occupies
+	// the top-left ~324x134, and a vertically centered menu covered it on
+	// the small screen.
 	y := (float64(bounds.Dy()) - float64(menuH)) / 2
+	if top := 12 + 134 + 10; y < float64(top) {
+		y = float64(top)
+	}
+	if bottom := float64(bounds.Dy()) - float64(menuH) - 8; y > bottom {
+		y = math.Max(8, bottom)
+	}
 
 	// Panel and title bar.
 	render.DrawRect(screen, x, y, menuW, float64(menuH), color.RGBA{R: 24, G: 20, B: 34, A: 235})

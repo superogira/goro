@@ -171,6 +171,7 @@ type WorldMode struct {
 
 type worldUI struct {
 	minimap              gameui.Minimap
+	miniHUD              gameui.MiniVitalsHUD
 	statusIcons          gameui.StatusIcons
 	pvpCounter           gameui.PvPCounter
 	perfHUD              gameui.PerfHUD
@@ -1803,6 +1804,15 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	}
 	now := time.Now()
 	m.drawShowDigit(screen, ctx, now)
+	// The always-on handheld vitals readout: HP/SP, EXP, weight.
+	if !hudHidden(ctx) && ctx.Session != nil {
+		vitals := ctx.Session.Vitals
+		progress := ctx.Session.Progress
+		inventory := ctx.Session.Inventory
+		m.ui.miniHUD.Draw(screen, vitals.HP, vitals.MaxHP, vitals.SP, vitals.MaxSP,
+			progress.BaseExp, progress.NextBaseExp, progress.JobExp, progress.NextJobExp,
+			inventory.Weight, inventory.MaxWeight)
+	}
 	m.ui.announcement.Draw(screen, now)
 	m.ui.poptips.Draw(screen, now)
 	m.ui.inventoryBag.DrawTooltip(ctx, screen)

@@ -394,6 +394,9 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 	if c.compactAuto && !c.active && !c.Active() {
 		width = minInt(consoleCompactWidth, maxInt(200, screenW-2*consoleMargin))
 		height = consoleCompactHeight
+		// Recenter on the compact width: consoleBounds centered the full
+		// console, which left the shrunken window sitting left of middle.
+		x = maxInt(consoleMargin, (screenW-width)/2)
 	}
 	key := c.renderKey(width, height)
 	if c.window.width == 0 {

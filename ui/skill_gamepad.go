@@ -189,6 +189,12 @@ func (w *SkillWindow) CloseTopDetail(ctx Context) bool {
 	return w.detail.closeIfOpen(ctx)
 }
 
+// GamepadSelectedSkill reports the skill under the handheld cursor (tree
+// cell or table row).
+func (w *SkillWindow) GamepadSelectedSkill(ctx Context) (session.Skill, bool) {
+	return w.gamepadSelectedSkill(ctx)
+}
+
 func (w *SkillWindow) gamepadSelectedSkill(ctx Context) (session.Skill, bool) {
 	if w.gridMode {
 		if w.grid == nil || w.gamepadPosition < 0 {

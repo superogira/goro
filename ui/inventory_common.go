@@ -136,3 +136,9 @@ func itemDisplayNameHasSlotSuffix(name string) bool {
 	_, err := strconv.Atoi(strings.TrimSpace(name[open+1 : len(name)-1]))
 	return err == nil
 }
+
+// ItemDisplayName resolves an inventory item's display name for game-layer
+// notices (the hotbar's add confirmations).
+func ItemDisplayName(manager *res.Manager, item session.InventoryItem) string {
+	return inventoryItemDisplayName(manager, item)
+}

@@ -175,6 +175,7 @@ type WorldMode struct {
 type worldUI struct {
 	minimap              gameui.Minimap
 	miniHUD              gameui.MiniVitalsHUD
+	hotbar               hotbar
 	statusIcons          gameui.StatusIcons
 	pvpCounter           gameui.PvPCounter
 	perfHUD              gameui.PerfHUD
@@ -1658,6 +1659,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.partyInvite = m.ui.partyInvite
 	next.ui.shortcutBar = m.ui.shortcutBar
 	next.ui.minimap = m.ui.minimap
+	next.ui.hotbar = m.ui.hotbar
 	next.ui.statusIcons = m.ui.statusIcons
 	next.ui.pvpCounter = m.ui.pvpCounter
 	next.ui.perfHUD = m.ui.perfHUD
@@ -1831,6 +1833,7 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	m.ui.guildWindow.DrawTooltip(ctx, screen)
 	m.ui.shortcutBar.DrawTooltip(ctx, screen)
 	m.ui.itemPickup.Draw(screen, ctx, m, now)
+	m.drawHotbar(screen, ctx, now)
 	// The frameless map overlay (X on the plain screen) sits on top of the
 	// world but under the direct MENU overlay.
 	if m.mapOverlay > 0 {

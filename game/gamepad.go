@@ -1,6 +1,8 @@
 package game
 
 import (
+	"fmt"
+	"image/color"
 	"math"
 	"time"
 
@@ -10,8 +12,8 @@ import (
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
+	gameui "github.com/kivutar/goro/ui"
 	"github.com/kivutar/goro/world"
-	"image/color"
 )
 
 // Handheld controls (rg35xx and friends): the d-pad walks the character
@@ -52,11 +54,20 @@ const (
 
 // ensureHeldMenu lazily builds the handheld menu item actions.
 func (m *WorldMode) heldMenuActivate(ctx client.Context) {
-	glog.Infof("handheld menu activate item=%d %q", m.heldMenuSel, heldMenuItems[m.heldMenuSel])
-	switch m.heldMenuSel {
-	case 0:
-		// Sit/Stand: toggles the local player posture; the server echoes the
-		// action back and battle.go flips ctx.World.Player.Sitting.
+	entry := heldMenuEntries[m.heldMenuSel]
+	glog.Infof("handheld menu activate item=%d %q", m.heldMenuSel, entry.label)
+	entry.action(m, ctx)
+}
+
+// heldMenuEntries pairs each menu label with its action; the index order is
+// the draw order. heldMenuItems below derives its labels.
+var heldMenuEntries = []struct {
+	label  string
+	action func(*WorldMode, client.Context)
+}{
+	{"Sit/Stand", func(m *WorldMode, ctx client.Context) {
+		// Toggles the local player posture; the server echoes the action
+		// back and battle.go flips ctx.World.Player.Sitting.
 		if ctx.Network != nil && ctx.Session != nil {
 			action := network.ActionSitDown
 			if ctx.World.Player.Sitting {
@@ -66,76 +77,86 @@ func (m *WorldMode) heldMenuActivate(ctx client.Context) {
 				m.ui.console.AddErrorMessage("sit/stand failed")
 			}
 		}
-	case 1:
-		m.ui.inventoryBag.Toggle(ctx)
-	case 2:
-		m.ui.equipmentWindow.Toggle(ctx)
-	case 3:
-		m.ui.skillWindow.Toggle(ctx)
-	case 4:
-		m.ui.statsWindow.Toggle(ctx)
-	case 5:
-		m.ui.questWindow.Toggle(ctx)
-	case 6:
+	}},
+	{"Items", func(m *WorldMode, ctx client.Context) { m.ui.inventoryBag.Toggle(ctx) }},
+	{"Equipment", func(m *WorldMode, ctx client.Context) { m.ui.equipmentWindow.Toggle(ctx) }},
+	{"Skills", func(m *WorldMode, ctx client.Context) { m.ui.skillWindow.Toggle(ctx) }},
+	{"Stats", func(m *WorldMode, ctx client.Context) { m.ui.statsWindow.Toggle(ctx) }},
+	{"Quests", func(m *WorldMode, ctx client.Context) { m.ui.questWindow.Toggle(ctx) }},
+	{"World Map", func(m *WorldMode, ctx client.Context) {
 		if err := m.ui.worldMap.Toggle(ctx); err != nil {
 			m.ui.console.AddErrorMessage("%s", err.Error())
 		}
-	case 7:
-		m.ui.console.OpenForTyping(ctx)
-	case 8:
-		m.camera.ResetView()
-	case 9:
-		m.ui.settingsWindow.OpenWindow(ctx)
-	case 10:
+	}},
+	{"Chat", func(m *WorldMode, ctx client.Context) { m.ui.console.OpenForTyping(ctx) }},
+	{"Hotbar", func(m *WorldMode, ctx client.Context) { m.ui.hotbar.shown = !m.ui.hotbar.shown }},
+	{"Reset Camera", func(m *WorldMode, ctx client.Context) { m.camera.ResetView() }},
+	{"Settings", func(m *WorldMode, ctx client.Context) { m.ui.settingsWindow.OpenWindow(ctx) }},
+	{"Screenshot", func(m *WorldMode, ctx client.Context) {
 		if path, err := ctx.RequestScreenshot(); err == nil {
 			m.ui.console.AddSystemMessage("Screenshot: %s", path)
 		} else {
 			m.ui.console.AddErrorMessage("screenshot failed: %s", err.Error())
 		}
-	case 11:
+	}},
+	{"Exit Game", func(m *WorldMode, ctx client.Context) {
 		if ctx.RequestQuit != nil {
 			ctx.RequestQuit()
 		}
-	}
+	}},
 }
 
-var heldMenuItems = []string{
-	"Sit/Stand", "Items", "Equipment", "Skills", "Stats", "Quests", "World Map", "Chat", "Reset Camera", "Settings", "Screenshot", "Exit Game",
-}
+var heldMenuItems = func() []string {
+	labels := make([]string, len(heldMenuEntries))
+	for i, entry := range heldMenuEntries {
+		labels[i] = entry.label
+	}
+	return labels
+}()
 
 // closeActiveHandheldWindow closes whatever the handheld layer opened last
 // (B button). Stacked windows close top-first: item descriptions and card
 // artwork sit on top of the inventory, so walking the stack down means B
 // never closes the inventory out from under a detail window — and never
-// closes the whole stack in one press.
-func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) {
+// closes the whole stack in one press. It reports whether anything closed;
+// on the plain screen the caller lets B use the hotbar instead.
+func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) bool {
 	if m.ui.itemWindows.CloseTopDescription(ctx) {
-		return
+		return true
 	}
 	if m.ui.itemWindows.CloseTopIllustration(ctx) {
-		return
+		return true
 	}
 	if m.ui.skillWindow.CloseTopDetail(ctx) {
-		return
+		return true
 	}
+	closed := false
 	switch {
 	case m.ui.settingsWindow.IsOpen():
 		m.ui.settingsWindow.Toggle(ctx)
+		closed = true
 	case m.ui.statsWindow.IsOpen():
 		m.ui.statsWindow.Toggle(ctx)
+		closed = true
 	case m.ui.inventoryBag.IsOpen():
 		m.ui.inventoryBag.Toggle(ctx)
+		closed = true
 	case m.ui.equipmentWindow.IsOpen():
 		m.ui.equipmentWindow.Toggle(ctx)
+		closed = true
 	case m.ui.skillWindow.IsOpen():
 		m.ui.skillWindow.Toggle(ctx)
+		closed = true
 	case m.ui.questWindow.IsOpen():
 		m.ui.questWindow.Toggle(ctx)
+		closed = true
 	case m.ui.worldMap.IsOpen():
 		if err := m.ui.worldMap.Toggle(ctx); err != nil {
 			m.ui.console.AddErrorMessage("%s", err.Error())
 		}
+		closed = true
 	}
+	return closed
 }
 
 // updateHeldMenuInput drives the direct-drawn MENU overlay: d-pad moves the
@@ -255,6 +276,16 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		m.updateHeldMenuInput(ctx, now)
 		return true
 	}
+	// L2/R2 step the hotbar's active slot. They work everywhere — windows
+	// open or not, bar shown or hidden.
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF23) {
+		m.ui.hotbar.cycle(-1)
+		return true
+	}
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF24) {
+		m.ui.hotbar.cycle(1)
+		return true
+	}
 	// The large map overlay owns every button while shown; X or B dismisses
 	// it. The small corner thumbnail does not: play continues around it.
 	if m.mapOverlay == 2 {
@@ -264,9 +295,14 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		return true
 	}
 	// B closes the active (topmost relevant) window. Checked before the
-	// walk layer so B never walks or attacks while dismissing a window.
+	// walk layer so B never walks or attacks while dismissing a window. On
+	// the plain screen, with nothing to close, B uses the hotbar's active
+	// slot instead.
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
-		m.closeActiveHandheldWindow(ctx)
+		if m.closeActiveHandheldWindow(ctx) {
+			return true
+		}
+		m.useHotbarActive(ctx)
 		return true
 	}
 	// The stats window owns the d-pad while open: up/down (or left/right)
@@ -318,13 +354,28 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 			return true
 		}
 		// X inspects the card in the selected slot of the top-most
-		// description window.
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) && m.ui.itemWindows.HasOpenDescriptions() {
-			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
-				m.gamepadActionAt = now
-				m.ui.itemWindows.GamepadOpenSelectedCard(ctx)
+		// description window; with no description open, X on the Item/Equip
+		// tabs fills the next hotbar slot with the selected item (the Etc
+		// tab keeps X inert).
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
+			consumed := false
+			if m.ui.itemWindows.HasOpenDescriptions() {
+				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+					m.gamepadActionAt = now
+					m.ui.itemWindows.GamepadOpenSelectedCard(ctx)
+				}
+				consumed = true
+			} else if m.ui.inventoryBag.GamepadTabAllowsHotbar() {
+				if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
+					m.ui.hotbar.addItem(item)
+					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
+				}
+				consumed = true
 			}
-			return true
+			if consumed {
+				return true
+			}
 		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
@@ -432,7 +483,21 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 			m.ui.skillWindow.GamepadTab(ctx, 1)
 			return true
 		}
+		// X fills the next hotbar slot with the selected skill; START flips
+		// the table/tree view (X owned the view toggle before the hotbar
+		// needed the button).
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				if skill, ok := m.ui.skillWindow.GamepadSelectedSkill(ctx); ok {
+					m.ui.hotbar.addSkill(skill.ID)
+					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, skillLabel(skill)))
+				}
+			}
+			return true
+		}
+		if ctx.Input.JustPressed(input.KeyEnter) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
 				m.ui.skillWindow.GamepadToggleMode(ctx)

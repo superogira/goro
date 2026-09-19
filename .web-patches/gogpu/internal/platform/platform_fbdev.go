@@ -139,6 +139,7 @@ const (
 	btnL1     = 0x134 // physical L1 (BTN_WEST slot on standard pads)
 	btnR1     = 0x135 // physical R1 (BTN_TL slot on standard pads)
 	btnL2     = 0x136 // physical L2 (BTN_TR slot on standard pads)
+	btnR2     = 0x141 // physical R2 — the one gamepad-range code in the capability bitmap outside the confirmed set; probe-pending
 	btnStart  = 0x137 // physical START on this unit (labeled R2 in early rounds)
 	btnMenu   = 0x138 // physical MENU (BTN_TR2 slot on standard pads)
 	btnSelect = 0x139
@@ -1116,8 +1117,24 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			return
 		}
 	case btnL2:
-		// L2 has no edge action yet — held for combos only.
+		// L2/R2 step the handheld hotbar: press edges dispatch F23/F24.
 		p.setHeld(code, down)
+		if down {
+			p.dispatchKey(gpucontext.KeyF23, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF23, false)
+			}()
+		}
+	case btnR2:
+		p.setHeld(code, down)
+		if down {
+			p.dispatchKey(gpucontext.KeyF24, true)
+			go func() {
+				time.Sleep(120 * time.Millisecond)
+				p.dispatchKey(gpucontext.KeyF24, false)
+			}()
+		}
 	case btnMenu:
 		// Physical MENU (0x138 on this hardware): hold ≥3s quits via the
 		// quit watcher (long, because MENU+d-pad is the camera combo and

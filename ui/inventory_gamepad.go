@@ -101,3 +101,43 @@ func (w *InventoryBagWindow) GamepadInfo(ctx Context) {
 	}
 	w.itemInfo.openItem(ctx, items[w.gamepadSelected], w.x+inventoryBagWidth-30, w.y+40)
 }
+
+// GamepadSelectedItem reports the item under the handheld cursor.
+func (w *InventoryBagWindow) GamepadSelectedItem(ctx Context) (session.InventoryItem, bool) {
+	if !w.IsOpen() {
+		return session.InventoryItem{}, false
+	}
+	items := w.tabItems(ctx.Session)
+	if w.gamepadSelected < 0 || w.gamepadSelected >= len(items) {
+		return session.InventoryItem{}, false
+	}
+	return items[w.gamepadSelected], true
+}
+
+// GamepadTabKind reports the current tab constant (Item/Equip/Etc).
+func (w *InventoryBagWindow) GamepadTabKind() int {
+	return w.tab
+}
+
+// GamepadTabAllowsHotbar reports whether the current tab may add items to
+// the handheld hotbar (Item and Equip only, per the hotbar design).
+func (w *InventoryBagWindow) GamepadTabAllowsHotbar() bool {
+	return w.tab == inventoryBagTabItem || w.tab == inventoryBagTabEquip
+}
+
+// UseByIndex activates the inventory item at the given list position — the
+// hotbar's use path (same double-click semantics as clicking the item).
+func (w *InventoryBagWindow) UseByIndex(ctx Context, index int) {
+	if !w.IsOpen() && index < 0 {
+		return
+	}
+	if index < 0 || index >= len(ctx.Session.Inventory.Items) {
+		return
+	}
+	w.dragActive = false
+	w.dragItem = session.InventoryItem{}
+	w.activateItem(ctx, ctx.Session.Inventory.Items[index])
+	if w.IsOpen() {
+		w.refresh(ctx, w.itemInfo)
+	}
+}

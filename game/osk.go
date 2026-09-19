@@ -170,6 +170,7 @@ func (osk *onScreenKeyboard) inject(ctx client.Context) {
 	if key.special == "enter" {
 		oskSubmittedFlag = true
 		osk.open = false
+		render.SetOSKActive(false)
 		if oskCallback != nil {
 			oskCallback("", "submit")
 		}
@@ -238,8 +239,9 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 		osk.inject(ctx)
 		return true
 	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18):
-		// B (already handled above for backspace, but also close).
+		// B: close the keyboard.
 		osk.open = false
+		render.SetOSKActive(false)
 		return true
 	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyEnter):
 		// START tap: submit the focused field.
@@ -295,7 +297,7 @@ func drawOSK(screen *render.Frame) {
 	w := float64(gridW + 24)
 	h := float64(gridH + 24 + 28) // grid + preview line + padding
 	x := (float64(bounds.Dx()) - w) / 2
-	y := float64(bounds.Dy()) - h - 8
+	y := 8.0 // Top of the screen: clear of the login form below
 
 	render.DrawRect(screen, x, y, w, h, c.panel)
 	render.DrawRect(screen, x, y, w, 3, c.border)
@@ -362,6 +364,7 @@ func tryOpenOSK(textFocused bool) {
 		osk.open = true
 		osk.row, osk.col = 0, 0
 		osk.preview = ""
+		render.SetOSKActive(true)
 	}
 }
 

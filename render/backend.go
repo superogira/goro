@@ -582,11 +582,19 @@ func newFanoutEventSource(source gpucontext.EventSource) *fanoutEventSource {
 		}
 	})
 	source.OnMousePress(func(button gpucontext.MouseButton, x, y float64) {
+		if oskActive.Load() {
+			// The on-screen keyboard is open: the A button's companion
+			// mouse click must not reach the widget tree.
+			return
+		}
 		for _, fn := range f.mousePress {
 			fn(button, x, y)
 		}
 	})
 	source.OnMouseRelease(func(button gpucontext.MouseButton, x, y float64) {
+		if oskActive.Load() {
+			return
+		}
 		for _, fn := range f.mouseRelease {
 			fn(button, x, y)
 		}
@@ -2784,4 +2792,22 @@ func (r *runner) drawUpdateProgress(screen *Frame) {
 		}
 		DrawRect(screen, barX, barY, fillW, 12, color.RGBA{R: 120, G: 170, B: 235, A: 255})
 	}
+}
+
+// oskActive gates the UI widget event dispatch while the on-screen
+// keyboard is open: the A button's companion mouse click fires through
+// the platform's event callbacks before game.Update runs, so the only
+// reliable block is suppressing the dispatch itself.
+var oskActive atomic.Bool
+
+// SetOSKActive tells the render backend to suppress (or resume) mouse
+// event dispatch to the widget tree.
+func SetOSKActive(active bool) {
+	oskActive.Store(active)
+}
+
+// OSKActive reports whether the on-screen keyboard is blocking widget
+// mouse input.
+func OSKActive() bool {
+	return oskActive.Load()
 }

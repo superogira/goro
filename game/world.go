@@ -1804,8 +1804,10 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	}
 	now := time.Now()
 	m.drawShowDigit(screen, ctx, now)
-	// The always-on handheld vitals readout: HP/SP, EXP, weight.
-	if !hudHidden(ctx) && ctx.Session != nil {
+	// The always-on handheld vitals readout: HP/SP, EXP, weight. Not gated
+	// on HideHUD — the handheld branch draws its own HUD layer and the flag
+	// only suppresses the permanent desktop HUD placement.
+	if ctx.Session != nil {
 		vitals := ctx.Session.Vitals
 		progress := ctx.Session.Progress
 		inventory := ctx.Session.Inventory

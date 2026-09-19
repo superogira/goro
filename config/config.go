@@ -27,6 +27,7 @@ type Config struct {
 	Audio         AudioConfig
 	Render        RenderConfig
 	Network       NetworkConfig
+	Update        UpdateConfig
 	Fog           FogConfig
 	Gameplay      GameplayConfig
 	Script        ScriptConfig
@@ -122,6 +123,14 @@ type NetworkConfig struct {
 	// system resolver — for devices whose local DNS misresolves DDNS
 	// hostnames ("8.8.8.8"). Empty uses the system resolver only.
 	DNS string
+}
+
+// UpdateConfig drives the boot-time self update: version.txt and the goro
+// binary are fetched from BaseURL when the advertised build differs from
+// the running one.
+type UpdateConfig struct {
+	Enabled bool
+	BaseURL string
 }
 
 type FogConfig struct {
@@ -390,6 +399,10 @@ func defaultConfig() Config {
 		Fog: FogConfig{
 			Enabled: true,
 		},
+		Update: UpdateConfig{
+			Enabled: true,
+			BaseURL: "http://ro.catgg.net/webro",
+		},
 		Gameplay: GameplayConfig{
 			NoCtrl:    true,
 			SnapRadius: 1,
@@ -626,6 +639,10 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Network.Trace)
 	case "network.dns":
 		cfg.Network.DNS = strings.TrimSpace(value)
+	case "update.enabled":
+		return setBool(value, &cfg.Update.Enabled)
+	case "update.url":
+		cfg.Update.BaseURL = strings.TrimSpace(value)
 	case "fog.enabled":
 		return setBool(value, &cfg.Fog.Enabled)
 	case "gameplay.noshift":

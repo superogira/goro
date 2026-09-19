@@ -5,9 +5,19 @@ set -e
 cd "$(dirname "$0")"
 
 echo "== cross-compiling goro (linux/arm64) =="
+# The build id feeds the boot-time self update (app.RunSelfUpdate
+# compares it against version.txt on the update server).
+VERSION="$(git rev-parse --short HEAD)-$(date +%Y%m%d%H%M)"
+echo "build version: $VERSION"
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-  go build -tags nofakecgo -ldflags "-s -w" \
+  go build -tags nofakecgo \
+  -ldflags "-s -w -X github.com/kivutar/goro/app.buildVersion=$VERSION" \
   -o dist/rg35xx/GorORG35/goro .
+# version.txt + checksum for publishing to the update server.
+if command -v sha256sum >/dev/null 2>&1; then
+  printf '%s\n%s\n' "$VERSION" "$(sha256sum dist/rg35xx/GorORG35/goro | cut -d' ' -f1)" \
+    > dist/rg35xx/version.txt
+fi
 
 echo "== copying launcher + config =="
 # tr -d '\r' guards against a CRLF checkout (core.autocrlf on Windows):

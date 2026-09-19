@@ -36,6 +36,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/gogpu/gogpu/hooks"
 	"github.com/gogpu/gogpu/internal/platform/eventqueue"
 	"github.com/gogpu/gpucontext"
 	"golang.org/x/sys/unix"
@@ -1044,6 +1045,15 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// physical tap dispatched the action twice (double advance on the
 		// login screens, which is why they skipped even with the press
 		// floor in place — the floor never ran on the release path).
+		//
+		// The OSK hook short-circuits everything: when the on-screen
+		// keyboard is open, the button goes straight to the game's
+		// keyboard handler (the fbdev event pipeline's key state never
+		// reaches game.Update on this backend).
+		if down && hooks.OSKButtonHook != nil {
+			hooks.OSKButtonHook(0) // A
+			return
+		}
 		if down {
 			p.pointerButton(gpucontext.ButtonsLeft, true)
 			p.dispatchKey(gpucontext.KeyF13, true)

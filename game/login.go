@@ -215,7 +215,9 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	// without the widget tree updating.
 	if ctx.Input != nil {
 		if oskState().open {
+			glog.Infof("osk: LoginMode.Update with OSK open")
 			oskCallback = func(ch string, action string) {
+				glog.Infof("osk: callback ch=%q action=%q loginWindow=%v", ch, action, m.loginWindow != nil)
 				if m.loginWindow != nil {
 					m.loginWindow.TypeIntoFocusedField(ch, action)
 				}

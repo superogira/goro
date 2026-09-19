@@ -6,9 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogpu/gogpu/hooks"
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/input"
+	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/render"
 )
 
@@ -23,8 +25,12 @@ var osk onScreenKeyboard
 
 // oskShared carries the pacing timestamps without a mode receiver.
 var oskShared = struct {
-	actionAt time.Time
-	movedAt  time.Time
+	actionAt   time.Time
+	movedAt    time.Time
+	aLatch     bool
+	bLatch     bool
+	enterLatch bool
+	selLatch   bool
 }{}
 
 func oskState() *onScreenKeyboard { return &osk }
@@ -144,8 +150,9 @@ func (osk *onScreenKeyboard) move(dx, dy int) {
 var oskCallback func(ch string, action string) // action: "type", "bksp", "submit"
 
 // inject sends the key's effect to the host via the callback.
-func (osk *onScreenKeyboard) inject(ctx client.Context) {
+func (osk *onScreenKeyboard) inject(_ client.Context) {
 	key := osk.currentKey()
+	glog.Infof("osk: inject key=%q special=%q row=%d col=%d callback=%v", key.label, key.special, osk.row, osk.col, oskCallback != nil)
 	if key.special == "shift" {
 		osk.shift = !osk.shift
 		return
@@ -219,40 +226,54 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	if !osk.open {
 		return false
 	}
+	glog.Infof("osk: update called, F13=%v F18=%v Enter=%v input=%v", 
+		ctx.Input != nil && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13),
+		ctx.Input != nil && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18),
+		ctx.Input != nil && ctx.Input.KeyCodeJustPressed(gpucontext.KeyEnter),
+		ctx.Input != nil)
 	// The A button's companion mouse click must not reach the form under
 	// the keyboard — clear both buttons every frame while the OSK is open.
 	if ctx.Input != nil {
 		ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
 		ctx.Input.SetMouseButton(input.MouseButtonRight, false)
 	}
+	// Use KeyCodeDown (held state) with latches: the platform's key press
+	// edges (JustPressed) are cleared by EndFrame between the event dispatch
+	// and game.Update on the fbdev backend, so edges never reach the game
+	// layer. The held state persists across frames (A is held >= 80ms).
+	floored := now.Sub(oskShared.actionAt) >= gamepadActionFloor
 	switch {
-	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13):
-		// A: type the key.
-		if now.Sub(oskShared.actionAt) >= gamepadActionFloor {
-			oskShared.actionAt = now
-			osk.inject(ctx)
-		}
+	case ctx.Input.KeyCodeDown(gpucontext.KeyF13) && !oskShared.aLatch && floored:
+		oskShared.aLatch = true
+		oskShared.actionAt = now
+		glog.Infof("osk: A down, injecting key=%q", osk.currentKey().label)
+		osk.inject(ctx)
 		return true
-	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18):
-		// B: backspace (hold to close if the field is already empty).
+	case !ctx.Input.KeyCodeDown(gpucontext.KeyF13):
+		oskShared.aLatch = false
+	case ctx.Input.KeyCodeDown(gpucontext.KeyF18) && !oskShared.bLatch:
+		oskShared.bLatch = true
+		// B: backspace (navigate to the bksp cell and inject).
 		osk.row, osk.col = len(osk.rows())-1, 2
 		osk.inject(ctx)
 		return true
-	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18):
-		// B: close the keyboard.
-		osk.open = false
-		render.SetOSKActive(false)
-		return true
-	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyEnter):
-		// START tap: submit the focused field.
+	case !ctx.Input.KeyCodeDown(gpucontext.KeyF18):
+		oskShared.bLatch = false
+	case ctx.Input.KeyCodeDown(gpucontext.KeyEnter) && !oskShared.enterLatch:
+		oskShared.enterLatch = true
+		// START: submit.
 		osk.row, osk.col = len(osk.rows())-1, len(osk.rows()[len(osk.rows())-1])-1
 		osk.inject(ctx)
 		return true
-	case ctx.Input.KeyCodeJustPressed(gpucontext.KeyPrintScreen):
-		// SELECT: toggle the symbols page.
+	case !ctx.Input.KeyCodeDown(gpucontext.KeyEnter):
+		oskShared.enterLatch = false
+	case ctx.Input.KeyCodeDown(gpucontext.KeyPrintScreen) && !oskShared.selLatch:
+		oskShared.selLatch = true
 		osk.symbols = !osk.symbols
 		osk.row, osk.col = 0, 0
 		return true
+	case !ctx.Input.KeyCodeDown(gpucontext.KeyPrintScreen):
+		oskShared.selLatch = false
 	}
 	dx, dy := 0, 0
 	if ctx.Input.JustPressed(input.KeyArrowLeft) {
@@ -365,6 +386,8 @@ func tryOpenOSK(textFocused bool) {
 		osk.row, osk.col = 0, 0
 		osk.preview = ""
 		render.SetOSKActive(true)
+		setupOSKHook()
+		glog.Infof("osk: opened, hook installed")
 	}
 }
 
@@ -387,4 +410,33 @@ func oskJustSubmitted() bool {
 	v := oskSubmittedFlag
 	oskSubmittedFlag = false
 	return v
+}
+
+// setupOSKHook wires the platform's button dispatch directly to the OSK
+// (the fbdev event pipeline's key state never reaches game.Update).
+func setupOSKHook() {
+	hooks.OSKButtonHook = func(button int) {
+		osk := oskState()
+		if !osk.open {
+			return
+		}
+		switch button {
+		case 0: // A: type the selected key
+			osk.inject(client.Context{})
+		case 1: // B: close
+			osk.open = false
+			render.SetOSKActive(false)
+		case 2: // START: submit
+			osk.row, osk.col = len(osk.rows())-1, len(osk.rows()[len(osk.rows())-1])-1
+			osk.inject(client.Context{})
+		case 3: // SELECT: toggle symbols
+			osk.symbols = !osk.symbols
+			osk.row, osk.col = 0, 0
+		}
+	}
+}
+
+// teardownOSKHook removes the platform hook.
+func teardownOSKHook() {
+	hooks.OSKButtonHook = nil
 }

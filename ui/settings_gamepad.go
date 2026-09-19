@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/render"
 )
 
 // Handheld rows for the settings window: d-pad up/down walks the entries,
@@ -52,11 +54,12 @@ func (w *SettingsWindow) settingsRows() []settingsRow {
 			}
 			w.saveSettings(ctx)
 		}},
-		{kind: settingsRowChoice, label: "Resolution", value: func(ctx client.Context) string {
-			return fmt.Sprintf("%d%%", int(settingsResolutionScale(ctx)*100))
+		{kind: settingsRowChoice, label: settingsResolutionLabel(), value: func(ctx client.Context) string {
+			return fmt.Sprintf("%d%%", int(math.Round(settingsResolutionScale(ctx)*100)))
 		}, adjust: func(ctx client.Context, delta int) {
-			index := settingsResolutionIndex(ctx)
-			index += delta
+			// The options run 100%→50%; stepping toward 100% is the
+			// "increase" direction, so right (delta > 0) lowers the index.
+			index := settingsResolutionIndex(ctx) - delta
 			if index < 0 {
 				index = 0
 			}
@@ -67,9 +70,14 @@ func (w *SettingsWindow) settingsRows() []settingsRow {
 				ctx.Runtime.SetResolutionScale(float64(resolutionScaleOptions[index]) / 100)
 			}
 			w.saveSettings(ctx)
+			if !settingsWebEnabled() {
+				// Native keeps the startup resolution until relaunch; the
+				// pick only lands after a restart.
+				render.ShowScreenNotice("Resolution applies after restart")
+			}
 		}},
 		{kind: settingsRowChoice, label: "BGM Volume", value: func(ctx client.Context) string {
-			return fmt.Sprintf("%d%%", int(settingsVolumeBGM(ctx)*100))
+			return fmt.Sprintf("%d%%", int(math.Round(settingsVolumeBGM(ctx)*100)))
 		}, adjust: func(ctx client.Context, delta int) {
 			volume := clampVolumeStep(settingsVolumeBGM(ctx) + float64(delta)*0.1)
 			if ctx.Audio != nil {
@@ -78,7 +86,7 @@ func (w *SettingsWindow) settingsRows() []settingsRow {
 			w.saveSettings(ctx)
 		}},
 		{kind: settingsRowChoice, label: "SFX Volume", value: func(ctx client.Context) string {
-			return fmt.Sprintf("%d%%", int(settingsVolumeSFX(ctx)*100))
+			return fmt.Sprintf("%d%%", int(math.Round(settingsVolumeSFX(ctx)*100)))
 		}, adjust: func(ctx client.Context, delta int) {
 			volume := clampVolumeStep(settingsVolumeSFX(ctx) + float64(delta)*0.1)
 			if ctx.Audio != nil {
@@ -145,6 +153,15 @@ func (w *SettingsWindow) settingsRows() []settingsRow {
 			w.saveSettings(ctx)
 		}},
 	}
+}
+
+// settingsResolutionLabel flags the restart requirement on native builds,
+// where the live retarget is web-only.
+func settingsResolutionLabel() string {
+	if settingsWebEnabled() {
+		return "Resolution"
+	}
+	return "Resolution (Restart)"
 }
 
 func settingsOnOff(enabled bool) string {

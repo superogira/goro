@@ -1183,7 +1183,10 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			}
 		}
 	case btnSelect:
-		key = gpucontext.KeyEscape
+		// SELECT is the handheld's dedicated hotbar-fill button; it no
+		// longer rides Escape (the windows' Escape-close contract stays for
+		// the desktop keyboard) and gets its own key.
+		key = gpucontext.KeyPrintScreen
 		p.setHeld(btnSelect, down)
 	case keyVolDown, keyVolUp:
 		// Volume keys: with MENU held they step the panel backlight (the
@@ -1231,16 +1234,16 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// Standard BTN_MODE — not this hardware's MENU, kept for safety.
 		p.setHeld(btnMode, down)
 	case btnSel0:
-		// Physical SELECT (0x162 on this hardware) — Escape for the game
-		// and a quit-combo button for the watcher. The firmware echoes a
-		// SELECT press right after every MENU release; swallow that echo
-		// (still tracked as held for the quit combos).
+		// Physical SELECT (0x162 on this hardware) — the hotbar-fill key
+		// for the game and a quit-combo button for the watcher. The
+		// firmware echoes a SELECT press right after every MENU release;
+		// swallow that echo (still tracked as held for the quit combos).
 		p.setHeld(btnSel0, down)
 		p.inputMu.Lock()
 		echo := down && time.Now().Before(p.suppressSel0Until)
 		p.inputMu.Unlock()
 		if !echo {
-			key = gpucontext.KeyEscape
+			key = gpucontext.KeyPrintScreen
 		}
 	case btnThumbl:
 		key = gpucontext.KeyTab

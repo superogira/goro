@@ -166,7 +166,7 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) bool {
 // close it within the same frame (observed as open=true logs with nothing
 // rendered and walking continuing underneath).
 func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
-	if ctx.Input.JustPressed(input.KeyEscape) {
+	if ctx.Input.JustPressed(input.KeyEscape) || ctx.Input.KeyCodeJustPressed(gpucontext.KeyPrintScreen) {
 		m.setHeldMenuOpen(ctx, false)
 		return
 	}
@@ -377,6 +377,20 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 				return true
 			}
 		}
+		// SELECT (its own PrintScreen key) is the dedicated hotbar-fill
+		// button: it adds the selected item on the Item/Equip tabs even
+		// while a description window is open.
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyPrintScreen) && m.ui.inventoryBag.GamepadTabAllowsHotbar() {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
+					m.ui.hotbar.addItem(item)
+					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
+				}
+			}
+			return true
+		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
@@ -483,10 +497,10 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 			m.ui.skillWindow.GamepadTab(ctx, 1)
 			return true
 		}
-		// X fills the next hotbar slot with the selected skill; START flips
-		// the table/tree view (X owned the view toggle before the hotbar
-		// needed the button).
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
+		// SELECT (its own PrintScreen key) fills the next hotbar slot with
+		// the selected skill — the dedicated hotbar-fill button, matching
+		// the inventory. START and X both flip the table/tree view.
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyPrintScreen) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
 				if skill, ok := m.ui.skillWindow.GamepadSelectedSkill(ctx); ok {
@@ -497,7 +511,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 			}
 			return true
 		}
-		if ctx.Input.JustPressed(input.KeyEnter) {
+		if ctx.Input.JustPressed(input.KeyEnter) || ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
 				m.ui.skillWindow.GamepadToggleMode(ctx)

@@ -25,14 +25,16 @@ import (
 )
 
 type WorldMode struct {
-	mail                mailState
-	walkCooldownUntil   time.Time
-	nextHeldWalkAt      time.Time
-	gamepadDirLogged    bool
-	gamepadCameraAt     time.Time
-	heldMenuOpen        bool
-	menuPanelsShown     bool
-	bigMapShown         bool
+	mail              mailState
+	walkCooldownUntil time.Time
+	nextHeldWalkAt    time.Time
+	gamepadDirLogged  bool
+	gamepadCameraAt   time.Time
+	heldMenuOpen      bool
+	menuPanelsShown   bool
+	// mapOverlay is the handheld X-button map cycle: 0 hidden, 1 corner
+	// thumbnail, 2 large centered map.
+	mapOverlay          int
 	heldMenuSel         int
 	heldMenuMovedAt     time.Time
 	heldMenuActivatedAt time.Time
@@ -1829,10 +1831,10 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	m.ui.guildWindow.DrawTooltip(ctx, screen)
 	m.ui.shortcutBar.DrawTooltip(ctx, screen)
 	m.ui.itemPickup.Draw(screen, ctx, m, now)
-	// The frameless big-map overlay (X on the plain screen) sits on top of
-	// the world but under the direct MENU overlay.
-	if m.bigMapShown {
-		m.ui.minimap.DrawLargeMap(ctx, screen)
+	// The frameless map overlay (X on the plain screen) sits on top of the
+	// world but under the direct MENU overlay.
+	if m.mapOverlay > 0 {
+		m.ui.minimap.DrawMapOverlay(ctx, screen, m.mapOverlay == 2)
 	}
 }
 

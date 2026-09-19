@@ -179,13 +179,9 @@ func (m *WorldMode) updateHeldMenuInput(ctx client.Context, now time.Time) {
 	if step == 0 {
 		step = dx
 	}
-	m.heldMenuSel += step
-	if m.heldMenuSel < 0 {
-		m.heldMenuSel = 0
-	}
-	if m.heldMenuSel >= len(heldMenuItems) {
-		m.heldMenuSel = len(heldMenuItems) - 1
-	}
+	// Wrap-around: past either end the selection loops to the other side.
+	count := len(heldMenuItems)
+	m.heldMenuSel = ((m.heldMenuSel+step)%count + count) % count
 }
 
 // drawHeldMenu renders the overlay with immediate primitives only —
@@ -259,11 +255,11 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		m.updateHeldMenuInput(ctx, now)
 		return true
 	}
-	// The big-map overlay owns every button while shown; X toggles it away,
-	// B dismisses it.
-	if m.bigMapShown {
+	// The large map overlay owns every button while shown; X or B dismisses
+	// it. The small corner thumbnail does not: play continues around it.
+	if m.mapOverlay == 2 {
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) || ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
-			m.bigMapShown = false
+			m.mapOverlay = 0
 		}
 		return true
 	}
@@ -532,8 +528,8 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		return false
 	}
 	// Plain-screen shortcuts: Y opens the inventory (the window branches
-	// above have already consumed Y while any window was open), X toggles
-	// the frameless big-map overlay.
+	// above have already consumed Y while any window was open), X cycles
+	// the frameless map overlay: corner thumbnail, large map, hidden.
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
 		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 			m.gamepadActionAt = now
@@ -544,7 +540,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
 		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 			m.gamepadActionAt = now
-			m.bigMapShown = !m.bigMapShown
+			m.mapOverlay = (m.mapOverlay + 1) % 3
 		}
 		return true
 	}

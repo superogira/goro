@@ -233,11 +233,12 @@ func (m *Minimap) Hide(ctx Context) {
 	}
 }
 
-// DrawLargeMap renders the frameless full-map overlay (the handheld X
-// button on the plain screen): the map bitmap centered at ~78% of the
-// screen with the player marker, map name, and coordinates. Direct draw —
-// no window, no widget tree.
-func (m *Minimap) DrawLargeMap(ctx Context, screen *render.Frame) {
+// DrawMapOverlay renders the frameless map overlay for the handheld X
+// button cycle. The small pass parks a corner thumbnail (map + player
+// marker only) at the top-right; the large pass centers the map at ~78% of
+// the screen with the map name and coordinates. Direct draw — no window, no
+// widget tree.
+func (m *Minimap) DrawMapOverlay(ctx Context, screen *render.Frame, large bool) {
 	if screen == nil || ctx.World == nil || ctx.World.MapName == "" {
 		return
 	}
@@ -249,18 +250,27 @@ func (m *Minimap) DrawLargeMap(ctx Context, screen *render.Frame) {
 	bounds := screen.Bounds()
 	screenW := float64(bounds.Dx())
 	screenH := float64(bounds.Dy())
-	size := int(math.Min(screenW, screenH) * 0.78)
+
+	var size int
+	var x, y int
+	if large {
+		size = int(math.Min(screenW, screenH) * 0.78)
+		x = int((screenW - float64(size)) / 2)
+		y = int((screenH - float64(size)) / 2)
+		// Dimmed backdrop and a thin dark mat instead of a window frame.
+		render.DrawRect(screen, 0, 0, screenW, screenH, color.RGBA{A: 110})
+		render.DrawRect(screen, float64(x)-3, float64(y)-3, float64(size)+6, float64(size)+6, color.RGBA{A: 210})
+	} else {
+		size = 140
+		x = int(screenW) - size - minimapMargin
+		y = minimapMargin
+		render.DrawRect(screen, float64(x)-2, float64(y)-2, float64(size)+4, float64(size)+4, color.RGBA{A: 190})
+	}
+
 	mapImage := m.scaledImage(size)
 	if mapImage == nil {
 		return
 	}
-	x := int((screenW - float64(size)) / 2)
-	y := int((screenH - float64(size)) / 2)
-
-	// Dimmed backdrop and a thin dark mat instead of a window frame.
-	render.DrawRect(screen, 0, 0, screenW, screenH, color.RGBA{A: 110})
-	render.DrawRect(screen, float64(x)-3, float64(y)-3, float64(size)+6, float64(size)+6, color.RGBA{A: 210})
-
 	var opts render.DrawImageOptions
 	opts.GeoM.Translate(float64(x), float64(y))
 	opts.Filter = render.FilterLinear
@@ -272,16 +282,23 @@ func (m *Minimap) DrawLargeMap(ctx Context, screen *render.Frame) {
 		arrow := m.playerArrow(ctx.World.Player.Dir)
 		if arrow != nil {
 			var arrowOpts render.DrawImageOptions
-			bounds := arrow.Bounds()
-			arrowOpts.GeoM.Translate(float64(px-bounds.Dx()/2), float64(py-bounds.Dy()/2))
+			arrowBounds := arrow.Bounds()
+			arrowOpts.GeoM.Translate(float64(px-arrowBounds.Dx()/2), float64(py-arrowBounds.Dy()/2))
 			arrowOpts.Filter = render.FilterNearest
 			screen.DrawImage(m.largeRenderImage(arrow), &arrowOpts)
 		}
 		// A contrasting ring around the marker keeps it visible on any map.
-		render.DrawRect(screen, float64(px-7), float64(py-1), 14, 2, color.RGBA{A: 170})
-		render.DrawRect(screen, float64(px-1), float64(py-7), 2, 14, color.RGBA{A: 170})
+		ring := 7
+		if !large {
+			ring = 5
+		}
+		render.DrawRect(screen, float64(px-ring), float64(py-1), float64(ring*2), 2, color.RGBA{A: 170})
+		render.DrawRect(screen, float64(px-1), float64(py-ring), 2, float64(ring*2), color.RGBA{A: 170})
 	}
 
+	if !large {
+		return
+	}
 	name := trimRunes(minimapDisplayName(ctx.World.MapName), 26)
 	render.DrawUIOutlinedTextAt(screen, name, float64(x), float64(y+size+8), miniHUDText, color.RGBA{A: 200})
 	coords := fmt.Sprintf("X:%d Y:%d", ctx.World.Player.X, ctx.World.Player.Y)

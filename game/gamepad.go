@@ -302,6 +302,17 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	if m.updateGamepadStorageDeposit(ctx, now) {
 		return true
 	}
+	// The on-screen keyboard owns every button while open (d-pad navigates,
+	// A types, B backspaces, START submits, SELECT toggles symbols).
+	if updateGamepadOSK(ctx, now) {
+		return true
+	}
+	// START opens the on-screen keyboard when a text field has focus (the
+	// chat console, or any modal input).
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF17) && (m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx)) {
+		tryOpenOSK(m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx))
+		return true
+	}
 	// B closes the active (topmost relevant) window. Checked before the
 	// walk layer so B never walks or attacks while dismissing a window. On
 	// the plain screen, with nothing to close, B uses the hotbar's active

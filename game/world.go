@@ -1848,6 +1848,7 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 		m.ui.minimap.DrawMapOverlay(ctx, screen, m.mapOverlay == 2)
 	}
 	m.drawStorageDeposit(screen)
+	drawOSK(screen)
 }
 
 func (m *WorldMode) drawUIDragGhosts(screen *render.Frame, ctx client.Context) {

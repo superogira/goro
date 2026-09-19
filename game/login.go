@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
-	"github.com/kivutar/goro/client"
 	gameaudio "github.com/kivutar/goro/audio"
+	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -37,7 +38,7 @@ type LoginMode struct {
 	username            string
 	password            string
 	background          *render.Image
-	loadingBG            *render.Image
+	loadingBG           *render.Image
 	bgTiles             []*render.Image
 	titleWebBG          string
 	titleWebPhase       string
@@ -64,16 +65,16 @@ type LoginMode struct {
 	charDeletePrompt    gameui.TextPromptWindow
 	deleteCharID        uint32
 	// DOM character select state (web build; plain data on native).
-	charWebBG           string
-	charWebSyncKey      string
-	charPreviewWebURLs  map[uint32]string
-	charDeleteWebStep   int
-	charDeleteWebName   string
+	charWebBG          string
+	charWebSyncKey     string
+	charPreviewWebURLs map[uint32]string
+	charDeleteWebStep  int
+	charDeleteWebName  string
 	// DOM character creation state (web build; plain data on native).
-	createWebBG           string
-	createWebSyncKey      string
-	createPreviewWebURL   string
-	createPreviewWebKey   charCreatePreviewKey
+	createWebBG         string
+	createWebSyncKey    string
+	createPreviewWebURL string
+	createPreviewWebKey charCreatePreviewKey
 	loginPingActive     bool
 	nextLoginPing       time.Time
 	charPingActive      bool
@@ -205,6 +206,18 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		return m.nextWorldMode(ctx), nil
 	}
 
+	// The on-screen keyboard overlays every login phase: the account form,
+	// character creation's name field, and any modal text input.
+	if ctx.Input != nil {
+		if updateGamepadOSK(ctx, now) {
+			return nil, nil
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF17) {
+			tryOpenOSK(true)
+			return nil, nil
+		}
+	}
+
 	conns := loginConnections(ctx)
 	fading := m.fade.phase != loginFadeNone
 	if !fading {
@@ -251,10 +264,10 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	for _, pkt := range ctx.Network.DrainPackets() {
 		glog.Debugf("recv packet 0x%04X len=%d", pkt.ID, len(pkt.Data))
 		if handleDisconnectPacket(ctx, &m.disconnectDialog, pkt, func() {
-		// Stay on the account phase: the login window is still up, so the
-		// player can simply edit credentials and press Login again.
-		m.loginPending = false
-	}) {
+			// Stay on the account phase: the login window is still up, so the
+			// player can simply edit credentials and press Login again.
+			m.loginPending = false
+		}) {
 			m.loginPending = false
 			continue
 		}
@@ -649,6 +662,7 @@ func (m *LoginMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 		return
 	}
 	m.drawROCursor(screen, ctx, now)
+	drawOSK(screen)
 }
 
 func (m *LoginMode) FrameSubmitted() {
@@ -1265,7 +1279,7 @@ func (m *LoginMode) connectMapServer(ctx client.Context, zone network.ZoneServer
 		m.status = "CZ_ENTER2 failed: " + err.Error()
 		return
 	}
-				m.status = "CZ_ENTER2 sent to map server"
+	m.status = "CZ_ENTER2 sent to map server"
 	glog.Debugf("sent CZ_ENTER2 account_id=%d char_id=%d addr=%s port=%d", ctx.Session.AccountID, zone.CharID, zone.Address, zone.Port)
 }
 

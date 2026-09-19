@@ -33,17 +33,11 @@ func main() {
 	})))
 
 	// Boot-time self update: fetch version.txt from the update server and,
-	// when it advertises a newer build, install it and re-exec. Failures
-	// are non-fatal — the game boots with whatever it has.
+	// when it advertises a newer build, install it and re-exec — running
+	// next to the game loop so the on-screen progress overlay renders.
+	// Failures are non-fatal; the game boots with whatever it has.
 	if cfg.Update.Enabled && !cfg.Headless && cfg.Update.BaseURL != "" {
-		if app.RunSelfUpdate(cfg.Update.BaseURL) {
-			glog.Infof("update: restarting into the new build")
-			fmt.Fprintln(os.Stderr, "update: installed a new build, restarting")
-			if err := app.ReexecSelf(); err != nil {
-				glog.Infof("update: restart via exec failed (%v), exiting", err)
-			}
-			os.Exit(0)
-		}
+		app.StartSelfUpdate(cfg.Update.BaseURL)
 	}
 
 	game, err := app.New(cfg)

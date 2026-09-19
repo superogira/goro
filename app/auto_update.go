@@ -14,7 +14,28 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/glog"
+	"github.com/kivutar/goro/render"
 )
+
+// countingReader wraps the download body and reports progress at most every
+// quarter megabyte so the overlay refreshes without flooding the frame loop.
+type countingReader struct {
+	inner    io.Reader
+	progress func(read, total int64)
+	total    int64
+	read     int64
+	last     int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.inner.Read(p)
+	c.read += int64(n)
+	if c.progress != nil && (c.read-c.last >= 256*1024 || err == io.EOF) {
+		c.last = c.read
+		c.progress(c.read, c.total)
+	}
+	return n, err
+}
 
 // Self-update: at boot the client fetches version.txt from the update
 // server and, when it advertises a newer build, downloads the replacement
@@ -97,8 +118,16 @@ func RunSelfUpdate(baseURL string) bool {
 		return false
 	}
 	glog.Infof("update: %s -> %s, downloading", local, remote)
+	render.ShowUpdateProgress(fmt.Sprintf("Updating to %s...", remote), 0)
+	defer render.HideUpdateProgress()
 	download := filepath.Join(exeDir, filepath.Base(exe)+".download")
-	if err := downloadBinary(strings.TrimSuffix(baseURL, "/")+"/goro", download, checksum); err != nil {
+	if err := downloadBinary(strings.TrimSuffix(baseURL, "/")+"/goro", download, checksum, func(read int64, total int64) {
+		if total > 0 {
+			render.ShowUpdateProgress(fmt.Sprintf("Updating to %s... %d%%", remote, read*100/total), float64(read)/float64(total))
+		} else {
+			render.ShowUpdateProgress(fmt.Sprintf("Updating to %s... %d KB", remote, read/1024), -1)
+		}
+	}); err != nil {
 		glog.Warnf("update: download failed: %v", err)
 		_ = os.Remove(download)
 		return false
@@ -133,9 +162,28 @@ func ReexecSelf() error {
 	return syscall.Exec(exe, os.Args, os.Environ())
 }
 
+// StartSelfUpdate runs RunSelfUpdate in the background next to the game
+// loop (the on-screen progress overlay renders from the frame loop), then
+// restarts into the new build on success.
+func StartSelfUpdate(baseURL string) {
+	go func() {
+		if !RunSelfUpdate(baseURL) {
+			return
+		}
+		render.ShowUpdateProgress("Update installed — restarting", 1)
+		time.Sleep(1200 * time.Millisecond)
+		if err := ReexecSelf(); err != nil {
+			glog.Infof("update: restart via exec failed (%v), exiting", err)
+		}
+		os.Exit(0)
+	}()
+}
+
 // downloadBinary streams the update into dst, verifying the optional
-// sha256 and refusing empty or implausibly small files.
-func downloadBinary(url, dst, wantChecksum string) error {
+// sha256 and refusing empty or implausibly small files. progress reports
+// the running byte count against the announced total (total <= 0 when the
+// server omits Content-Length).
+func downloadBinary(url, dst, wantChecksum string, progress func(read, total int64)) error {
 	client := &http.Client{Timeout: updateDownloadTimeout}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -150,7 +198,8 @@ func downloadBinary(url, dst, wantChecksum string) error {
 		return err
 	}
 	hasher := sha256.New()
-	written, err := io.Copy(io.MultiWriter(f, hasher), resp.Body)
+	counter := &countingReader{inner: resp.Body, progress: progress, total: resp.ContentLength}
+	written, err := io.Copy(io.MultiWriter(f, hasher), counter)
 	closeErr := f.Close()
 	if err != nil {
 		return err

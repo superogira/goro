@@ -1,7 +1,6 @@
 package render
 
 import (
-	"sync/atomic"
 	"bytes"
 	"fmt"
 	"image"
@@ -13,6 +12,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gogpu/gg"
@@ -910,6 +910,7 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	}
 	r.drawVolumeHUD(r.screen)
 	r.drawScreenNotice(r.screen)
+	r.drawUpdateProgress(r.screen)
 	if err := r.drawFullscreenButton(r.screen, width, height, deviceScale); err != nil {
 		return err
 	}
@@ -2391,9 +2392,9 @@ func procStatusKb(field []byte) int {
 // volumeHUD carries the transient on-screen volume indicator state set by
 // the app layer when a volume key is pressed.
 type volumeHUDState struct {
-	level  float64
-	muted  bool
-	at     time.Time
+	level float64
+	muted bool
+	at    time.Time
 }
 
 var volumeHUD atomic.Pointer[volumeHUDState]
@@ -2721,4 +2722,66 @@ func drawFullscreenButtonGlyph(ui widget.Canvas, fg widget.Color, fullscreen boo
 	ui.DrawRect(geometry.NewRect(pad, far-l, t, l), fg)
 	ui.DrawRect(geometry.NewRect(far-l, far-t, l, t), fg)
 	ui.DrawRect(geometry.NewRect(far-t, far-l, t, l), fg)
+}
+
+// updateProgressState carries the persistent self-update overlay: a label
+// and a 0..1 fraction. Unlike the screen notice it never times out — the
+// updater clears it explicitly.
+type updateProgressState struct {
+	text     string
+	fraction float64
+}
+
+var updateProgress atomic.Pointer[updateProgressState]
+
+// ShowUpdateProgress displays (or refreshes) the centered self-update
+// overlay: a label line above a progress bar. fraction is 0..1; values
+// outside clamp, and a negative fraction hides the bar (indeterminate).
+func ShowUpdateProgress(text string, fraction float64) {
+	updateProgress.Store(&updateProgressState{text: text, fraction: fraction})
+}
+
+// HideUpdateProgress removes the self-update overlay.
+func HideUpdateProgress() {
+	updateProgress.Store(nil)
+}
+
+// drawUpdateProgress renders the persistent self-update overlay: panel,
+// label, and progress bar centered at ~40% screen height.
+func (r *runner) drawUpdateProgress(screen *Frame) {
+	state := updateProgress.Load()
+	if state == nil || screen == nil {
+		return
+	}
+	bounds := screen.Bounds()
+	const w = 320.0
+	const h = 64.0
+	x := (float64(bounds.Dx()) - w) / 2
+	y := float64(bounds.Dy())*0.4 - h/2
+	DrawRect(screen, x-4, y-4, w+8, h+8, color.RGBA{A: 130})
+	DrawRect(screen, x, y, w, h, color.RGBA{R: 24, G: 20, B: 34, A: 240})
+	DrawRect(screen, x, y, w, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
+	DrawRect(screen, x, y+h-2, w, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
+	DrawUIOutlinedTextAt(screen, state.text, x+12, y+12, color.RGBA{R: 244, G: 248, B: 252, A: 255}, color.RGBA{A: 200})
+	if state.fraction < 0 {
+		return
+	}
+	fraction := state.fraction
+	if fraction < 0 {
+		fraction = 0
+	}
+	if fraction > 1 {
+		fraction = 1
+	}
+	const barW = w - 24
+	barX := x + 12
+	barY := y + 38
+	DrawRect(screen, barX, barY, barW, 12, color.RGBA{R: 40, G: 44, B: 54, A: 220})
+	if fraction > 0 {
+		fillW := barW * fraction
+		if fillW < 2 {
+			fillW = 2
+		}
+		DrawRect(screen, barX, barY, fillW, 12, color.RGBA{R: 120, G: 170, B: 235, A: 255})
+	}
 }

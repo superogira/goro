@@ -13,22 +13,24 @@ import (
 // the game frame from GPU-cached text like the old character HUD, so it never
 // rebuilds a widget tree and never invalidates the UI canvas.
 const (
-	miniHUDWidth  = 168
-	miniHUDHeight = 100
+	miniHUDWidth = 168
+	// Height = pad + 4 bar rows + the weight text line + pad. The old 100
+	// left the weight line outside the panel.
+	miniHUDHeight = 8 + 4*(15+3+4+4) + 15 + 8
 	miniHUDPad    = 8
-	miniHUDTextH  = 13
-	miniHUDTextSz = 11
+	miniHUDTextH  = 15
+	miniHUDTextSz = 12
 	miniHUDBarH   = 4
 	miniHUDBarGap = 3
 	miniHUDRowH   = miniHUDTextH + miniHUDBarGap + miniHUDBarH + 4
 )
 
 var (
-	miniHUDBarBack    = color.RGBA{R: 40, G: 44, B: 54, A: 170}
-	miniHUDBackground = color.RGBA{R: 14, G: 18, B: 24, A: 150}
-	miniHUDBorder     = color.RGBA{R: 150, G: 165, B: 185, A: 70}
-	miniHUDMuted      = color.RGBA{R: 170, G: 180, B: 195, A: 220}
-	miniHUDWeightOver = color.RGBA{R: 235, G: 110, B: 110, A: 255}
+	miniHUDBarBack    = color.RGBA{R: 40, G: 44, B: 54, A: 190}
+	miniHUDBackground = color.RGBA{R: 14, G: 18, B: 24, A: 200}
+	miniHUDBorder     = color.RGBA{R: 160, G: 175, B: 195, A: 90}
+	miniHUDText       = color.RGBA{R: 244, G: 248, B: 252, A: 255}
+	miniHUDWeightOver = color.RGBA{R: 245, G: 120, B: 120, A: 255}
 	miniHUDHPColor    = PlayerHPBarColor
 	miniHUDSPColor    = PlayerSPBarColor
 	miniHUDExpColor   = color.RGBA{R: 120, G: 170, B: 235, A: 255}
@@ -49,7 +51,7 @@ func (h *MiniVitalsHUD) Draw(screen *render.Frame, hp, maxHP, sp, maxSP int, bas
 	cy := y + miniHUDPad
 	w := miniHUDWidth - 2*miniHUDPad
 
-	weightColor := miniHUDMuted
+	weightColor := miniHUDText
 	if maxWeight > 0 && weight*100 >= maxWeight*50 {
 		weightColor = miniHUDWeightOver
 	}
@@ -67,7 +69,7 @@ func (h *MiniVitalsHUD) Draw(screen *render.Frame, hp, maxHP, sp, maxSP int, bas
 }
 
 func (h *MiniVitalsHUD) row(screen *render.Frame, x, y, w int, label string, current, maxValue int, fill color.RGBA) {
-	render.DrawUITextAtSize(screen, label, float64(x), float64(y), miniHUDMuted, miniHUDTextSz)
+	render.DrawUITextAtSize(screen, label, float64(x), float64(y), miniHUDText, miniHUDTextSz)
 	barY := y + miniHUDTextH + miniHUDBarGap
 	render.DrawRect(screen, float64(x), float64(barY), float64(w), float64(miniHUDBarH), miniHUDBarBack)
 	if ratio := ratioInt(current, maxValue); ratio > 0 {

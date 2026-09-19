@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
@@ -205,18 +206,26 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		return m.nextWorldMode(ctx), nil
 	}
 
-	// The on-screen keyboard overlays every login phase: the account form,
-	// character creation's name field, and any modal text input. START
-	// opens it (when no modal dialog claims the key first), and while open
-	// every button feeds the keyboard.
-	if ctx.Input != nil {
-		if updateGamepadOSK(ctx, now) {
-			return nil, nil
+	// The on-screen keyboard overlays every login phase. While open, the
+	// OSK handles the gamepad buttons and injects text via AddTextInput,
+	// but the login form's widget tree must still Update so the focused
+	// text field can consume the injected characters — so we suppress the
+	// mouse clicks and navigation keys the form would otherwise interpret,
+	// rather than returning early.
+	if ctx.Input != nil && oskState().open {
+		updateGamepadOSK(ctx, now)
+		// Clear the companion mouse click and form navigation keys.
+		ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
+		ctx.Input.SetMouseButton(input.MouseButtonRight, false)
+		ctx.Input.SetKeyCode(gpucontext.KeyTab, false)
+		if !oskJustSubmitted() {
+			ctx.Input.SetKeyCode(gpucontext.KeyEnter, false)
 		}
+		// Fall through: the form updates and reads the injected text.
+	} else if ctx.Input != nil {
 		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
 		if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
-			return nil, nil
 		}
 	}
 

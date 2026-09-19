@@ -30,9 +30,9 @@ var oskShared = struct {
 func oskState() *onScreenKeyboard { return &osk }
 
 const (
-	oskCellW = 44
-	oskCellH = 36
-	oskPad   = 4
+	oskCellW = 36
+	oskCellH = 30
+	oskPad   = 3
 )
 
 type oskKey struct {
@@ -162,8 +162,8 @@ func (osk *onScreenKeyboard) inject(ctx client.Context) {
 		return
 	}
 	if key.special == "enter" {
+		oskSubmittedFlag = true
 		ctx.Input.SetKeyCode(gpucontext.KeyEnter, true)
-		ctx.Input.SetKeyCode(gpucontext.KeyEnter, false)
 		osk.open = false
 		return
 	}
@@ -365,3 +365,13 @@ func trimOSKRunes(text string, maxRunes int) string {
 }
 
 var _ = strings.TrimSpace
+
+// oskJustSubmitted reports whether the OSK just fired Enter (the submit
+// action), so the caller can let it through to the form.
+var oskSubmittedFlag bool
+
+func oskJustSubmitted() bool {
+	v := oskSubmittedFlag
+	oskSubmittedFlag = false
+	return v
+}

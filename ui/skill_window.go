@@ -324,11 +324,11 @@ func (w *SkillWindow) widgetTreeWithAssets(ctx Context, assets AssetProvider, ac
 		Footer(
 			footerLabel(fmt.Sprintf("Skill Points: %d", maxInt(0, sessionSkillPoints(ctx.Session)-w.pendingCount()))),
 			primitives.Expanded(primitives.Box()),
-			rotheme.Button("Reset", func() {
+			rotheme.ButtonDisabled("Reset", w.pendingCount() == 0, func() {
 				w.clearPending()
 				w.dirty = true
 			}),
-			rotheme.Button("Confirm", func() {
+			rotheme.ButtonDisabled("Confirm", w.pendingCount() == 0, func() {
 				w.confirmPending(ctx)
 				w.dirty = true
 			}),

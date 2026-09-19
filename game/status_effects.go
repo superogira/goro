@@ -27,6 +27,9 @@ func (m *WorldMode) applyStatusEffectChange(ctx client.Context, change network.S
 	}
 	m.addStatusEffectTransition(ctx, change)
 	if !change.Active {
+		if change.StatusID == db.StatusCashBossAlarm {
+			m.ui.minimap.ClearBossMarker()
+		}
 		glog.Debugf("status effect inactive id=%d actor=%d", change.StatusID, change.ActorID)
 		return
 	}
@@ -228,13 +231,16 @@ func (m *WorldMode) addStatusEffectTransition(ctx client.Context, change network
 	}
 }
 
-func removeExpiredStatusEffects(s *session.Session, now time.Time) {
+func (m *WorldMode) removeExpiredStatusEffects(s *session.Session, now time.Time) {
 	if s == nil {
 		return
 	}
 	for id, effect := range s.Statuses.Active {
 		if effect.HasDuration && !effect.ExpiresAt.IsZero() && now.After(effect.ExpiresAt) {
 			delete(s.Statuses.Active, id)
+			if id == db.StatusCashBossAlarm {
+				m.ui.minimap.ClearBossMarker()
+			}
 		}
 	}
 }

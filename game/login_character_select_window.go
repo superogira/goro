@@ -102,6 +102,9 @@ func (m *LoginMode) characterSelectWindowCallbacks(ctx client.Context) gameui.Ch
 }
 
 func (m *LoginMode) activateCharacterSelectSlot(ctx client.Context, slot int, now time.Time) {
+	if m.charSelectPending {
+		return
+	}
 	m.selectedSlot = clampCharacterSlot(slot, m.maxSlots)
 	if _, ok := characterBySlot(ctx.Session.Characters, m.selectedSlot); ok {
 		m.submitSelectedCharacter(ctx)

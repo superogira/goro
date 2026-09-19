@@ -34,7 +34,10 @@ func (m *WorldMode) uiInputSuspended() bool {
 }
 
 func (m *WorldMode) suppressShortcutText(ctx client.Context, code input.KeyCode) bool {
-	if code == gpucontext.KeyGrave && worldMapShortcutDown(ctx.Input) && (m.ui.worldMap.IsOpen() || !m.ui.nonConsoleKeyboardInputBlocked(ctx)) {
+	if m.windowShortcutAllowed(ctx, code) {
+		return true
+	}
+	if code == gpucontext.KeyGrave && plainCtrlDown(ctx.Input) && (m.ui.worldMap.IsOpen() || !m.ui.nonConsoleKeyboardInputBlocked(ctx)) {
 		return true
 	}
 	if !plainAltDown(ctx.Input) || code == gpucontext.KeyUnknown {
@@ -96,6 +99,12 @@ func (m *WorldMode) chatShortcutFromInput(ctx client.Context) bool {
 
 func plainAltDown(in *input.State) bool {
 	return in != nil && in.Pressed(input.KeyAlt) && !in.Pressed(input.KeyCtrl) &&
+		!in.Pressed(input.KeyShift) && !in.KeyCodeDown(gpucontext.KeyRightAlt) &&
+		!in.KeyCodeDown(gpucontext.KeyLeftSuper) && !in.KeyCodeDown(gpucontext.KeyRightSuper)
+}
+
+func plainCtrlDown(in *input.State) bool {
+	return in != nil && in.Pressed(input.KeyCtrl) && !in.Pressed(input.KeyAlt) &&
 		!in.Pressed(input.KeyShift) && !in.KeyCodeDown(gpucontext.KeyRightAlt) &&
 		!in.KeyCodeDown(gpucontext.KeyLeftSuper) && !in.KeyCodeDown(gpucontext.KeyRightSuper)
 }

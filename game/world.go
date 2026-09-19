@@ -280,9 +280,15 @@ func (u *worldUI) keyboardInputBlocked(ctx client.Context) bool {
 }
 
 func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
+	return u.nonConsoleKeyboardInputBlockedExcept(ctx, nil)
+}
+
+// A window may handle its own toggle shortcut, but not bypass other forms.
+func (u *worldUI) nonConsoleKeyboardInputBlockedExcept(ctx client.Context, except *gameui.Window) bool {
 	if u == nil {
 		return false
 	}
+	open := func(w *gameui.Window) bool { return w != except && w.IsOpen() }
 	return u.npcDialog.IsOpen() ||
 		u.escapeMenu.IsOpen() ||
 		u.disconnectDialog.IsOpen() ||
@@ -292,7 +298,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.homunculusConfirm.IsOpen() ||
 		u.mercenaryConfirm.IsOpen() ||
 		u.starPlaceConfirm.IsOpen() ||
-		u.settingsWindow.IsOpen() ||
+		open(&u.settingsWindow.Window) ||
 		u.chatShortcuts.IsOpen() ||
 		u.worldMap.IsOpen() ||
 		u.autoSpellWindow.IsOpen() ||
@@ -304,10 +310,10 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.repairItem.IsOpen() ||
 		u.weaponRefine.IsOpen() ||
 		u.petEggWindow.IsOpen() ||
-		u.petInfoWindow.IsOpen() ||
-		u.homunculusInfo.IsOpen() ||
+		open(&u.petInfoWindow.Window) ||
+		open(&u.homunculusInfo.Window) ||
 		u.homunculusSkill.IsOpen() ||
-		u.mercenaryInfo.IsOpen() ||
+		open(&u.mercenaryInfo.Window) ||
 		u.mercenarySkill.IsOpen() ||
 		u.changeCartWindow.IsOpen() ||
 		u.inventoryBag.KeyboardShortcutsBlocked() ||
@@ -319,7 +325,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlocked(ctx client.Context) bool {
 		u.guildWindow.KeyboardShortcutsBlocked() ||
 		u.friendSettings.IsOpen() ||
 		u.whisperWindows.IsOpen() ||
-		u.chatRoomCreate.IsOpen() ||
+		open(&u.chatRoomCreate.Window) ||
 		u.chatRoom.IsOpen() ||
 		u.partySettings.IsOpen() ||
 		u.partyCreate.IsOpen() ||
@@ -750,7 +756,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	}
 	// Status presentation must follow server updates even when a window or
 	// modal consumes input for the rest of the frame.
-	removeExpiredStatusEffects(ctx.Session, now)
+	m.removeExpiredStatusEffects(ctx.Session, now)
 	m.updateMail(ctx, now)
 	progressBlocksActions := m.updateServerProgress(ctx, now)
 	if !ctx.Config.Headless {
@@ -835,7 +841,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// Window.Update consumes pointer hover so that map input does not pass
 	// through the UI. Handle keyboard-only window shortcuts before pointer
 	// dispatch, otherwise their JustPressed event can be lost.
-	if m.chatShortcutFromInput(ctx) || m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) || m.toggleQuestWindowFromInput(ctx) || m.toggleWorldMapFromInput(ctx) {
+	if m.chatShortcutFromInput(ctx) || m.toggleEmoteWindowFromInput(ctx) || m.toggleGuildWindowFromInput(ctx) || m.toggleQuestWindowFromInput(ctx) || m.toggleWorldMapFromInput(ctx) || m.toggleWindowFromInput(ctx) {
 		return nil, nil
 	}
 	if !dead && !m.ui.nonConsoleKeyboardInputBlocked(ctx) && m.ui.shortcutBar.UpdateKeyboardInput(ctx, m, m.ui.console.Active()) {

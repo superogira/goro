@@ -77,10 +77,32 @@ func (w *FriendsWindow) Toggle(ctx Context) {
 }
 
 func (w *FriendsWindow) OpenWindow(ctx Context) {
+	w.openTab(ctx, friendsWindowTabFriends)
+}
+
+func (w *FriendsWindow) ToggleFriends(ctx Context) {
+	w.toggleTab(ctx, friendsWindowTabFriends)
+}
+
+func (w *FriendsWindow) ToggleParty(ctx Context) {
+	w.toggleTab(ctx, friendsWindowTabParty)
+}
+
+func (w *FriendsWindow) toggleTab(ctx Context, tab friendsWindowTab) {
+	if w.IsOpen() && w.tab == tab {
+		w.Close()
+		return
+	}
+	w.contextMenu.Close()
+	w.partyContextMenu.Close()
+	w.openTab(ctx, tab)
+}
+
+func (w *FriendsWindow) openTab(ctx Context, tab friendsWindowTab) {
 	w.EnsureWindow(friendsWindowWidth, friendsWindowHeight)
 	w.ctx = ctx
 	w.snapshot = friendsWindowSnapshot(ctx.Session)
-	w.tab = friendsWindowTabFriends
+	w.tab = tab
 	if friendsWebSync(w.webState()) {
 		w.webOpen = true
 		w.webSyncID = w.snapshot

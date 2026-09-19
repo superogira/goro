@@ -52,7 +52,9 @@ func (w *CartWindow) Toggle(ctx Context) {
 		w.Publish(ctx)
 		return
 	}
-	w.OpenWindow(ctx)
+	if inventoryBagHasCart(ctx) {
+		w.OpenWindow(ctx)
+	}
 }
 
 func (w *CartWindow) SetOpen(open bool) {

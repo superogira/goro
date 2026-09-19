@@ -40,24 +40,24 @@ const (
 	characterHUDExpBarH    = 6
 	characterHUDCloseSize  = 17
 	characterHUDStatColumn = 146
-	characterHUDTextSize  = 13
+	characterHUDTextSize   = 13
 
-	hudEdgeTabW = 26
-	hudEdgeTabH = 44
-	characterHUDExpLabelW  = 64
+	hudEdgeTabW           = 26
+	hudEdgeTabH           = 44
+	characterHUDExpLabelW = 64
 )
 
 var (
-	characterHUDHPColor       = PlayerHPBarColor
-	characterHUDSPColor       = PlayerSPBarColor
-	characterHUDTextColor     = color.RGBA{R: 235, G: 242, B: 250, A: 255}
-	characterHUDMutedColor    = color.RGBA{R: 190, G: 200, B: 214, A: 255}
-	characterHUDBarBackColor  = color.RGBA{R: 64, G: 70, B: 82, A: 160}
-	characterHUDEXPColor      = color.RGBA{R: 170, G: 182, B: 200, A: 255}
-	characterHUDBackground    = color.RGBA{R: 14, G: 18, B: 24, A: 189}
-	characterHUDPanelBack     = color.RGBA{R: 255, G: 255, B: 255, A: 18}
-	characterHUDBorder        = color.RGBA{R: 180, G: 198, B: 218, A: 94}
-	characterHUDRadius        = float32(8)
+	characterHUDHPColor      = PlayerHPBarColor
+	characterHUDSPColor      = PlayerSPBarColor
+	characterHUDTextColor    = color.RGBA{R: 235, G: 242, B: 250, A: 255}
+	characterHUDMutedColor   = color.RGBA{R: 190, G: 200, B: 214, A: 255}
+	characterHUDBarBackColor = color.RGBA{R: 64, G: 70, B: 82, A: 160}
+	characterHUDEXPColor     = color.RGBA{R: 170, G: 182, B: 200, A: 255}
+	characterHUDBackground   = color.RGBA{R: 14, G: 18, B: 24, A: 189}
+	characterHUDPanelBack    = color.RGBA{R: 255, G: 255, B: 255, A: 18}
+	characterHUDBorder       = color.RGBA{R: 180, G: 198, B: 218, A: 94}
+	characterHUDRadius       = float32(8)
 )
 
 // CharacterWindow is the always-on character HUD overlay. It keeps the
@@ -66,6 +66,9 @@ var (
 type CharacterWindow struct {
 	open      bool
 	dismissed bool
+	// compact is the Alt+V toggle state (the draw path and DOM mirror read
+	// it; the HUD has no widget tree).
+	compact   bool
 	x         int
 	y         int
 	width     int
@@ -111,6 +114,21 @@ func clampHUDInt(value, lo, hi int) int {
 		return hi
 	}
 	return value
+}
+
+// ToggleCompact is the Alt+V classic shortcut hook. The HUD has no widget
+// tree to collapse, so it toggles the compact flag the draw path and the
+// DOM mirror both read.
+func (w *CharacterWindow) ToggleCompact() {
+	if w == nil || !w.IsOpen() {
+		return
+	}
+	w.compact = !w.compact
+}
+
+// Compact reports the Alt+V layout state (tests and the DOM mirror).
+func (w *CharacterWindow) Compact() bool {
+	return w != nil && w.compact
 }
 
 // setPosition moves the HUD (tests and programmatic placement).

@@ -32,6 +32,7 @@ type WorldMode struct {
 	gamepadCameraAt     time.Time
 	heldMenuOpen        bool
 	menuPanelsShown     bool
+	bigMapShown         bool
 	heldMenuSel         int
 	heldMenuMovedAt     time.Time
 	heldMenuActivatedAt time.Time
@@ -1806,8 +1807,9 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	m.drawShowDigit(screen, ctx, now)
 	// The always-on handheld vitals readout: HP/SP, EXP, weight. Not gated
 	// on HideHUD — the handheld branch draws its own HUD layer and the flag
-	// only suppresses the permanent desktop HUD placement.
-	if ctx.Session != nil {
+	// only suppresses the permanent desktop HUD placement. While the MENU
+	// panels are up, the full character info window replaces it.
+	if ctx.Session != nil && !m.menuPanelsShown {
 		vitals := ctx.Session.Vitals
 		progress := ctx.Session.Progress
 		inventory := ctx.Session.Inventory
@@ -1827,6 +1829,11 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	m.ui.guildWindow.DrawTooltip(ctx, screen)
 	m.ui.shortcutBar.DrawTooltip(ctx, screen)
 	m.ui.itemPickup.Draw(screen, ctx, m, now)
+	// The frameless big-map overlay (X on the plain screen) sits on top of
+	// the world but under the direct MENU overlay.
+	if m.bigMapShown {
+		m.ui.minimap.DrawLargeMap(ctx, screen)
+	}
 }
 
 func (m *WorldMode) drawUIDragGhosts(screen *render.Frame, ctx client.Context) {

@@ -30,6 +30,7 @@ var (
 	miniHUDBackground = color.RGBA{R: 14, G: 18, B: 24, A: 200}
 	miniHUDBorder     = color.RGBA{R: 160, G: 175, B: 195, A: 90}
 	miniHUDText       = color.RGBA{R: 244, G: 248, B: 252, A: 255}
+	miniHUDOutline    = color.RGBA{R: 10, G: 12, B: 16, A: 210}
 	miniHUDWeightOver = color.RGBA{R: 245, G: 120, B: 120, A: 255}
 	miniHUDHPColor    = PlayerHPBarColor
 	miniHUDSPColor    = PlayerSPBarColor
@@ -64,12 +65,12 @@ func (h *MiniVitalsHUD) Draw(screen *render.Frame, hp, maxHP, sp, maxSP int, bas
 	cy += miniHUDRowH
 	h.row(screen, cx, cy, w, fmt.Sprintf("Job %.2f%%", expPercent(jobExp, nextJobExp)), int(clampInt64(jobExp, 0, 1<<31-1)), int(clampInt64(nextJobExp, 1, 1<<31-1)), miniHUDJobColor)
 	cy += miniHUDRowH
-	render.DrawUITextAtSize(screen, fmt.Sprintf("Weight %d/%d", displayWeight(weight), displayWeight(maxWeight)),
-		float64(cx), float64(cy), weightColor, miniHUDTextSz)
+	render.DrawUIOutlinedTextAt(screen, fmt.Sprintf("Weight %d/%d", displayWeight(weight), displayWeight(maxWeight)),
+		float64(cx), float64(cy), weightColor, miniHUDOutline)
 }
 
 func (h *MiniVitalsHUD) row(screen *render.Frame, x, y, w int, label string, current, maxValue int, fill color.RGBA) {
-	render.DrawUITextAtSize(screen, label, float64(x), float64(y), miniHUDText, miniHUDTextSz)
+	render.DrawUIOutlinedTextAt(screen, label, float64(x), float64(y), miniHUDText, miniHUDOutline)
 	barY := y + miniHUDTextH + miniHUDBarGap
 	render.DrawRect(screen, float64(x), float64(barY), float64(w), float64(miniHUDBarH), miniHUDBarBack)
 	if ratio := ratioInt(current, maxValue); ratio > 0 {

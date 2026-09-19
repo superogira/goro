@@ -13,6 +13,7 @@ import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/ui/rotheme"
 	worldstate "github.com/kivutar/goro/world"
@@ -45,6 +46,8 @@ type Minimap struct {
 	arrow            image.Image
 	arrowLoadTried   bool
 	arrowVariants    [8]image.Image
+	largeWrapped     *render.Image
+	largeWrappedKey  string
 	window           Window
 	widget           *minimapWidget
 	hidden           bool
@@ -228,6 +231,76 @@ func (m *Minimap) Hide(ctx Context) {
 	if !m.hidden {
 		m.Toggle(ctx)
 	}
+}
+
+// DrawLargeMap renders the frameless full-map overlay (the handheld X
+// button on the plain screen): the map bitmap centered at ~78% of the
+// screen with the player marker, map name, and coordinates. Direct draw —
+// no window, no widget tree.
+func (m *Minimap) DrawLargeMap(ctx Context, screen *render.Frame) {
+	if screen == nil || ctx.World == nil || ctx.World.MapName == "" {
+		return
+	}
+	m.ensureImage(ctx.Resources, ctx.World.MapName)
+	m.ensureArrow(ctx.Resources)
+	if m.img == nil {
+		return
+	}
+	bounds := screen.Bounds()
+	screenW := float64(bounds.Dx())
+	screenH := float64(bounds.Dy())
+	size := int(math.Min(screenW, screenH) * 0.78)
+	mapImage := m.scaledImage(size)
+	if mapImage == nil {
+		return
+	}
+	x := int((screenW - float64(size)) / 2)
+	y := int((screenH - float64(size)) / 2)
+
+	// Dimmed backdrop and a thin dark mat instead of a window frame.
+	render.DrawRect(screen, 0, 0, screenW, screenH, color.RGBA{A: 110})
+	render.DrawRect(screen, float64(x)-3, float64(y)-3, float64(size)+6, float64(size)+6, color.RGBA{A: 210})
+
+	var opts render.DrawImageOptions
+	opts.GeoM.Translate(float64(x), float64(y))
+	opts.Filter = render.FilterLinear
+	screen.DrawImage(m.largeRenderImage(mapImage), &opts)
+
+	mapW, mapH := minimapWorldSize(ctx.World)
+	rect := minimapRect{x: x, y: y, w: size, h: size}
+	if px, py, ok := minimapCellToScreen(rect, mapW, mapH, ctx.World.Player.X, ctx.World.Player.Y); ok {
+		arrow := m.playerArrow(ctx.World.Player.Dir)
+		if arrow != nil {
+			var arrowOpts render.DrawImageOptions
+			bounds := arrow.Bounds()
+			arrowOpts.GeoM.Translate(float64(px-bounds.Dx()/2), float64(py-bounds.Dy()/2))
+			arrowOpts.Filter = render.FilterNearest
+			screen.DrawImage(m.largeRenderImage(arrow), &arrowOpts)
+		}
+		// A contrasting ring around the marker keeps it visible on any map.
+		render.DrawRect(screen, float64(px-7), float64(py-1), 14, 2, color.RGBA{A: 170})
+		render.DrawRect(screen, float64(px-1), float64(py-7), 2, 14, color.RGBA{A: 170})
+	}
+
+	name := trimRunes(minimapDisplayName(ctx.World.MapName), 26)
+	render.DrawUIOutlinedTextAt(screen, name, float64(x), float64(y+size+8), miniHUDText, color.RGBA{A: 200})
+	coords := fmt.Sprintf("X:%d Y:%d", ctx.World.Player.X, ctx.World.Player.Y)
+	if width := int(render.MeasureUIText(coords, 12)); width > 0 {
+		render.DrawUIOutlinedTextAt(screen, coords, float64(x+size-width), float64(y+size+8), miniHUDText, color.RGBA{A: 200})
+	} else {
+		render.DrawUIOutlinedTextAt(screen, coords, float64(x), float64(y+size+8), miniHUDText, color.RGBA{A: 200})
+	}
+}
+
+// largeRenderImage wraps a cached raster for the large overlay, reusing the
+// wrap across frames instead of copying the bitmap every draw.
+func (m *Minimap) largeRenderImage(img image.Image) *render.Image {
+	key := fmt.Sprintf("%p", img)
+	if m.largeWrapped == nil || m.largeWrappedKey != key {
+		m.largeWrapped = render.NewImageFromImage(img)
+		m.largeWrappedKey = key
+	}
+	return m.largeWrapped
 }
 
 func (m *Minimap) ensureWindow(width, height int) {

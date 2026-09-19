@@ -259,6 +259,14 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		m.updateHeldMenuInput(ctx, now)
 		return true
 	}
+	// The big-map overlay owns every button while shown; X toggles it away,
+	// B dismisses it.
+	if m.bigMapShown {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) || ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
+			m.bigMapShown = false
+		}
+		return true
+	}
 	// B closes the active (topmost relevant) window. Checked before the
 	// walk layer so B never walks or attacks while dismissing a window.
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
@@ -522,6 +530,23 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	}
 	if m.pendingSkill.skill.ID != 0 || m.pendingPetCapture.active {
 		return false
+	}
+	// Plain-screen shortcuts: Y opens the inventory (the window branches
+	// above have already consumed Y while any window was open), X toggles
+	// the frameless big-map overlay.
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
+		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+			m.gamepadActionAt = now
+			m.ui.inventoryBag.Toggle(ctx)
+		}
+		return true
+	}
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
+		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+			m.gamepadActionAt = now
+			m.bigMapShown = !m.bigMapShown
+		}
+		return true
 	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) && !pointerBlocked {
 		// The same A press that activated a handheld-menu item must not

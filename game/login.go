@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
@@ -208,8 +207,12 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 
 	// The on-screen keyboard overlays every login phase. While open, the
 	// OSK types directly into the login form's focused text field via
-	// TypeIntoFocusedField (bypassing the widget event dispatch that
-	// AddTextInput can't reach from the game layer).
+	// TypeIntoFocusedField (bypassing the widget event dispatch entirely —
+	// the A button's companion mouse click fires through the platform's
+	// event callbacks BEFORE game.Update runs, so clearing the input state
+	// here cannot stop it; the only reliable block is not running the form
+	// update at all). Returning early is safe now because SetText works
+	// without the widget tree updating.
 	if ctx.Input != nil {
 		if oskState().open {
 			oskCallback = func(ch string, action string) {
@@ -218,19 +221,12 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 				}
 			}
 			updateGamepadOSK(ctx, now)
-			// Clear the companion mouse click and form navigation keys.
-			ctx.Input.SetMouseButton(input.MouseButtonLeft, false)
-			ctx.Input.SetMouseButton(input.MouseButtonRight, false)
-			ctx.Input.SetKeyCode(gpucontext.KeyTab, false)
-			if !oskJustSubmitted() {
-				ctx.Input.SetKeyCode(gpucontext.KeyEnter, false)
-			}
-		} else {
-			oskCallback = nil
-			dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
-			if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
-				tryOpenOSK(true)
-			}
+			return nil, nil
+		}
+		oskCallback = nil
+		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
+		if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
+			tryOpenOSK(true)
 		}
 	}
 

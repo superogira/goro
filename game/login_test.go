@@ -347,6 +347,113 @@ func TestCharacterSelectEnterOnOccupiedSlotSubmits(t *testing.T) {
 	}
 }
 
+func TestCharacterSelectIgnoresRepeatedSubmissionAndAllowsRetry(t *testing.T) {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	address := listener.Addr().(*net.TCPAddr)
+	server := network.CharServer{Address: address.IP.String(), Port: uint16(address.Port)}
+	netClient := network.NewClient(20080910, false)
+	defer netClient.Close()
+	ctx := client.Context{
+		Config:    config.Config{Headless: true},
+		Network:   netClient,
+		Input:     input.NewState(),
+		Resources: loginTestResources(res.Connection{Address: server.Address, Port: int(server.Port)}),
+		Session: &session.Session{AccountID: 123, Characters: []session.Character{
+			{ID: 10, Slot: 0, Name: "Alice"},
+			{ID: 20, Slot: 1, Name: "Bob"},
+		}},
+	}
+	mode := NewLoginMode()
+	mode.phase = loginPhaseCharacter
+	callbacks := mode.characterSelectWindowCallbacks(ctx)
+
+	// An unsuccessful send must not block a later attempt.
+	callbacks.OnOK()
+	if mode.charSelectPending || ctx.Session.CharID != 0 {
+		t.Fatal("failed selection marked the character as selected")
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if !mode.connectCharServer(ctx, server) {
+			t.Fatal(mode.status)
+		}
+		if mode.charSelectPending {
+			t.Fatal("reconnecting did not allow a new selection")
+		}
+		if err := listener.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := listener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		readBotTestPackets(t, conn, network.BuildCharServerEnterPacket(network.CharServerEnter{
+			AccountID: ctx.Session.AccountID,
+			AuthCode:  ctx.Session.AuthCode,
+			UserLevel: ctx.Session.UserLevel,
+			Sex:       ctx.Session.Sex,
+		}))
+
+		callbacks.OnActivateSlot(0)
+		ctx.Session.Inventory.Zeny = 12345
+		callbacks.OnActivateSlot(0)
+		callbacks.OnActivateSlot(0)
+		callbacks.OnOK()
+		ctx.Input.SetKey(input.KeyEnter, true)
+		mode.updateCharacterSelectInput(ctx)
+		ctx.Input.EndFrame()
+		ctx.Input.SetKey(input.KeyEnter, false)
+		callbacks.OnActivateSlot(1)
+		callbacks.OnActivateSlot(2) // An empty slot must not start character creation.
+
+		if !mode.charSelectPending || mode.selectedSlot != 0 || mode.fade.phase != loginFadeNone {
+			t.Fatal("repeated activation changed the pending selection")
+		}
+		if ctx.Session.CharID != 10 || ctx.Session.Inventory.Zeny != 12345 {
+			t.Fatal("repeated activation reset the selected character's session")
+		}
+		// A following packet proves that no duplicate selection was queued,
+		// without relying on a timeout to detect absent packets.
+		if err := netClient.SendPing(ctx.Session.AccountID); err != nil {
+			t.Fatal(err)
+		}
+		want := append(network.BuildSelectCharacterPacket(0), network.BuildPingPacket(ctx.Session.AccountID)...)
+		readBotTestPackets(t, conn, want)
+
+		if attempt == 0 {
+			// A server refusal also allows retrying on the same connection.
+			if _, err := conn.Write([]byte{0x6c, 0x00, 0x00}); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for mode.charSelectPending && time.Now().Before(deadline) {
+				if _, err := mode.Update(ctx); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if mode.charSelectPending {
+				t.Fatal("server refusal left character selection pending")
+			}
+			callbacks.OnOK()
+			readBotTestPackets(t, conn, network.BuildSelectCharacterPacket(0))
+		} else {
+			// The guard must survive the transition to the map, too.
+			mode.startWorldFade(time.Now())
+			callbacks.OnOK()
+			if err := netClient.SendPing(ctx.Session.AccountID); err != nil {
+				t.Fatal(err)
+			}
+			readBotTestPackets(t, conn, network.BuildPingPacket(ctx.Session.AccountID))
+		}
+	}
+}
+
 func TestLoginModeSendsCharServerPingAfterInterval(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {

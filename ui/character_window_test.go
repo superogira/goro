@@ -160,7 +160,7 @@ func TestCharacterWindowCompactToggleAndLiveValues(t *testing.T) {
 	menu.FollowCharacterWindow(ctx, &character)
 	app.Frame()
 	app.Window().DrawTo(&uitest.MockCanvas{})
-	if !character.compact || character.height != characterWindowCompactHeight || character.width != characterWindowWidth {
+	if !character.compact || character.height != CharacterWindowCompactHeight || character.width != characterWindowWidth {
 		t.Fatalf("compact window dimensions = %dx%d, compact=%v", character.width, character.height, character.compact)
 	}
 	if !menu.collapsed || menu.IsOpen() || character.dragBottom != 0 {
@@ -226,11 +226,11 @@ func TestCharacterWindowExpandingKeepsAttachedMenuOnScreen(t *testing.T) {
 			menu.Close()
 			menu.FollowCharacterWindow(ctx, &character)
 		}
-		character.toggleCompact()
+		character.ToggleCompact()
 		bottomY := ctx.ScreenH - windowScreenMargin - character.height - character.dragBottom
 		character.setPosition(ctx, character.x, bottomY)
 		menu.FollowCharacterWindow(ctx, &character)
-		character.toggleCompact()
+		character.ToggleCompact()
 		menu.FollowCharacterWindow(ctx, &character)
 		if character.y >= bottomY {
 			t.Fatalf("menu open=%v: expanded group off screen: character y=%d", menuOpen, character.y)
@@ -249,12 +249,12 @@ func TestCharacterWindowRebindKeepsCompactStateAndOwnsToggle(t *testing.T) {
 	ctx := Context{Input: input.NewState(), UIApp: bridge, UIManager: manager, Session: &session.Session{}, ScreenW: 800, ScreenH: 600}
 	var original CharacterWindow
 	original.Update(ctx)
-	original.toggleCompact()
+	original.ToggleCompact()
 	carried := original
 	carried.Rebind(ctx)
 	app.Frame()
 	app.Window().DrawTo(&uitest.MockCanvas{})
-	if !carried.compact || carried.height != characterWindowCompactHeight {
+	if !carried.compact || carried.height != CharacterWindowCompactHeight {
 		t.Fatal("map transition expanded the compact window")
 	}
 	x := float32(carried.x + carried.width - windowTitleButtonPadR - windowTitleButtonSize/2)
@@ -282,7 +282,7 @@ func TestCharacterWindowToggleSurvivesUpdatesWhilePressed(t *testing.T) {
 			var character CharacterWindow
 			character.Update(ctx)
 			if mode == "compact" {
-				character.toggleCompact()
+				character.ToggleCompact()
 			}
 			app.Frame()
 			app.Window().DrawTo(&uitest.MockCanvas{})

@@ -30,6 +30,32 @@ func TestPartyFooterAlignsButtonsRight(t *testing.T) {
 	}
 }
 
+func TestFriendsAndPartyTogglesSelectTheirTab(t *testing.T) {
+	ctx := Context{Session: session.New(), ScreenW: 800, ScreenH: 600}
+	var window FriendsWindow
+	window.ToggleParty(ctx)
+	if !window.IsOpen() || window.tab != friendsWindowTabParty {
+		t.Fatal("party shortcut did not open the party tab")
+	}
+	window.ToggleFriends(ctx)
+	if !window.IsOpen() || window.tab != friendsWindowTabFriends {
+		t.Fatal("friends shortcut closed the party tab instead of switching tabs")
+	}
+	window.ToggleParty(ctx)
+	if !window.IsOpen() || window.tab != friendsWindowTabParty {
+		t.Fatal("party shortcut closed the friends tab instead of switching tabs")
+	}
+	window.ToggleParty(ctx)
+	if window.IsOpen() {
+		t.Fatal("party shortcut did not close its own tab")
+	}
+	window.ToggleFriends(ctx)
+	window.ToggleFriends(ctx)
+	if window.IsOpen() {
+		t.Fatal("friends shortcut did not close its own tab")
+	}
+}
+
 func TestPartyFooterShowsCreateWhenNoParty(t *testing.T) {
 	var window FriendsWindow
 	footer := window.partyFooter(session.Party{})

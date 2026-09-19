@@ -124,6 +124,7 @@ individual game-window layout.
 
 ### Keyboard shortcuts
 
+- [x] Fixed classic window shortcuts: Alt+E inventory, Alt+Q equipment, Alt+S skills, Alt+A stats, Alt+Z party, Alt+H friends, Alt+W cart, Alt+C chat-room creation, Alt+V basic-info compact mode, Alt+J pet, Alt+R homunculus, Ctrl+R mercenary, and Alt+O settings. These use physical keys, like the existing shortcuts.
 - [ ] Add a shortcut configuration window instead of relying only on the classic F1-F9 and Battle Mode mappings.
 - [ ] Persist physical-key bindings so layouts such as AZERTY remain correct.
 - [x] Add the original Alt+M shortcut-list window for chat-command bindings.

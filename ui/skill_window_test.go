@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogpu/ui/core/button"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
@@ -41,6 +42,45 @@ func TestSkillWindowHidesUnavailableLevelUpButton(t *testing.T) {
 	)
 	if !cell.Hidden || cell.HasIconButton {
 		t.Fatalf("unavailable skill level-up cell = %+v, want hidden", cell)
+	}
+}
+
+func TestSkillWindowFooterRequiresPendingChanges(t *testing.T) {
+	for _, mode := range []string{"list", "grid"} {
+		t.Run(mode, func(t *testing.T) {
+			window := &SkillWindow{gridMode: mode == "grid"}
+			ctx := Context{Session: &session.Session{Skills: session.Skills{Points: 3}}}
+			for _, phase := range []string{"initial", "staged", "cleared"} {
+				t.Run(phase, func(t *testing.T) {
+					switch phase {
+					case "staged":
+						window.stageSkill(db.SkillNVBasic)
+					case "cleared":
+						window.clearPending()
+					}
+					children := window.widgetTree(ctx, nil).Children()
+					footer := children[len(children)-1]
+					buttons := 0
+					var visit func(widget.Widget)
+					visit = func(node widget.Widget) {
+						if btn, ok := node.(*button.Widget); ok {
+							buttons++
+							// IsFocusable includes the button's configured disabled state.
+							if got, want := btn.IsFocusable(), phase == "staged"; got != want {
+								t.Errorf("footer button %d enabled = %t, want %t", buttons, got, want)
+							}
+						}
+						for _, child := range node.Children() {
+							visit(child)
+						}
+					}
+					visit(footer)
+					if buttons != 2 {
+						t.Fatalf("footer buttons = %d, want Reset and Confirm", buttons)
+					}
+				})
+			}
+		})
 	}
 }
 

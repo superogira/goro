@@ -351,11 +351,11 @@ func (w *SkillWindow) widgetTreeWithAssets(ctx Context, assets AssetProvider, ac
 		Footer(
 			footerLabel(fmt.Sprintf("Skill Points: %d", maxInt(0, sessionSkillPoints(ctx.Session)-w.pendingCount()))),
 			primitives.Expanded(primitives.Box()),
-			w.skillFooterButton(ctx, "Reset", 0, func() {
+			w.skillFooterButton(ctx, "Reset", 0, w.pendingCount() == 0, func() {
 				w.clearPending()
 				w.dirty = true
 			}),
-			w.skillFooterButton(ctx, "Confirm", 1, func() {
+			w.skillFooterButton(ctx, "Confirm", 1, w.pendingCount() == 0, func() {
 				w.confirmPending(ctx)
 				w.dirty = true
 			}),
@@ -364,9 +364,10 @@ func (w *SkillWindow) widgetTreeWithAssets(ctx Context, assets AssetProvider, ac
 }
 
 // skillFooterButton wraps a footer action button with the gamepad focus
-// outline when the handheld cursor sits on it.
-func (w *SkillWindow) skillFooterButton(_ Context, label string, index int, onClick func()) widget.Widget {
-	button := rotheme.Button(label, onClick)
+// outline when the handheld cursor sits on it, and the upstream
+// no-pending-changes disabled look.
+func (w *SkillWindow) skillFooterButton(_ Context, label string, index int, disabled bool, onClick func()) widget.Widget {
+	button := rotheme.ButtonDisabled(label, disabled, onClick)
 	if w.gamepadOnFooter && w.gamepadFooter == index {
 		return primitives.Box(button).
 			BorderStyle(1.5, rotheme.Default.Colors.InputFocus)

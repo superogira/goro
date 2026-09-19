@@ -22,7 +22,7 @@ const (
 	characterWindowY                     = windowScreenMargin
 	characterWindowWidth                 = 324
 	characterWindowHeight                = 134
-	characterWindowCompactHeight         = 80
+	CharacterWindowCompactHeight         = 80
 	characterEXPPanelPaddingX    float32 = 6
 	characterEXPPanelPaddingY    float32 = 4
 	characterEXPPanelGap         float32 = 2
@@ -88,12 +88,15 @@ func (w *CharacterWindow) Rebind(ctx Context) {
 
 func (w *CharacterWindow) windowHeight() int {
 	if w.compact {
-		return characterWindowCompactHeight
+		return CharacterWindowCompactHeight
 	}
 	return characterWindowHeight
 }
 
-func (w *CharacterWindow) toggleCompact() {
+func (w *CharacterWindow) ToggleCompact() {
+	if !w.IsOpen() {
+		return
+	}
 	w.compact = !w.compact
 	w.SetSize(characterWindowWidth, w.windowHeight())
 	if !w.compact {
@@ -114,7 +117,7 @@ func (w *CharacterWindow) widgetTree(ctx Context) widget.Widget {
 	w.body = newCharacterInfoBody(w.bodyTree(ctx))
 	return Win(
 		TitleSignal(w.title),
-		TitleButton(kind, w.toggleCompact),
+		TitleButton(kind, w.ToggleCompact),
 		CloseButton(false),
 		Size(float32(characterWindowWidth), float32(w.windowHeight())),
 		Content(w.body),

@@ -1746,3 +1746,31 @@ func TestSpriteBillboardScreenCenterUsesImageAndAnchor(t *testing.T) {
 		t.Fatalf("center = %.1f,%.1f, want 120,160", x, y)
 	}
 }
+
+func TestHidingUsesActorOptionsInsteadOfStatusIcons(t *testing.T) {
+	ctx := client.Context{
+		World:   worldstate.New(),
+		Session: &session.Session{AccountID: 2000000, CharID: 150000},
+	}
+	ctx.World.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
+	mode := &WorldMode{}
+	// Main's status path also enqueues transition effects by design, so
+	// only the visibility semantics are asserted here (upstream additionally
+	// counts effects, which does not apply to the richer transition system).
+	mode.applyStatusEffectChange(ctx, network.StatusEffectChange{StatusID: db.StatusHiding, ActorID: 2000000, Active: true, HasDuration: true, Duration: time.Second})
+	if ctx.PlayerHasEffectState(db.EffectStateHide) {
+		t.Fatal("status icon changed actor visibility")
+	}
+	change := network.ActorStateChange{ID: 2000000, EffectState: db.EffectStateHide}
+	mode.applyActorStateChange(ctx, change)
+	mode.applyActorStateChange(ctx, change)
+	mode.removeExpiredStatusEffects(ctx.Session, time.Now().Add(time.Hour))
+	if !ctx.PlayerHasEffectState(db.EffectStateHide) {
+		t.Fatal("status icon expiry revealed the player")
+	}
+	change.EffectState = 0
+	mode.applyActorStateChange(ctx, change)
+	if ctx.PlayerHasEffectState(db.EffectStateHide) {
+		t.Fatal("actor remained hidden after option cleared")
+	}
+}

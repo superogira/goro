@@ -36,8 +36,11 @@ const (
 	// Compact-auto mode (small screens): the dormant console shrinks to a
 	// few lines and unpublishes entirely after a quiet spell, popping back
 	// on the next message. Typing always shows the full console.
-	consoleCompactWidth    = 320
-	consoleCompactHeight   = 4*consoleLineH + consoleFieldH + 20
+	consoleCompactWidth = 320
+	// The dormant compact view is messages-only: no input field (the
+	// handheld types through the full console), so its height skips the
+	// field block.
+	consoleCompactHeight   = 4*consoleLineH + 20
 	consoleCompactHideWait = 6 * time.Second
 )
 
@@ -1079,11 +1082,19 @@ func (c *ChatConsole) widgetTree(width, height int) widget.Widget {
 			).Height(consoleLineH),
 		)
 	}
-	field := primitives.Box(c.inputWidget()).
-		Width(float32(contentWidth)).
-		Height(consoleFieldH).
-		CrossAlign(primitives.CrossAxisStretch)
-	messageHeight := maxInt(20, height-16-consoleFieldH-4)
+	compact := c.compactAuto && !c.active && !c.Active()
+	var field widget.Widget
+	if !compact {
+		field = primitives.Box(c.inputWidget()).
+			Width(float32(contentWidth)).
+			Height(consoleFieldH).
+			CrossAlign(primitives.CrossAxisStretch)
+	}
+	fieldHeight := 0
+	if field != nil {
+		fieldHeight = consoleFieldH + 4
+	}
+	messageHeight := maxInt(20, height-16-fieldHeight)
 	c.messageH = messageHeight
 	messageList := primitives.Box(messageWidgets...).
 		Width(float32(contentWidth)).
@@ -1103,7 +1114,11 @@ func (c *ChatConsole) widgetTree(width, height int) widget.Widget {
 		Width(float32(contentWidth)).
 		Height(float32(messageHeight)).
 		CrossAlign(primitives.CrossAxisStretch)
-	return primitives.Box(messages, field).
+	children := []widget.Widget{messages}
+	if field != nil {
+		children = append(children, field)
+	}
+	return primitives.Box(children...).
 		Width(float32(width)).
 		Height(float32(height)).
 		PaddingXY(8, 6).

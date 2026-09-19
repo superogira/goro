@@ -141,6 +141,9 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) bool {
 	case m.ui.inventoryBag.IsOpen():
 		m.ui.inventoryBag.Toggle(ctx)
 		closed = true
+	case m.ui.storageWindow.IsOpen():
+		m.ui.storageWindow.SetOpen(false)
+		closed = true
 	case m.ui.equipmentWindow.IsOpen():
 		m.ui.equipmentWindow.Toggle(ctx)
 		closed = true
@@ -294,6 +297,11 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		}
 		return true
 	}
+	// The storage deposit picker owns every button while open (A confirms,
+	// B cancels, d-pad steps the amount).
+	if m.updateGamepadStorageDeposit(ctx, now) {
+		return true
+	}
 	// B closes the active (topmost relevant) window. Checked before the
 	// walk layer so B never walks or attacks while dismissing a window. On
 	// the plain screen, with nothing to close, B uses the hotbar's active
@@ -394,7 +402,24 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
-				m.ui.inventoryBag.GamepadActivate(ctx)
+				if m.ui.storageWindow.IsOpen() {
+					// With storage open, A deposits the selected stack
+					// instead of using the item; stacks larger than one go
+					// through the amount picker.
+					if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
+						if item.Amount > 1 {
+							m.storageDeposit.begin(item.Index, item.ItemID, gameui.ItemDisplayName(ctx.Resources, item), int(item.Amount))
+						} else if ctx.Network != nil {
+							if err := ctx.Network.SendMoveToStorage(item.Index, 1); err != nil {
+								m.ui.console.AddErrorMessage("Deposit failed.")
+							} else {
+								render.ShowScreenNotice(fmt.Sprintf("Deposited 1 x %s", gameui.ItemDisplayName(ctx.Resources, item)))
+							}
+						}
+					}
+				} else {
+					m.ui.inventoryBag.GamepadActivate(ctx)
+				}
 			}
 			return true
 		}

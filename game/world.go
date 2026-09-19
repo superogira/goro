@@ -34,7 +34,9 @@ type WorldMode struct {
 	menuPanelsShown   bool
 	// mapOverlay is the handheld X-button map cycle: 0 hidden, 1 corner
 	// thumbnail, 2 large centered map.
-	mapOverlay          int
+	mapOverlay int
+	// storageDeposit is the handheld storage deposit amount picker.
+	storageDeposit      storageDepositDialog
 	heldMenuSel         int
 	heldMenuMovedAt     time.Time
 	heldMenuActivatedAt time.Time
@@ -1839,6 +1841,7 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	if m.mapOverlay > 0 {
 		m.ui.minimap.DrawMapOverlay(ctx, screen, m.mapOverlay == 2)
 	}
+	m.drawStorageDeposit(screen)
 }
 
 func (m *WorldMode) drawUIDragGhosts(screen *render.Frame, ctx client.Context) {

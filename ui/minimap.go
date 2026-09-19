@@ -46,8 +46,7 @@ type Minimap struct {
 	arrow            image.Image
 	arrowLoadTried   bool
 	arrowVariants    [8]image.Image
-	largeWrapped     *render.Image
-	largeWrappedKey  string
+	largeWrapped     map[image.Image]*render.Image
 	window           Window
 	widget           *minimapWidget
 	hidden           bool
@@ -309,15 +308,24 @@ func (m *Minimap) DrawMapOverlay(ctx Context, screen *render.Frame, large bool) 
 	}
 }
 
-// largeRenderImage wraps a cached raster for the large overlay, reusing the
-// wrap across frames instead of copying the bitmap every draw.
+// largeRenderImage wraps a cached raster for the map overlay, reusing the
+// wrap across frames instead of copying the bitmap every draw. The map is
+// keyed by the raster itself: the overlay draws the map bitmap AND the
+// player arrow in one frame, and the old single-slot cache thrashed between
+// them — two fresh render images (and two fresh GPU textures) per frame,
+// which the renderer's texture cache held long enough to OOM the handheld.
+// The strong keys keep the set bounded: one bitmap per size plus the arrow
+// variants.
 func (m *Minimap) largeRenderImage(img image.Image) *render.Image {
-	key := fmt.Sprintf("%p", img)
-	if m.largeWrapped == nil || m.largeWrappedKey != key {
-		m.largeWrapped = render.NewImageFromImage(img)
-		m.largeWrappedKey = key
+	if m.largeWrapped == nil {
+		m.largeWrapped = make(map[image.Image]*render.Image)
 	}
-	return m.largeWrapped
+	if wrapped, ok := m.largeWrapped[img]; ok {
+		return wrapped
+	}
+	wrapped := render.NewImageFromImage(img)
+	m.largeWrapped[img] = wrapped
+	return wrapped
 }
 
 func (m *Minimap) ensureWindow(width, height int) {
@@ -349,6 +357,7 @@ func (m *Minimap) ensureImage(manager *res.Manager, mapName string) {
 		m.mapImageTried = false
 		m.scaled = nil
 		m.scaledKey = ""
+		m.largeWrapped = nil
 	}
 	if manager == nil || m.img != nil || m.mapImageTried {
 		return

@@ -9,8 +9,8 @@ import (
 	"github.com/gogpu/gogpu/hooks"
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
-	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/glog"
+	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/render"
 )
 
@@ -226,7 +226,7 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	if !osk.open {
 		return false
 	}
-	glog.Infof("osk: update called, F13=%v F18=%v Enter=%v input=%v", 
+	glog.Infof("osk: update called, F13=%v F18=%v Enter=%v input=%v",
 		ctx.Input != nil && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13),
 		ctx.Input != nil && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18),
 		ctx.Input != nil && ctx.Input.KeyCodeJustPressed(gpucontext.KeyEnter),

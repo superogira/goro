@@ -225,7 +225,17 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 			updateGamepadOSK(ctx, now)
 			return nil, nil
 		}
+		// The OSK just closed: sync the typed credentials from the form's
+		// widgets into the mode fields and trigger the login.
+		if oskJustSubmitted() && m.loginWindow != nil {
+			m.username, m.password = m.loginWindow.FieldValues()
+			glog.Infof("osk: submitted user=%q pass_len=%d", m.username, len(m.password))
+			if conns := loginConnections(ctx); len(conns) > 0 {
+				m.connectAndMaybeLogin(ctx, conns[0], true)
+			}
+		}
 		oskCallback = nil
+		teardownOSKHook()
 		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
 		if ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)

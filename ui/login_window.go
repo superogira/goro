@@ -155,7 +155,7 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 	}
 	userFocused, passwordFocused := w.fieldFocus()
 	keepFocused := w.keep != nil && w.keep.IsFocused()
-	username, passwordValue := w.fieldValues()
+	username, passwordValue := w.FieldValues()
 	user := rotheme.TextField(
 		username,
 		textfield.TypeText,
@@ -288,17 +288,20 @@ func (w *LoginWindow) TypeIntoFocusedField(ch string, action string) {
 	switch action {
 	case "type":
 		target.SetText(target.Text() + ch)
+		w.rebuild()
 	case "bksp":
 		text := target.Text()
 		if runes := []rune(text); len(runes) > 0 {
 			target.SetText(string(runes[:len(runes)-1]))
 		}
+		w.rebuild()
 	case "submit":
-		// Let the form's normal Enter handling take over.
+		// Sync the backing fields so the login flow sees the typed values.
+		w.Username, w.Password = w.FieldValues()
 	}
 }
 
-func (w *LoginWindow) fieldValues() (string, string) {
+func (w *LoginWindow) FieldValues() (string, string) {
 	username, password := w.Username, w.Password
 	if w.user != nil {
 		username = w.user.Text()

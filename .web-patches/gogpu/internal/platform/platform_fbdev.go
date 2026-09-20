@@ -947,9 +947,9 @@ func (p *fbdevPlatform) logUnknownCode(code uint16, down bool) {
 }
 
 // quitWatcher closes the window once a quit combo has stayed held long
-// enough: SELECT ≥3s, SELECT+START ≥3s, or L1+R1 ≥1.5s. The SELECT paths
-// share the 3s threshold so holding SELECT+START hits the combo (not the
-// faster solo path). MENU alone must NOT quit: held MENU is the camera-
+// enough: SELECT+START ≥3s or L1+R1 ≥1.5s (SELECT alone was removed at
+// the user's request — it quit during gameplay when SELECT was held for
+// other purposes). MENU alone must NOT quit: held MENU is the camera-
 // steer modifier for the d-pad. The ticker fires even if the release event
 // never arrives.
 func (p *fbdevPlatform) quitWatcher() {
@@ -967,8 +967,6 @@ func (p *fbdevPlatform) quitWatcher() {
 		if selHeld && startHeld &&
 			now.Sub(selAt) >= 3*time.Second && now.Sub(startAt) >= 3*time.Second {
 			via = "SELECT+START"
-		} else if selHeld && now.Sub(selAt) >= 3*time.Second {
-			via = "SELECT(0x162)"
 		} else if t0, ok := p.held[btnMode]; ok && now.Sub(t0) >= 1200*time.Millisecond {
 			via = "MODE(0x13d)"
 		} else if tl, okL := p.held[btnL1]; okL {

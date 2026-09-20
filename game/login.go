@@ -237,11 +237,12 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		oskCallback = nil
 		teardownOSKHook()
 		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
-		// Only phases with text input fields (the account form and the
-		// character creation name field) should open the keyboard — the
-		// server select and character select screens use A/Enter to pick
-		// an entry, not to type.
-		textInputPhase := m.phase == loginPhaseAccount || m.phase == loginPhaseCreate
+		// Only the credential form and the character creation name field
+		// should open the keyboard — the service select (inside the
+		// account phase but past the login) and the character select use
+		// A/Enter to pick an entry, not to type.
+		textInputPhase := m.phase == loginPhaseCreate ||
+			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
 		}

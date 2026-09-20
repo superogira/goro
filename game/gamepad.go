@@ -719,6 +719,16 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	// Plain-screen shortcuts: Y opens the inventory (the window branches
 	// above have already consumed Y while any window was open), X cycles
 	// the frameless map overlay: corner thumbnail, large map, hidden.
+	// L1/R1 step the hotbar up/down its column — here only, since the
+	// window branches above own those buttons for tab switching.
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+		m.ui.hotbar.cycle(-1)
+		return true
+	}
+	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
+		m.ui.hotbar.cycle(1)
+		return true
+	}
 	if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
 		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 			m.gamepadActionAt = now

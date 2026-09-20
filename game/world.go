@@ -1051,7 +1051,22 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.worldMap.Update(ctx) {
 		return nil, nil
 	}
-	if !dead && !m.ui.chatShortcuts.KeyboardShortcutsBlocked() && m.ui.console.UpdateInput(ctx) {
+	// Handheld (HideHUD layout): START opens the on-screen keyboard over
+	// the active chat console. The press must be intercepted here — the
+	// console's own input handling below consumes Enter (an empty-draft
+	// submit) and its early return meant the gamepad layer never saw the
+	// press, so the keyboard never appeared. While the OSK is open it owns
+	// every key: the console must not process the Enter echo (a double
+	// submit) nor the d-pad (its input history) the OSK navigates on.
+	// Desktop keeps plain Enter semantics (submit the draft).
+	if hudHidden(ctx) && ctx.Input != nil && !oskState().open && m.ui.console.Active() &&
+		ctx.Input.JustPressed(input.KeyEnter) {
+		tryOpenOSK(true)
+		oskCallback = func(ch string, action string) {
+			m.ui.console.TypeIntoInput(ch, action)
+		}
+	}
+	if !oskState().open && !dead && !m.ui.chatShortcuts.KeyboardShortcutsBlocked() && m.ui.console.UpdateInput(ctx) {
 		return nil, nil
 	}
 	if m.ui.chatShortcuts.Update(ctx) {

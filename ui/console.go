@@ -1271,6 +1271,22 @@ func (c *ChatConsole) inputWidget() *textfield.Widget {
 	return c.inputField
 }
 
+// TypeIntoInput delivers an on-screen keyboard stroke to the console's
+// input field: "type" appends, "bksp" deletes the last rune, "submit"
+// sends the draft (the canvas input's Enter path).
+func (c *ChatConsole) TypeIntoInput(ch string, action string) {
+	switch action {
+	case "type":
+		c.setInput(c.currentInput() + ch)
+	case "bksp":
+		if runes := []rune(c.currentInput()); len(runes) > 0 {
+			c.setInput(string(runes[:len(runes)-1]))
+		}
+	case "submit":
+		c.submitText(c.ctx, c.currentInput())
+	}
+}
+
 func (c *ChatConsole) setInput(text string) {
 	c.input = text
 	if c.inputField != nil && c.inputField.Text() != text {

@@ -11,6 +11,35 @@ import (
 	worldstate "github.com/kivutar/goro/world"
 )
 
+func TestConsoleTypeIntoInputBuildsAndSubmitsDraft(t *testing.T) {
+	// The on-screen keyboard drives the console through TypeIntoInput —
+	// the handheld's only typing path for chat. /ns also proves the
+	// submitted draft goes through the command machinery.
+	console := &ChatConsole{active: true}
+	console.ctx = client.Context{Session: &session.Session{}}
+
+	console.TypeIntoInput("/", "type")
+	console.TypeIntoInput("ns", "type")
+	if got := console.currentInput(); got != "/ns" {
+		t.Fatalf("draft = %q, want /ns", got)
+	}
+
+	console.TypeIntoInput("", "bksp")
+	console.TypeIntoInput("", "bksp")
+	if got := console.currentInput(); got != "/" {
+		t.Fatalf("draft after two bksp = %q, want /", got)
+	}
+	console.TypeIntoInput("ns", "type")
+
+	console.TypeIntoInput("", "submit")
+	if console.currentInput() != "" || console.active {
+		t.Fatalf("after submit: input=%q active=%t, want sent and closed", console.currentInput(), console.active)
+	}
+	if !console.ctx.Session.NoShift {
+		t.Fatal("the /ns command in the submitted draft did not run")
+	}
+}
+
 func TestConsoleNoShiftCommandTogglesSessionPreference(t *testing.T) {
 	console := &ChatConsole{input: "/ns", active: true}
 	sessionState := &session.Session{}

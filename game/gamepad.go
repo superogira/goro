@@ -361,9 +361,20 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	}
 	// The storage window: d-pad walks the item rows, A withdraws the
 	// selected item into the inventory (single items go directly; stacks
-	// go through the same amount picker as deposits). B closes via the
-	// stack above (which also sends the close packet to the server).
+	// go through the same amount picker as deposits). Y opens the
+	// inventory for deposits — both windows then coexist, with the
+	// inventory branch (checked above this one) owning the controls
+	// until B closes it. B closes via the stack above (which also sends
+	// the close packet to the server).
 	if m.ui.storageWindow.IsOpen() && !m.ui.inventoryBag.IsOpen() {
+		// Y opens the inventory alongside the storage for deposits.
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF19) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.inventoryBag.Toggle(ctx)
+			}
+			return true
+		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now

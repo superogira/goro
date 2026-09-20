@@ -6,6 +6,7 @@ import (
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/ui/rotheme"
 )
 
@@ -169,6 +170,12 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 			w.Username = v
 		},
 		func(string) {
+			// Enter here must not fire while the on-screen keyboard is
+			// up: START dispatches Enter for the OSK's own submit, and
+			// advancing fields mid-submit races the credential sync.
+			if render.OSKActive() {
+				return
+			}
 			w.advanceToPassword = true
 			w.rebuild()
 		},
@@ -179,7 +186,14 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 		func(v string) {
 			w.Password = v
 		},
-		func(string) { submit() },
+		func(string) {
+			// Same gate: the OSK's Enter is the OSK's submit (it drives
+			// the login itself once closed), not the form's.
+			if render.OSKActive() {
+				return
+			}
+			submit()
+		},
 	)
 	// Focus the fresh widgets BEFORE SetContent unmounts the previous tree:
 	// the keyboard registry must never pass through empty while a field is

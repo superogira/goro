@@ -54,8 +54,11 @@ func (m *LoginMode) updateLoginWindow(ctx client.Context) {
 	if m.loginWindow == nil {
 		m.loginWindow = gameui.NewLoginWindow(ctx, m.username, m.password, m.keepID, gameui.LoginWindowCallbacks{
 			OnSubmit: func() {
-				m.username = m.loginWindow.Username
-				m.password = m.loginWindow.Password
+				// FieldValues reads the live widgets: the OSK types via
+				// SetText, which never fires OnChange, so the Username/
+				// Password backing fields can be stale until the next
+				// submit sync — submitting those sent an empty login.
+				m.username, m.password = m.loginWindow.FieldValues()
 				m.keepID = m.loginWindow.KeepID
 				m.saveLoginID(ctx)
 				if conn, ok := m.selectedLoginConnection(ctx); ok {

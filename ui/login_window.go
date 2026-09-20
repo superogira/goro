@@ -309,14 +309,16 @@ func (w *LoginWindow) FieldFocus() (userFocused, passwordFocused bool) {
 	return w.fieldFocus()
 }
 
-// ToggleKeep flips the Keep-ID checkbox (the R2 handheld shortcut — there
-// is no pointer on the device). The checkbox's OnToggle keeps KeepID in
-// sync.
+// ToggleKeep flips the Keep-ID checkbox (the R1 handheld shortcut — there
+// is no pointer on the device). The tree is remounted like AdvanceFocus:
+// a programmatic SetNeedsRedraw from the game layer does not repaint the
+// mounted checkbox, but a rebuilt one draws the new state the same frame.
 func (w *LoginWindow) ToggleKeep() {
-	if w == nil || w.keep == nil {
+	if w == nil {
 		return
 	}
-	w.keep.ToggleChecked()
+	w.KeepID = !w.KeepID
+	w.rebuild()
 }
 
 // TypeIntoFocusedField appends or removes a character from the focused

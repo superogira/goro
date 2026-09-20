@@ -209,6 +209,47 @@ var loginShoulderShared = struct {
 	actionAt  time.Time
 }{}
 
+// updateLoginShoulders drives the credential form's shoulder buttons:
+// L1/L2 swap Account <-> Password (the Tab role), R1/R2 flip the Keep-ID
+// checkbox. R1 and L1 are the primaries — their evdev codes are confirmed
+// on this hardware, while R2's (0x141) is probe-pending and may never
+// fire. Runs with the OSK open or closed; the keyboard only owns
+// A/B/START/SELECT and the d-pad.
+func (m *LoginMode) updateLoginShoulders(ctx client.Context, now time.Time) {
+	if m.loginWindow == nil {
+		return
+	}
+	floored := now.Sub(loginShoulderShared.actionAt) >= gamepadActionFloor
+	if !loginShoulderShared.swapLatch && floored &&
+		(ctx.Input.KeyCodeDown(gpucontext.KeyF23) || ctx.Input.KeyCodeDown(gpucontext.KeyF20)) {
+		loginShoulderShared.swapLatch = true
+		loginShoulderShared.actionAt = now
+		m.loginWindow.AdvanceFocus()
+		field := "Account"
+		if _, passwordFocused := m.loginWindow.FieldFocus(); passwordFocused {
+			field = "Password"
+		}
+		glog.Infof("login: shoulder swap -> %s", field)
+		render.ShowScreenNotice(field)
+	} else if !ctx.Input.KeyCodeDown(gpucontext.KeyF23) && !ctx.Input.KeyCodeDown(gpucontext.KeyF20) {
+		loginShoulderShared.swapLatch = false
+	}
+	if !loginShoulderShared.keepLatch && floored &&
+		(ctx.Input.KeyCodeDown(gpucontext.KeyF24) || ctx.Input.KeyCodeDown(gpucontext.KeyF21)) {
+		loginShoulderShared.keepLatch = true
+		loginShoulderShared.actionAt = now
+		m.loginWindow.ToggleKeep()
+		keep := "OFF"
+		if m.loginWindow.KeepID {
+			keep = "ON"
+		}
+		glog.Infof("login: shoulder keep toggle -> %s", keep)
+		render.ShowScreenNotice("Keep ID: " + keep)
+	} else if !ctx.Input.KeyCodeDown(gpucontext.KeyF24) && !ctx.Input.KeyCodeDown(gpucontext.KeyF21) {
+		loginShoulderShared.keepLatch = false
+	}
+}
+
 func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	now := time.Now()
 	if m.updateFade(ctx, now) {
@@ -224,6 +265,19 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	// update at all). Returning early is safe now because SetText works
 	// without the widget tree updating.
 	if ctx.Input != nil {
+		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
+		// Only the credential form and the character creation name field
+		// count as text-input phases (the service select and the character
+		// select use A/Enter to pick an entry, not to type).
+		textInputPhase := m.phase == loginPhaseCreate ||
+			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
+		// Shoulder buttons run before the OSK's early return so they also
+		// work while the keyboard is open — the OSK only owns
+		// A/B/START/SELECT and the d-pad, and Keep is a form option, not
+		// text input.
+		if textInputPhase && !dialogShowing {
+			m.updateLoginShoulders(ctx, now)
+		}
 		if oskState().open {
 			glog.Infof("osk: LoginMode.Update with OSK open")
 			oskCallback = func(ch string, action string) {
@@ -247,52 +301,8 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		}
 		oskCallback = nil
 		teardownOSKHook()
-		dialogShowing := m.disconnectDialog.IsOpen() || m.quitConfirm.IsOpen() || m.charDeleteConfirm.IsOpen()
-		// Only the credential form and the character creation name field
-		// should open the keyboard — the service select (inside the
-		// account phase but past the login) and the character select use
-		// A/Enter to pick an entry, not to type.
-		textInputPhase := m.phase == loginPhaseCreate ||
-			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
-		}
-		// Shoulder buttons on the credential form: L1/L2 swap Account <->
-		// Password (the Tab role), R1/R2 flip the Keep-ID checkbox. R1 and
-		// L1 are the primaries — their evdev codes are confirmed on this
-		// hardware, while R2's (0x141) is probe-pending and may never fire.
-		// Held-state latches like the OSK — fbdev clears key edges before
-		// LoginMode.Update runs.
-		if textInputPhase && !dialogShowing && m.loginWindow != nil {
-			floored := now.Sub(loginShoulderShared.actionAt) >= gamepadActionFloor
-			if !loginShoulderShared.swapLatch && floored &&
-				(ctx.Input.KeyCodeDown(gpucontext.KeyF23) || ctx.Input.KeyCodeDown(gpucontext.KeyF20)) {
-				loginShoulderShared.swapLatch = true
-				loginShoulderShared.actionAt = now
-				m.loginWindow.AdvanceFocus()
-				field := "Account"
-				if _, passwordFocused := m.loginWindow.FieldFocus(); passwordFocused {
-					field = "Password"
-				}
-				glog.Infof("login: shoulder swap -> %s", field)
-				render.ShowScreenNotice(field)
-			} else if !ctx.Input.KeyCodeDown(gpucontext.KeyF23) && !ctx.Input.KeyCodeDown(gpucontext.KeyF20) {
-				loginShoulderShared.swapLatch = false
-			}
-			if !loginShoulderShared.keepLatch && floored &&
-				(ctx.Input.KeyCodeDown(gpucontext.KeyF24) || ctx.Input.KeyCodeDown(gpucontext.KeyF21)) {
-				loginShoulderShared.keepLatch = true
-				loginShoulderShared.actionAt = now
-				m.loginWindow.ToggleKeep()
-				keep := "OFF"
-				if m.loginWindow.KeepID {
-					keep = "ON"
-				}
-				glog.Infof("login: shoulder keep toggle -> %s", keep)
-				render.ShowScreenNotice("Keep ID: " + keep)
-			} else if !ctx.Input.KeyCodeDown(gpucontext.KeyF24) && !ctx.Input.KeyCodeDown(gpucontext.KeyF21) {
-				loginShoulderShared.keepLatch = false
-			}
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
@@ -243,6 +244,13 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		// A/Enter to pick an entry, not to type.
 		textInputPhase := m.phase == loginPhaseCreate ||
 			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
+		// L1 acts as Tab on the credentials form: advances focus from
+		// the username to the password field (and back).
+		if m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials && m.loginWindow != nil {
+			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+				m.loginWindow.AdvanceFocus()
+			}
+		}
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
 		}

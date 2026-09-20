@@ -2770,7 +2770,7 @@ func (r *runner) drawUpdateProgress(screen *Frame) {
 	DrawRect(screen, x, y, w, h, color.RGBA{R: 24, G: 20, B: 34, A: 240})
 	DrawRect(screen, x, y, w, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
 	DrawRect(screen, x, y+h-2, w, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
-	DrawUIOutlinedTextAt(screen, state.text, x+12, y+12, color.RGBA{R: 244, G: 248, B: 252, A: 255}, color.RGBA{A: 200})
+	DrawOutlinedTextAt(screen, state.text, int(x+12), int(y+12), color.RGBA{R: 244, G: 248, B: 252, A: 255}, color.RGBA{A: 200})
 	if state.fraction < 0 {
 		return
 	}

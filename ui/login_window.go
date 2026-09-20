@@ -270,6 +270,31 @@ func (w *LoginWindow) fieldFocus() (bool, bool) {
 	return userFocused, passwordFocused
 }
 
+// AdvanceFocus moves the keyboard focus between the username and password
+// fields (the L1/Tab handheld shortcut).
+func (w *LoginWindow) AdvanceFocus() {
+	if w == nil {
+		return
+	}
+	_, passwordFocused := w.fieldFocus()
+	if passwordFocused {
+		if w.user != nil {
+			w.user.SetFocused(true)
+		}
+		if w.password != nil {
+			w.password.SetFocused(false)
+		}
+	} else {
+		if w.user != nil {
+			w.user.SetFocused(false)
+		}
+		if w.password != nil {
+			w.password.SetFocused(true)
+		}
+	}
+	w.rebuild()
+}
+
 // TypeIntoFocusedField appends or removes a character from the focused
 // text field (the on-screen keyboard's typing path — it bypasses the
 // widget event dispatch entirely).

@@ -19,6 +19,7 @@ import (
 
 type storageDepositDialog struct {
 	open      bool
+	withdraw  bool // true = withdraw from storage, false = deposit
 	itemIndex uint16
 	itemID    uint16
 	itemName  string
@@ -83,11 +84,20 @@ func (m *WorldMode) updateGamepadStorageDeposit(ctx client.Context, now time.Tim
 			m.gamepadActionAt = now
 			dialog.open = false
 			if ctx.Network != nil {
-				if err := ctx.Network.SendMoveToStorage(dialog.itemIndex, uint32(dialog.amount)); err != nil {
-					glog.Warnf("storage deposit failed: %v", err)
-					m.ui.console.AddErrorMessage("Deposit failed.")
+				var err error
+				var verb string
+				if dialog.withdraw {
+					err = ctx.Network.SendMoveFromStorage(dialog.itemIndex, uint32(dialog.amount))
+					verb = "Withdrew"
 				} else {
-					render.ShowScreenNotice(fmt.Sprintf("Deposited %d x %s", dialog.amount, dialog.itemName))
+					err = ctx.Network.SendMoveToStorage(dialog.itemIndex, uint32(dialog.amount))
+					verb = "Deposited"
+				}
+				if err != nil {
+					glog.Warnf("storage %s failed: %v", verb, err)
+					m.ui.console.AddErrorMessage("%s failed.", verb)
+				} else {
+					render.ShowScreenNotice(fmt.Sprintf("%s %d x %s", verb, dialog.amount, dialog.itemName))
 				}
 			}
 		}
@@ -131,7 +141,11 @@ func (m *WorldMode) drawStorageDeposit(screen *render.Frame) {
 	render.DrawRect(screen, x, y, w, h, c.panel)
 	render.DrawRect(screen, x, y, w, 22, c.border)
 	render.DrawRect(screen, x, y+20, w, 2, c.gold)
-	render.DrawUIOutlinedTextAt(screen, "Deposit to Storage", x+10, y+4, c.gold, c.outline)
+	title := "Deposit to Storage"
+	if dialog.withdraw {
+		title = "Withdraw from Storage"
+	}
+	render.DrawUIOutlinedTextAt(screen, title, x+10, y+4, c.gold, c.outline)
 
 	render.DrawUIOutlinedTextAt(screen, trimRunesGame(dialog.itemName, 24), x+10, y+32, c.text, c.outline)
 	render.DrawUIOutlinedTextAt(screen, fmt.Sprintf("%d / %d", dialog.amount, dialog.max), x+10, y+52, c.text, c.outline)
@@ -153,4 +167,15 @@ func trimRunesGame(text string, maxRunes int) string {
 		return text
 	}
 	return string(runes[:maxRunes])
+}
+
+// updateGamepadStorageWithdraw drives the withdraw amount picker using the
+// same dialog mechanics as deposits.
+func (m *WorldMode) updateGamepadStorageWithdraw(ctx client.Context, now time.Time) bool {
+	// Swap the withdraw dialog into the deposit slot, run the deposit
+	// handler (same controls), then swap back.
+	m.storageDeposit, m.storageWithdraw = m.storageWithdraw, m.storageDeposit
+	result := m.updateGamepadStorageDeposit(ctx, now)
+	m.storageDeposit, m.storageWithdraw = m.storageWithdraw, m.storageDeposit
+	return result
 }

@@ -37,6 +37,7 @@ type WorldMode struct {
 	mapOverlay int
 	// storageDeposit is the handheld storage deposit amount picker.
 	storageDeposit      storageDepositDialog
+	storageWithdraw     storageDepositDialog
 	heldMenuSel         int
 	heldMenuMovedAt     time.Time
 	heldMenuActivatedAt time.Time
@@ -1848,6 +1849,11 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 		m.ui.minimap.DrawMapOverlay(ctx, screen, m.mapOverlay == 2)
 	}
 	m.drawStorageDeposit(screen)
+	if m.storageWithdraw.open {
+		m.storageDeposit, m.storageWithdraw = m.storageWithdraw, m.storageDeposit
+		m.drawStorageDeposit(screen)
+		m.storageDeposit, m.storageWithdraw = m.storageWithdraw, m.storageDeposit
+	}
 	drawOSK(screen)
 }
 

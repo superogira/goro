@@ -143,6 +143,11 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) bool {
 		closed = true
 	case m.ui.storageWindow.IsOpen():
 		m.ui.storageWindow.SetOpen(false)
+		// The server keeps the storage session open (movement stays
+		// blocked) until the client sends the close packet.
+		if ctx.Network != nil {
+			_ = ctx.Network.SendCloseStorage()
+		}
 		closed = true
 	case m.ui.equipmentWindow.IsOpen():
 		m.ui.equipmentWindow.Toggle(ctx)
@@ -297,10 +302,17 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		}
 		return true
 	}
-	// The storage deposit picker owns every button while open (A confirms,
-	// B cancels, d-pad steps the amount).
-	if m.updateGamepadStorageDeposit(ctx, now) {
-		return true
+	// The storage deposit/withdraw picker owns every button while open
+	// (A confirms, B cancels, d-pad steps the amount).
+	if m.storageDeposit.open {
+		if m.updateGamepadStorageDeposit(ctx, now) {
+			return true
+		}
+	}
+	if m.storageWithdraw.open {
+		if m.updateGamepadStorageWithdraw(ctx, now) {
+			return true
+		}
 	}
 	// The on-screen keyboard owns every button while open (d-pad navigates,
 	// A types, B backspaces, START submits, SELECT toggles symbols).
@@ -344,6 +356,41 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		if delta != 0 && now.Sub(m.statsSelMovedAt) >= gamepadNavFloor {
 			m.statsSelMovedAt = now
 			m.ui.statsWindow.GamepadNavigate(ctx, delta)
+		}
+		return true
+	}
+	// The storage window: d-pad walks the item rows, A withdraws the
+	// selected item into the inventory (single items go directly; stacks
+	// go through the same amount picker as deposits). B closes via the
+	// stack above (which also sends the close packet to the server).
+	if m.ui.storageWindow.IsOpen() && !m.ui.inventoryBag.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				if item, _, ok := m.ui.storageWindow.GamepadSelectedItem(ctx); ok {
+					if item.Amount > 1 {
+						m.storageWithdraw.begin(item.Index, item.ItemID, gameui.ItemDisplayName(ctx.Resources, item), int(item.Amount))
+					} else if ctx.Network != nil {
+						if err := ctx.Network.SendMoveFromStorage(item.Index, 1); err != nil {
+							m.ui.console.AddErrorMessage("Withdraw failed.")
+						} else {
+							render.ShowScreenNotice(fmt.Sprintf("Withdrew 1 x %s", gameui.ItemDisplayName(ctx.Resources, item)))
+						}
+					}
+				}
+			}
+			return true
+		}
+		if ctx.Input.JustPressed(input.KeyArrowUp) || ctx.Input.JustPressed(input.KeyArrowDown) {
+			if now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+				m.invSelMovedAt = now
+				dy := 1
+				if ctx.Input.JustPressed(input.KeyArrowUp) {
+					dy = -1
+				}
+				m.ui.storageWindow.GamepadNavigate(ctx, dy)
+			}
+			return true
 		}
 		return true
 	}

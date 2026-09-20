@@ -37,6 +37,12 @@ const (
 	loginWindowFieldLeft     = 92
 	loginWindowFieldRightPad = 20
 	loginWindowFieldH        = 22
+	// The Account row carries the Keep checkbox next to the field. The
+	// row's padded content area is W-24-20 = 260px and label+field alone
+	// already fill it, so the field gives up this much room (checkbox
+	// ~60px + the 12px gap) — otherwise the checkbox is pushed past the
+	// window's right edge and clipped out entirely.
+	loginWindowKeepReserve = 76
 )
 
 func NewLoginWindow(ctx client.Context, username, password string, keepID bool, callbacks LoginWindowCallbacks) *LoginWindow {
@@ -197,6 +203,7 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 	w.keep.SetFocused(keepFocused)
 	labelW := float32(loginWindowFieldLeft - 36)
 	fieldW := float32(w.layout.W - loginWindowFieldLeft - loginWindowFieldRightPad)
+	accountFieldW := fieldW - loginWindowKeepReserve
 	fieldH := float32(loginWindowFieldH)
 	return Win(
 		Title("Login"),
@@ -214,7 +221,7 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 						Width(labelW).
 						Height(fieldH),
 					primitives.Box(user).
-						Width(fieldW).
+						Width(accountFieldW).
 						Height(fieldH),
 					// Keep checkbox sits on the Account row (like the PC
 					// client's Save ID), not on a separate row below.

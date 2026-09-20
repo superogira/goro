@@ -102,7 +102,10 @@ func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 		}
 	}
 
-	// The Keep checkbox rides on the Account row, after the text field.
+	// The Keep checkbox rides on the Account row, after the text field —
+	// and the whole row must stay inside the window's padded content area
+	// (the row once overflowed the right edge and the window clipped the
+	// checkbox out entirely).
 	keepSlot := rows[0].Children()[2]
 	keepChildren := keepSlot.Children()
 	if len(keepChildren) != 1 {
@@ -110,6 +113,11 @@ func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 	}
 	if _, ok := keepChildren[0].(*checkbox.Widget); !ok {
 		t.Fatalf("Keep slot holds %T, want a checkbox", keepChildren[0])
+	}
+	keepBounds := keepSlot.(interface{ Bounds() geometry.Rect }).Bounds()
+	if keepBounds.Max.X > float32(width)-loginWindowFieldRightPad {
+		t.Fatalf("Keep checkbox right edge %.1f overflows the window's padded content (max %.1f)",
+			keepBounds.Max.X, float32(width)-loginWindowFieldRightPad)
 	}
 	if !window.keep.SkipTabTraversal() {
 		t.Fatal("Keep checkbox must opt out of tab traversal so Tab advances Account -> Password")

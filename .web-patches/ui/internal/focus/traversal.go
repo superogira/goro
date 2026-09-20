@@ -32,7 +32,13 @@ func collectFocusableRecursive(w widget.Widget, result *[]widget.Focusable) {
 
 	// Check if this widget is focusable.
 	if f, ok := w.(widget.Focusable); ok && f.IsFocusable() {
-		*result = append(*result, f)
+		// A widget can opt out of the tab cycle while staying directly
+		// focusable (pointer click, RequestFocus) — e.g. a checkbox laid
+		// out between two text fields where Tab must skip straight from
+		// one field to the other.
+		if skip, ok := w.(interface{ SkipTabTraversal() bool }); !ok || !skip.SkipTabTraversal() {
+			*result = append(*result, f)
+		}
 	}
 
 	// Recurse into children.

@@ -100,6 +100,13 @@ func (w *Widget) IsFocusable() bool {
 	return w.IsVisible() && w.IsEnabled() && !w.cfg.ResolvedDisabled()
 }
 
+// SkipTabTraversal implements the focus manager's opt-out: a checkbox built
+// with [NoTabTraversal] stays out of the Tab/Shift+Tab cycle but remains
+// clickable and space-toggleable once focused by other means.
+func (w *Widget) SkipTabTraversal() bool {
+	return w.cfg.noTabTraversal
+}
+
 // Layout calculates the checkbox's preferred size within the given constraints.
 func (w *Widget) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
 	// Query LayoutMetrics from painter (type assert with default fallback).

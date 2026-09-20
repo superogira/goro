@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	uiapp "github.com/gogpu/ui/app"
+	"github.com/gogpu/ui/core/checkbox"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
@@ -70,16 +71,17 @@ func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 		t.Fatal("login window content tree is incomplete")
 	}
 	rows := windowChildren[1].Children()[0].Children()
-	// The fork adds a third row: the Keep-ID checkbox under the password
-	// (upstream has only Account and Password).
-	if len(rows) != 3 {
-		t.Fatalf("login form rows = %d, want Account, Password, and Keep", len(rows))
+	// The fork adds the Keep-ID checkbox inline on the Account row, to the
+	// right of the field (upstream has only Account and Password rows).
+	if len(rows) != 2 {
+		t.Fatalf("login form rows = %d, want Account and Password", len(rows))
 	}
 
+	wantRowChildren := []int{3, 2} // Account: label, field, Keep; Password: label, field
 	for i, want := range []string{"Account", "Password"} {
 		rowChildren := rows[i].Children()
-		if len(rowChildren) != 2 || len(rowChildren[0].Children()) != 1 {
-			t.Fatalf("%s row does not contain a label and field", want)
+		if len(rowChildren) != wantRowChildren[i] || len(rowChildren[0].Children()) != 1 {
+			t.Fatalf("%s row has %d children, want %d starting with a label and field", want, len(rowChildren), wantRowChildren[i])
 		}
 		labelSlot := rowChildren[0]
 		label, ok := labelSlot.Children()[0].(*primitives.TextWidget)
@@ -90,7 +92,7 @@ func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 			t.Fatalf("login label = %q, want %q", label.Content(), want)
 		}
 		if label.Style().Align != widget.TextAlignRight {
-			t.Fatalf("%s alignment = %v, want right", want, label.Style().Align)
+			t.Fatalf("%s alignment = %v, want right", label.Style().Align, want)
 		}
 
 		slotBounds := labelSlot.(interface{ Bounds() geometry.Rect }).Bounds()
@@ -98,5 +100,18 @@ func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 		if labelBounds.Min.X != 0 || labelBounds.Width() != slotBounds.Width() {
 			t.Fatalf("%s label bounds = %v, want full %.1fpx column width", want, labelBounds, slotBounds.Width())
 		}
+	}
+
+	// The Keep checkbox rides on the Account row, after the text field.
+	keepSlot := rows[0].Children()[2]
+	keepChildren := keepSlot.Children()
+	if len(keepChildren) != 1 {
+		t.Fatalf("Keep slot has %d children, want the checkbox", len(keepChildren))
+	}
+	if _, ok := keepChildren[0].(*checkbox.Widget); !ok {
+		t.Fatalf("Keep slot holds %T, want a checkbox", keepChildren[0])
+	}
+	if !window.keep.SkipTabTraversal() {
+		t.Fatal("Keep checkbox must opt out of tab traversal so Tab advances Account -> Password")
 	}
 }

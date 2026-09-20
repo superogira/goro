@@ -76,6 +76,16 @@ func OnToggle(fn func(checked bool)) Option {
 	}
 }
 
+// NoTabTraversal excludes the checkbox from the focus manager's Tab and
+// Shift+Tab cycling. The checkbox is still clickable and still toggles with
+// Space when focused by other means. Use this for checkboxes laid out
+// between text fields, where Tab must advance straight through the fields.
+func NoTabTraversal() Option {
+	return func(c *config) {
+		c.noTabTraversal = true
+	}
+}
+
 // Disabled sets the checkbox's disabled state. A disabled checkbox does not
 // respond to user input and is drawn with a dimmed appearance.
 func Disabled(d bool) Option {

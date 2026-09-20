@@ -189,6 +189,10 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 		checkbox.LabelOpt("Keep"),
 		checkbox.Checked(w.KeepID),
 		checkbox.OnToggle(func(keep bool) { w.KeepID = keep }),
+		// On the Account row the checkbox would otherwise sit between the
+		// two text fields in depth-first tab order; opt out so Tab still
+		// advances Account -> Password.
+		checkbox.NoTabTraversal(),
 	)
 	w.keep.SetFocused(keepFocused)
 	labelW := float32(loginWindowFieldLeft - 36)

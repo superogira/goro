@@ -21,6 +21,7 @@ type config struct {
 	readonlyDisabledSig state.ReadonlySignal[bool]
 	indeterminate       bool
 	a11yHint            string
+	noTabTraversal      bool
 	// styling overrides (nil/zero means use defaults)
 	background *widget.Color
 	painter    Painter

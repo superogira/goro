@@ -1844,9 +1844,10 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	m.ui.itemPickup.Draw(screen, ctx, m, now)
 	m.drawHotbar(screen, ctx, now)
 	// The frameless map overlay (X on the plain screen) sits on top of the
-	// world but under the direct MENU overlay.
+	// world but under the direct MENU overlay. The thumbnail shifts left
+	// by the drawn hotbar's right-edge strip so the two never overlap.
 	if m.mapOverlay > 0 {
-		m.ui.minimap.DrawMapOverlay(ctx, screen, m.mapOverlay == 2)
+		m.ui.minimap.DrawMapOverlay(ctx, screen, m.mapOverlay == 2, m.ui.hotbar.rightInsetOf())
 	}
 	m.drawStorageDeposit(screen)
 	if m.storageWithdraw.open {

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/glog"
+	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/session"
 )
@@ -18,10 +20,11 @@ import (
 // While hidden, the active slot's icon rides next to the vitals HUD.
 
 const (
-	hotbarSlotCount = 9
-	hotbarCellSize  = 44
-	hotbarIconSize  = 28
-	hotbarWindowPad = 6
+	hotbarSlotCount   = 9
+	hotbarCellSize    = 44
+	hotbarIconSize    = 28
+	hotbarWindowPad   = 6
+	hotbarRightMargin = 10
 )
 
 type hotbarEntryKind uint8
@@ -123,7 +126,7 @@ func (h *hotbar) draw(screen *render.Frame, ctx client.Context, m *WorldMode) {
 	bounds := screen.Bounds()
 	width := hotbarCellSize + hotbarWindowPad*2
 	height := hotbarSlotCount*hotbarCellSize + hotbarWindowPad*2
-	x := bounds.Dx() - width - 10
+	x := bounds.Dx() - width - hotbarRightMargin
 	y := (bounds.Dy() - height) / 2
 	render.DrawRect(screen, float64(x), float64(y), float64(width), float64(height), hotbarPanelColor)
 	render.DrawRect(screen, float64(x), float64(y), 1, float64(height), hotbarBorderColor)
@@ -256,4 +259,83 @@ func (m *WorldMode) useHotbarActive(ctx client.Context) {
 func (m *WorldMode) drawHotbar(screen *render.Frame, ctx client.Context, now time.Time) {
 	m.ui.hotbar.draw(screen, ctx, m)
 	m.ui.hotbar.drawClosedBadge(screen, ctx, m)
+}
+
+// syncFromSession fills the nine slots from the server-saved shortcut
+// list's first row (the 27-slot protocol list is three rows of nine; the
+// handheld bar is row one). Saved item slots carry no inventory index —
+// resolveItem's ID fallback covers that.
+func (h *hotbar) syncFromSession(s *session.Session) {
+	if s == nil {
+		return
+	}
+	for i := 0; i < hotbarSlotCount; i++ {
+		h.entries[i] = hotbarEntry{}
+		if i >= len(s.Hotkeys.Slots) {
+			continue
+		}
+		slot := s.Hotkeys.Slots[i]
+		switch slot.Type {
+		case network.HotkeyTypeItem:
+			if slot.ID != 0 {
+				h.entries[i] = hotbarEntry{kind: hotbarItem, itemID: uint16(slot.ID)}
+			}
+		case network.HotkeyTypeSkill:
+			if slot.ID != 0 {
+				h.entries[i] = hotbarEntry{kind: hotbarSkill, skillID: uint16(slot.ID)}
+			}
+		}
+	}
+}
+
+// pushHotbarSlot persists one bar slot to the server's saved shortcut list
+// (CZ_SHORTCUT_KEY_CHANGE — rAthena keeps it in the hotkey table, so the
+// setup survives relogin) and mirrors it into the session so the desktop
+// shortcut bar agrees.
+func (m *WorldMode) pushHotbarSlot(ctx client.Context, slot int) {
+	if slot < 0 || slot >= hotbarSlotCount {
+		return
+	}
+	entry := m.ui.hotbar.entries[slot]
+	saved := network.HotkeySlot{} // type 0 + id 0 = empty
+	switch entry.kind {
+	case hotbarItem:
+		saved = network.HotkeySlot{Type: network.HotkeyTypeItem, ID: uint32(entry.itemID)}
+	case hotbarSkill:
+		level := uint16(0)
+		if ctx.Session != nil {
+			for _, skill := range ctx.Session.Skills.List {
+				if skill.ID == entry.skillID {
+					level = uint16(maxInt(0, int(skill.Level)))
+					break
+				}
+			}
+		}
+		saved = network.HotkeySlot{Type: network.HotkeyTypeSkill, ID: uint32(entry.skillID), Level: level}
+	}
+	if ctx.Network != nil {
+		if err := ctx.Network.SendHotkey(uint16(slot), saved); err != nil {
+			glog.Warnf("hotbar save failed slot=%d: %v", slot+1, err)
+		}
+	}
+	if ctx.Session != nil {
+		s := ctx.Session
+		if len(s.Hotkeys.Slots) <= slot {
+			next := make([]session.HotkeySlot, slot+1)
+			copy(next, s.Hotkeys.Slots)
+			s.Hotkeys.Slots = next
+		}
+		s.Hotkeys.Slots[slot] = session.HotkeySlot{Type: saved.Type, ID: saved.ID, Level: saved.Level}
+		s.Hotkeys.Loaded = true
+		s.Hotkeys.Version++
+	}
+}
+
+// rightInsetOf reports the right-edge strip a drawn bar occupies, so
+// overlays (the map thumbnail) can shift out from under it.
+func (h *hotbar) rightInsetOf() int {
+	if !h.shown {
+		return 0
+	}
+	return hotbarCellSize + hotbarWindowPad*2 + hotbarRightMargin
 }

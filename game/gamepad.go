@@ -78,6 +78,7 @@ var heldMenuEntries = []struct {
 			}
 		}
 	}},
+	{"Hotbar", func(m *WorldMode, ctx client.Context) { m.ui.hotbar.shown = !m.ui.hotbar.shown }},
 	{"Items", func(m *WorldMode, ctx client.Context) { m.ui.inventoryBag.Toggle(ctx) }},
 	{"Equipment", func(m *WorldMode, ctx client.Context) { m.ui.equipmentWindow.Toggle(ctx) }},
 	{"Skills", func(m *WorldMode, ctx client.Context) { m.ui.skillWindow.Toggle(ctx) }},
@@ -89,7 +90,6 @@ var heldMenuEntries = []struct {
 		}
 	}},
 	{"Chat", func(m *WorldMode, ctx client.Context) { m.ui.console.OpenForTyping(ctx) }},
-	{"Hotbar", func(m *WorldMode, ctx client.Context) { m.ui.hotbar.shown = !m.ui.hotbar.shown }},
 	{"Reset Camera", func(m *WorldMode, ctx client.Context) { m.camera.ResetView() }},
 	{"Settings", func(m *WorldMode, ctx client.Context) { m.ui.settingsWindow.OpenWindow(ctx) }},
 	{"Screenshot", func(m *WorldMode, ctx client.Context) {
@@ -454,6 +454,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 				if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
 					m.ui.hotbar.addItem(item)
 					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+					m.pushHotbarSlot(ctx, slot-1)
 					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
 				}
 			} else {
@@ -473,6 +474,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 					if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
 						m.ui.hotbar.addItem(item)
 						slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+						m.pushHotbarSlot(ctx, slot-1)
 						render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
 					}
 				} else {
@@ -613,6 +615,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 				if skill, ok := m.ui.skillWindow.GamepadSelectedSkill(ctx); ok {
 					m.ui.hotbar.addSkill(skill.ID)
 					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+					m.pushHotbarSlot(ctx, slot-1)
 					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, skillLabel(skill)))
 				}
 			}

@@ -3,8 +3,84 @@ package game
 import (
 	"testing"
 
+	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 )
+
+func TestHotbarSyncFromSessionMapsServerRowOne(t *testing.T) {
+	// The server's 27-slot saved list is three rows of nine; the handheld
+	// bar rides row one, items by ID and skills by ID.
+	var h hotbar
+	s := &session.Session{}
+	s.Hotkeys.Slots = make([]session.HotkeySlot, network.HotkeyListSlots2008)
+	s.Hotkeys.Slots[0] = session.HotkeySlot{Type: network.HotkeyTypeItem, ID: 501}
+	s.Hotkeys.Slots[1] = session.HotkeySlot{Type: network.HotkeyTypeSkill, ID: 7, Level: 3}
+	s.Hotkeys.Slots[2] = session.HotkeySlot{Type: network.HotkeyTypeItem, ID: 0} // saved empty
+	s.Hotkeys.Slots[9] = session.HotkeySlot{Type: network.HotkeyTypeItem, ID: 999}
+
+	h.entries[2] = hotbarEntry{kind: hotbarItem, itemID: 123} // local slot the server clears
+	h.syncFromSession(s)
+
+	if h.entries[0].kind != hotbarItem || h.entries[0].itemID != 501 {
+		t.Fatalf("slot 1 = %+v, want item 501", h.entries[0])
+	}
+	if h.entries[1].kind != hotbarSkill || h.entries[1].skillID != 7 {
+		t.Fatalf("slot 2 = %+v, want skill 7", h.entries[1])
+	}
+	if h.entries[2].kind != hotbarEmpty {
+		t.Fatalf("slot 3 = %+v, want cleared", h.entries[2])
+	}
+	if h.entries[3].kind != hotbarEmpty {
+		t.Fatalf("slot 4 = %+v, want empty", h.entries[3])
+	}
+	// Row two stays off the handheld bar.
+	for i := 3; i < hotbarSlotCount; i++ {
+		if h.entries[i].itemID == 999 {
+			t.Fatalf("slot %d pulled row-two data", i+1)
+		}
+	}
+}
+
+func TestHotbarPushMirrorsSession(t *testing.T) {
+	// Pushing a slot mirrors it into the session list (the desktop
+	// shortcut bar reads the same store) and stamps the skill level.
+	m := &WorldMode{}
+	m.ui.hotbar.entries[0] = hotbarEntry{kind: hotbarSkill, skillID: 7}
+	s := &session.Session{Skills: session.Skills{List: []session.Skill{{ID: 7, Level: 5}}}}
+	ctx := client.Context{Session: s}
+
+	m.pushHotbarSlot(ctx, 0)
+
+	if len(s.Hotkeys.Slots) < 1 {
+		t.Fatal("push did not extend the session slot list")
+	}
+	got := s.Hotkeys.Slots[0]
+	if got.Type != network.HotkeyTypeSkill || got.ID != 7 || got.Level != 5 {
+		t.Fatalf("session slot = %+v, want skill 7 level 5", got)
+	}
+	if !s.Hotkeys.Loaded || s.Hotkeys.Version == 0 {
+		t.Fatal("push must mark the hotkey store loaded and bump its version")
+	}
+
+	// An empty slot saves as the canonical empty hotkey.
+	m.ui.hotbar.entries[0] = hotbarEntry{}
+	m.pushHotbarSlot(ctx, 0)
+	if got := s.Hotkeys.Slots[0]; got.Type != 0 || got.ID != 0 {
+		t.Fatalf("empty push = %+v, want zeroed", got)
+	}
+}
+
+func TestHotbarRightInsetTracksVisibility(t *testing.T) {
+	var h hotbar
+	if h.rightInsetOf() != 0 {
+		t.Fatal("hidden bar must not claim a right inset")
+	}
+	h.shown = true
+	if h.rightInsetOf() != hotbarCellSize+hotbarWindowPad*2+hotbarRightMargin {
+		t.Fatalf("inset = %d, want the drawn strip width", h.rightInsetOf())
+	}
+}
 
 func TestHotbarFillsInOrderAndWraps(t *testing.T) {
 	var h hotbar

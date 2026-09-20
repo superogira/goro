@@ -92,6 +92,8 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	} else if ok {
 		applyHotkeyList(ctx, hotkeys)
 		m.ui.shortcutBar.SyncFromSession(ctx)
+		// The handheld bar rides row one of the same saved list.
+		m.ui.hotbar.syncFromSession(ctx.Session)
 		return nil, false
 	}
 	if show, ok, err := network.ParseShowDigit(pkt); err != nil {

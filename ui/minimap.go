@@ -236,8 +236,9 @@ func (m *Minimap) Hide(ctx Context) {
 // button cycle. The small pass parks a corner thumbnail (map + player
 // marker only) at the top-right; the large pass centers the map at ~78% of
 // the screen with the map name and coordinates. Direct draw — no window, no
-// widget tree.
-func (m *Minimap) DrawMapOverlay(ctx Context, screen *render.Frame, large bool) {
+// widget tree. rightInset shifts the thumbnail left by that many pixels —
+// the handheld hotbar's right-edge strip, so the two never overlap.
+func (m *Minimap) DrawMapOverlay(ctx Context, screen *render.Frame, large bool, rightInset int) {
 	if screen == nil || ctx.World == nil || ctx.World.MapName == "" {
 		return
 	}
@@ -261,7 +262,7 @@ func (m *Minimap) DrawMapOverlay(ctx Context, screen *render.Frame, large bool) 
 		render.DrawRect(screen, float64(x)-3, float64(y)-3, float64(size)+6, float64(size)+6, color.RGBA{A: 210})
 	} else {
 		size = 140
-		x = int(screenW) - size - minimapMargin
+		x = int(screenW) - size - minimapMargin - rightInset
 		y = minimapMargin
 		render.DrawRect(screen, float64(x)-2, float64(y)-2, float64(size)+4, float64(size)+4, color.RGBA{A: 190})
 	}

@@ -47,22 +47,27 @@ type hotbar struct {
 }
 
 // addItem fills the next slot (wrapping, overwriting) with the given
-// inventory stack.
+// inventory stack. A successful add also shows the bar: the fill happens
+// from inside the inventory window, and without the bar popping into view
+// there is no way to tell the press landed.
 func (h *hotbar) addItem(item session.InventoryItem) {
 	if item.ItemID == 0 {
 		return
 	}
 	h.entries[h.fill] = hotbarEntry{kind: hotbarItem, itemID: item.ItemID, itemIndex: item.Index}
 	h.fill = (h.fill + 1) % hotbarSlotCount
+	h.shown = true
 }
 
-// addSkill fills the next slot with the given skill.
+// addSkill fills the next slot with the given skill (and shows the bar,
+// like addItem).
 func (h *hotbar) addSkill(skillID uint16) {
 	if skillID == 0 {
 		return
 	}
 	h.entries[h.fill] = hotbarEntry{kind: hotbarSkill, skillID: skillID}
 	h.fill = (h.fill + 1) % hotbarSlotCount
+	h.shown = true
 }
 
 // cycle moves the active slot (dir < 0 = L2/left, dir > 0 = R2/right),
@@ -195,12 +200,18 @@ func miniHUDWidthOf() int {
 }
 
 // useActive triggers the active slot on the plain screen (B button).
+// Every dead end explains itself with a notice — a silent no-op reads as
+// "the hotbar is broken" on the handheld.
 func (m *WorldMode) useHotbarActive(ctx client.Context) {
 	entry := m.ui.hotbar.activeEntry()
 	switch entry.kind {
+	case hotbarEmpty:
+		render.ShowScreenNotice(fmt.Sprintf("Hotbar slot %d is empty", m.ui.hotbar.active+1))
 	case hotbarItem:
 		if _, listIndex, ok := m.ui.hotbar.resolveItem(ctx.Session, entry); ok {
 			m.ui.inventoryBag.UseByIndex(ctx, listIndex)
+		} else {
+			render.ShowScreenNotice("Hotbar: item no longer in inventory")
 		}
 	case hotbarSkill:
 		for _, skill := range ctx.Session.Skills.List {
@@ -211,6 +222,7 @@ func (m *WorldMode) useHotbarActive(ctx client.Context) {
 				return
 			}
 		}
+		render.ShowScreenNotice("Hotbar: skill not learned")
 	}
 }
 

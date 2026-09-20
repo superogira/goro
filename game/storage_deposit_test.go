@@ -44,3 +44,26 @@ func TestStorageDepositDialogBeginClampsMax(t *testing.T) {
 		t.Fatalf("zero max clamped to %d, want 1", dialog.max)
 	}
 }
+
+func TestStorageDepositDialogDirection(t *testing.T) {
+	// A withdrawal opened through beginWithdraw must carry the withdraw
+	// direction: it picks both the packet (MoveFromStorage) and the
+	// dialog title. begin must reset it — the two dialog structs are
+	// otherwise identical and reused across operations.
+	var d storageDepositDialog
+	d.beginWithdraw(12, 501, "Red Potion", 30)
+	if !d.open || !d.withdraw {
+		t.Fatalf("beginWithdraw: open=%v withdraw=%v, want true/true", d.open, d.withdraw)
+	}
+	if d.itemIndex != 12 || d.itemID != 501 || d.itemName != "Red Potion" || d.max != 30 || d.amount != 1 {
+		t.Fatalf("beginWithdraw fields = %+v", d)
+	}
+
+	d.begin(4, 502, "Apple", 4)
+	if d.withdraw {
+		t.Fatal("begin must reset the direction to deposit")
+	}
+	if d.itemIndex != 4 || d.itemID != 502 || d.max != 4 {
+		t.Fatalf("begin fields = %+v", d)
+	}
+}

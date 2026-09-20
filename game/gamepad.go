@@ -390,7 +390,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 				m.gamepadActionAt = now
 				if item, _, ok := m.ui.storageWindow.GamepadSelectedItem(ctx); ok {
 					if item.Amount > 1 {
-						m.storageWithdraw.begin(item.Index, item.ItemID, gameui.ItemDisplayName(ctx.Resources, item), int(item.Amount))
+						m.storageWithdraw.beginWithdraw(item.Index, item.ItemID, gameui.ItemDisplayName(ctx.Resources, item), int(item.Amount))
 					} else if ctx.Network != nil {
 						if err := ctx.Network.SendMoveFromStorage(item.Index, 1); err != nil {
 							m.ui.console.AddErrorMessage("Withdraw failed.")
@@ -445,35 +445,38 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		// tabs fills the next hotbar slot with the selected item (the Etc
 		// tab keeps X inert).
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
-			consumed := false
 			if m.ui.itemWindows.HasOpenDescriptions() {
 				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 					m.gamepadActionAt = now
 					m.ui.itemWindows.GamepadOpenSelectedCard(ctx)
 				}
-				consumed = true
 			} else if m.ui.inventoryBag.GamepadTabAllowsHotbar() {
 				if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
 					m.ui.hotbar.addItem(item)
 					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
 					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
 				}
-				consumed = true
+			} else {
+				// The Etc tab keeps the fill inert; say so instead of
+				// failing silently.
+				render.ShowScreenNotice("Hotbar: switch to the Item tab to add")
 			}
-			if consumed {
-				return true
-			}
+			return true
 		}
 		// SELECT (its own PrintScreen key) is the dedicated hotbar-fill
 		// button: it adds the selected item on the Item/Equip tabs even
 		// while a description window is open.
-		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyPrintScreen) && m.ui.inventoryBag.GamepadTabAllowsHotbar() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyPrintScreen) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
-				if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
-					m.ui.hotbar.addItem(item)
-					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
-					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
+				if m.ui.inventoryBag.GamepadTabAllowsHotbar() {
+					if item, ok := m.ui.inventoryBag.GamepadSelectedItem(ctx); ok {
+						m.ui.hotbar.addItem(item)
+						slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
+						render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, gameui.ItemDisplayName(ctx.Resources, item)))
+					}
+				} else {
+					render.ShowScreenNotice("Hotbar: switch to the Item tab to add")
 				}
 			}
 			return true

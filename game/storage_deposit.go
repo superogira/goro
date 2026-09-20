@@ -43,12 +43,26 @@ var storageDepositColors = struct {
 	outline: color.RGBA{R: 10, G: 12, B: 16, A: 210},
 }
 
-// begin starts a deposit for the given stack.
+// begin starts a deposit for the given stack. It resets the direction
+// flag, so a dialog struct reused across operations can never inherit the
+// previous one's direction.
 func (d *storageDepositDialog) begin(itemIndex, itemID uint16, name string, max int) {
+	d.beginDirection(false, itemIndex, itemID, name, max)
+}
+
+// beginWithdraw starts a withdrawal for the given storage stack. The
+// direction flag decides both the packet (MoveFromStorage vs MoveToStorage)
+// and the dialog title — without it the withdraw picker silently deposits.
+func (d *storageDepositDialog) beginWithdraw(itemIndex, itemID uint16, name string, max int) {
+	d.beginDirection(true, itemIndex, itemID, name, max)
+}
+
+func (d *storageDepositDialog) beginDirection(withdraw bool, itemIndex, itemID uint16, name string, max int) {
 	if max < 1 {
 		max = 1
 	}
 	d.open = true
+	d.withdraw = withdraw
 	d.itemIndex = itemIndex
 	d.itemID = itemID
 	d.itemName = name

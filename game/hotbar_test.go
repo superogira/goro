@@ -78,4 +78,22 @@ func TestHotbarAddIgnoresEmpty(t *testing.T) {
 	if h.entries[0].kind != hotbarEmpty || h.fill != 0 {
 		t.Fatalf("empty adds changed state: %+v fill=%d", h.entries[0], h.fill)
 	}
+	if h.shown {
+		t.Fatal("an ignored (empty) add must not force the bar visible")
+	}
+}
+
+func TestHotbarAddShowsBar(t *testing.T) {
+	// The add happens from inside the inventory window; popping the bar
+	// into view is the only immediate confirmation the press landed.
+	var h hotbar
+	h.addItem(session.InventoryItem{Index: 1, ItemID: 501})
+	if !h.shown {
+		t.Fatal("successful item add must show the bar")
+	}
+	h.shown = false
+	h.addSkill(7)
+	if !h.shown {
+		t.Fatal("successful skill add must show the bar")
+	}
 }

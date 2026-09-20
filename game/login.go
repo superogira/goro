@@ -200,13 +200,13 @@ func (m *LoginMode) Enter(ctx client.Context) Mode {
 	return nil
 }
 
-// loginShoulderShared carries the L2/R2 latch state for the credential
-// form (fbdev clears key edges before LoginMode.Update — held-state
-// latches are the proven pattern, cf. the OSK).
+// loginShoulderShared carries the shoulder-button latch state for the
+// credential form (fbdev clears key edges before LoginMode.Update —
+// held-state latches are the proven pattern, cf. the OSK).
 var loginShoulderShared = struct {
-	l2Latch  bool
-	r2Latch  bool
-	actionAt time.Time
+	swapLatch bool
+	keepLatch bool
+	actionAt  time.Time
 }{}
 
 func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
@@ -257,33 +257,41 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
 		}
-		// L2/R2 on the credential form: L2 swaps Account <-> Password (the
-		// Tab role), R2 flips the Keep-ID checkbox. Held-state latches like
-		// the OSK — fbdev clears key edges before LoginMode.Update runs.
+		// Shoulder buttons on the credential form: L1/L2 swap Account <->
+		// Password (the Tab role), R1/R2 flip the Keep-ID checkbox. R1 and
+		// L1 are the primaries — their evdev codes are confirmed on this
+		// hardware, while R2's (0x141) is probe-pending and may never fire.
+		// Held-state latches like the OSK — fbdev clears key edges before
+		// LoginMode.Update runs.
 		if textInputPhase && !dialogShowing && m.loginWindow != nil {
 			floored := now.Sub(loginShoulderShared.actionAt) >= gamepadActionFloor
-			if ctx.Input.KeyCodeDown(gpucontext.KeyF23) {
-				if !loginShoulderShared.l2Latch && floored {
-					loginShoulderShared.l2Latch = true
-					loginShoulderShared.actionAt = now
-					m.loginWindow.AdvanceFocus()
+			if !loginShoulderShared.swapLatch && floored &&
+				(ctx.Input.KeyCodeDown(gpucontext.KeyF23) || ctx.Input.KeyCodeDown(gpucontext.KeyF20)) {
+				loginShoulderShared.swapLatch = true
+				loginShoulderShared.actionAt = now
+				m.loginWindow.AdvanceFocus()
+				field := "Account"
+				if _, passwordFocused := m.loginWindow.FieldFocus(); passwordFocused {
+					field = "Password"
 				}
-			} else {
-				loginShoulderShared.l2Latch = false
+				glog.Infof("login: shoulder swap -> %s", field)
+				render.ShowScreenNotice(field)
+			} else if !ctx.Input.KeyCodeDown(gpucontext.KeyF23) && !ctx.Input.KeyCodeDown(gpucontext.KeyF20) {
+				loginShoulderShared.swapLatch = false
 			}
-			if ctx.Input.KeyCodeDown(gpucontext.KeyF24) {
-				if !loginShoulderShared.r2Latch && floored {
-					loginShoulderShared.r2Latch = true
-					loginShoulderShared.actionAt = now
-					m.loginWindow.ToggleKeep()
-					keep := "OFF"
-					if m.loginWindow.KeepID {
-						keep = "ON"
-					}
-					render.ShowScreenNotice("Keep ID: " + keep)
+			if !loginShoulderShared.keepLatch && floored &&
+				(ctx.Input.KeyCodeDown(gpucontext.KeyF24) || ctx.Input.KeyCodeDown(gpucontext.KeyF21)) {
+				loginShoulderShared.keepLatch = true
+				loginShoulderShared.actionAt = now
+				m.loginWindow.ToggleKeep()
+				keep := "OFF"
+				if m.loginWindow.KeepID {
+					keep = "ON"
 				}
-			} else {
-				loginShoulderShared.r2Latch = false
+				glog.Infof("login: shoulder keep toggle -> %s", keep)
+				render.ShowScreenNotice("Keep ID: " + keep)
+			} else if !ctx.Input.KeyCodeDown(gpucontext.KeyF24) && !ctx.Input.KeyCodeDown(gpucontext.KeyF21) {
+				loginShoulderShared.keepLatch = false
 			}
 		}
 	}

@@ -303,6 +303,12 @@ func (w *LoginWindow) AdvanceFocus() {
 	w.rebuild()
 }
 
+// FieldFocus reports which credential field currently holds focus (the
+// login shoulders' swap notice names the newly focused field).
+func (w *LoginWindow) FieldFocus() (userFocused, passwordFocused bool) {
+	return w.fieldFocus()
+}
+
 // ToggleKeep flips the Keep-ID checkbox (the R2 handheld shortcut — there
 // is no pointer on the device). The checkbox's OnToggle keeps KeepID in
 // sync.

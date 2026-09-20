@@ -146,11 +146,15 @@ func (h *hotbar) drawClosedBadge(screen *render.Frame, ctx client.Context, m *Wo
 	}
 	x := 10 + miniHUDWidthOf() + 6
 	y := 10
-	render.DrawRect(screen, float64(x-2), float64(y-2), hotbarCellSize-4, hotbarCellSize-4, hotbarPanelColor)
-	render.DrawRect(screen, float64(x-2), float64(y-2), hotbarCellSize-4, 1, hotbarActiveColor)
-	render.DrawRect(screen, float64(x-2), float64(y+hotbarCellSize-6), hotbarCellSize-4, 1, hotbarActiveColor)
-	h.drawIcon(screen, ctx, m, entry, x+2, y+2)
-	render.DrawUIOutlinedTextAt(screen, fmt.Sprintf("%d", h.active+1), float64(x+hotbarIconSize-6), float64(y+hotbarIconSize-14), hotbarTextColor, hotbarOutline)
+	const badge = hotbarCellSize - 4
+	render.DrawRect(screen, float64(x-2), float64(y-2), badge, badge, hotbarPanelColor)
+	render.DrawRect(screen, float64(x-2), float64(y-2), badge, 1, hotbarActiveColor)
+	render.DrawRect(screen, float64(x-2), float64(y+badge-2), badge, 1, hotbarActiveColor)
+	h.drawIcon(screen, ctx, m, entry, x+badge/2-2, y+badge/2-2)
+	render.DrawUIOutlinedTextAt(screen, fmt.Sprintf("%d", h.active+1), float64(x)-1, float64(y)-2, hotbarTextColor, hotbarOutline)
+	if item, _, ok := h.resolveItem(ctx.Session, entry); ok && entry.kind == hotbarItem && item.Amount > 1 {
+		h.drawAmount(screen, float64(x)+float64(badge)/2-2, float64(y)+float64(badge)-14, item.Amount)
+	}
 }
 
 func (h *hotbar) drawCell(screen *render.Frame, ctx client.Context, m *WorldMode, x, y, slot int) {
@@ -169,27 +173,49 @@ func (h *hotbar) drawCell(screen *render.Frame, ctx client.Context, m *WorldMode
 	if entry.kind == hotbarEmpty {
 		return
 	}
-	h.drawIcon(screen, ctx, m, entry, x+(hotbarCellSize-hotbarIconSize)/2, y+4)
+	h.drawIcon(screen, ctx, m, entry, x+hotbarCellSize/2, y+hotbarCellSize/2)
 	render.DrawUIOutlinedTextAt(screen, fmt.Sprintf("%d", slot+1), float64(x)+3, float64(y)+2, color.RGBA{R: 190, G: 200, B: 215, A: 220}, hotbarOutline)
+	if item, _, ok := h.resolveItem(ctx.Session, entry); ok && entry.kind == hotbarItem && item.Amount > 1 {
+		h.drawAmount(screen, float64(x)+float64(hotbarCellSize)/2, float64(y+hotbarCellSize)-13, item.Amount)
+	}
 }
 
-func (h *hotbar) drawIcon(screen *render.Frame, ctx client.Context, m *WorldMode, entry hotbarEntry, x, y int) {
+// drawAmount renders the stack count centered at the bottom edge of a
+// cell; stacks of one stay unlabeled, like the inventory grid.
+func (h *hotbar) drawAmount(screen *render.Frame, centerX, y float64, amount int) {
+	render.DrawCenteredUIOutlinedTextAt(screen, hotbarAmountText(amount), centerX, y,
+		color.RGBA{R: 250, G: 250, B: 255, A: 255}, hotbarOutline)
+}
+
+// hotbarAmountText compacts large stacks for the narrow cell ("30000" ->
+// "30k"); the cell is 44px wide and the 12px font fits roughly five
+// digits.
+func hotbarAmountText(amount int) string {
+	if amount >= 10000 {
+		return fmt.Sprintf("%dk", amount/1000)
+	}
+	return fmt.Sprintf("%d", amount)
+}
+
+// drawIcon renders the entry's icon centered on (cx, cy) — the cell's
+// middle for the bar, the badge's middle when hidden.
+func (h *hotbar) drawIcon(screen *render.Frame, ctx client.Context, m *WorldMode, entry hotbarEntry, cx, cy int) {
 	switch entry.kind {
 	case hotbarItem:
 		if item, _, ok := h.resolveItem(ctx.Session, entry); ok {
-			m.drawInventoryItemIcon(screen, ctx.Resources, item, x, y)
+			m.drawInventoryItemIcon(screen, ctx.Resources, item, cx-inventoryIconSize/2, cy-inventoryIconSize/2)
 			return
 		}
 		// Stale slot: dim placeholder.
-		render.DrawRect(screen, float64(x), float64(y), hotbarIconSize, hotbarIconSize, hotbarEmptyColor)
+		render.DrawRect(screen, float64(cx-hotbarIconSize/2), float64(cy-hotbarIconSize/2), hotbarIconSize, hotbarIconSize, hotbarEmptyColor)
 	case hotbarSkill:
 		for _, skill := range ctx.Session.Skills.List {
 			if skill.ID == entry.skillID {
-				m.drawSkillIcon(screen, ctx.Resources, skill, x, y, hotbarIconSize)
+				m.drawSkillIcon(screen, ctx.Resources, skill, cx-hotbarIconSize/2, cy-hotbarIconSize/2, hotbarIconSize)
 				return
 			}
 		}
-		render.DrawRect(screen, float64(x), float64(y), hotbarIconSize, hotbarIconSize, hotbarEmptyColor)
+		render.DrawRect(screen, float64(cx-hotbarIconSize/2), float64(cy-hotbarIconSize/2), hotbarIconSize, hotbarIconSize, hotbarEmptyColor)
 	}
 }
 

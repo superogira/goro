@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
@@ -199,6 +200,15 @@ func (m *LoginMode) Enter(ctx client.Context) Mode {
 	return nil
 }
 
+// loginShoulderShared carries the L2/R2 latch state for the credential
+// form (fbdev clears key edges before LoginMode.Update — held-state
+// latches are the proven pattern, cf. the OSK).
+var loginShoulderShared = struct {
+	l2Latch  bool
+	r2Latch  bool
+	actionAt time.Time
+}{}
+
 func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	now := time.Now()
 	if m.updateFade(ctx, now) {
@@ -244,10 +254,37 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		// A/Enter to pick an entry, not to type.
 		textInputPhase := m.phase == loginPhaseCreate ||
 			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
-		// R2 already advances the login form's focus (the login form's
-		// widget responds to F24 as a field switch); no extra wiring needed.
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
+		}
+		// L2/R2 on the credential form: L2 swaps Account <-> Password (the
+		// Tab role), R2 flips the Keep-ID checkbox. Held-state latches like
+		// the OSK — fbdev clears key edges before LoginMode.Update runs.
+		if textInputPhase && !dialogShowing && m.loginWindow != nil {
+			floored := now.Sub(loginShoulderShared.actionAt) >= gamepadActionFloor
+			if ctx.Input.KeyCodeDown(gpucontext.KeyF23) {
+				if !loginShoulderShared.l2Latch && floored {
+					loginShoulderShared.l2Latch = true
+					loginShoulderShared.actionAt = now
+					m.loginWindow.AdvanceFocus()
+				}
+			} else {
+				loginShoulderShared.l2Latch = false
+			}
+			if ctx.Input.KeyCodeDown(gpucontext.KeyF24) {
+				if !loginShoulderShared.r2Latch && floored {
+					loginShoulderShared.r2Latch = true
+					loginShoulderShared.actionAt = now
+					m.loginWindow.ToggleKeep()
+					keep := "OFF"
+					if m.loginWindow.KeepID {
+						keep = "ON"
+					}
+					render.ShowScreenNotice("Keep ID: " + keep)
+				}
+			} else {
+				loginShoulderShared.r2Latch = false
+			}
 		}
 	}
 

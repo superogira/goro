@@ -107,6 +107,29 @@ func (w *Widget) SkipTabTraversal() bool {
 	return w.cfg.noTabTraversal
 }
 
+// IsChecked reports the current checked state.
+func (w *Widget) IsChecked() bool {
+	return w.cfg.ResolvedChecked()
+}
+
+// ToggleChecked flips the checked state exactly as a click would —
+// including the two-way signal write-back, the click sound, and the
+// OnToggle callback. Gamepad-driven UIs drive the checkbox this way when
+// there is no pointer.
+func (w *Widget) ToggleChecked() {
+	fireToggle(w)
+	w.SetNeedsRedraw(true)
+}
+
+// SetChecked sets the checked state; it is a no-op when the value is
+// unchanged, so a programmatic refresh never fires spurious toggles.
+func (w *Widget) SetChecked(checked bool) {
+	if w.cfg.ResolvedChecked() == checked {
+		return
+	}
+	w.ToggleChecked()
+}
+
 // Layout calculates the checkbox's preferred size within the given constraints.
 func (w *Widget) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
 	// Query LayoutMetrics from painter (type assert with default fallback).

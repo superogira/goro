@@ -97,3 +97,21 @@ func TestHotbarAddShowsBar(t *testing.T) {
 		t.Fatal("successful skill add must show the bar")
 	}
 }
+
+func TestHotbarAmountText(t *testing.T) {
+	cases := []struct {
+		amount int
+		want   string
+	}{
+		{1, "1"},
+		{300, "300"},
+		{9999, "9999"},
+		{10000, "10k"},
+		{30000, "30k"},
+	}
+	for _, c := range cases {
+		if got := hotbarAmountText(c.amount); got != c.want {
+			t.Fatalf("hotbarAmountText(%d) = %q, want %q", c.amount, got, c.want)
+		}
+	}
+}

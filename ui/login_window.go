@@ -303,6 +303,16 @@ func (w *LoginWindow) AdvanceFocus() {
 	w.rebuild()
 }
 
+// ToggleKeep flips the Keep-ID checkbox (the R2 handheld shortcut — there
+// is no pointer on the device). The checkbox's OnToggle keeps KeepID in
+// sync.
+func (w *LoginWindow) ToggleKeep() {
+	if w == nil || w.keep == nil {
+		return
+	}
+	w.keep.ToggleChecked()
+}
+
 // TypeIntoFocusedField appends or removes a character from the focused
 // text field (the on-screen keyboard's typing path — it bypasses the
 // widget event dispatch entirely).

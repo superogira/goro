@@ -60,6 +60,29 @@ func TestLoginWindowInitialFocusAndTabNavigation(t *testing.T) {
 	}
 }
 
+func TestLoginWindowToggleKeep(t *testing.T) {
+	// The handheld's R2 shortcut drives the checkbox through ToggleKeep;
+	// OnToggle keeps KeepID in sync so the login flow saves the right ID.
+	app := uiapp.New()
+	bridge := loginWindowTestApp{basicMenuTestApp{app: app}}
+	manager := NewManager()
+	manager.SetUIApp(bridge)
+	ctx := client.Context{ScreenW: 800, ScreenH: 600, UIApp: bridge, UIManager: manager}
+	window := NewLoginWindow(ctx, "", "", false, LoginWindowCallbacks{})
+	window.Publish(ctx)
+	app.Frame()
+	app.Window().DrawTo(&uitest.MockCanvas{})
+
+	window.ToggleKeep()
+	if !window.KeepID {
+		t.Fatal("first toggle did not turn KeepID on")
+	}
+	window.ToggleKeep()
+	if window.KeepID {
+		t.Fatal("second toggle did not turn KeepID off")
+	}
+}
+
 func TestLoginWindowLabelsFillRightAlignedColumn(t *testing.T) {
 	width, height := loginWindowSize()
 	window := &LoginWindow{layout: loginWindowLayout{W: width, H: height}}

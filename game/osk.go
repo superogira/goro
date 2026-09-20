@@ -435,10 +435,6 @@ func setupOSKHook() {
 		case 3: // SELECT: toggle symbols
 			osk.symbols = !osk.symbols
 			osk.row, osk.col = 0, 0
-		case 4: // L1: Tab (advance login form focus)
-			if oskL1Handler != nil {
-				oskL1Handler()
-			}
 		}
 	}
 }

@@ -243,23 +243,8 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		// A/Enter to pick an entry, not to type.
 		textInputPhase := m.phase == loginPhaseCreate ||
 			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
-		// L1/SELECT act as Tab on the credentials form: advances focus
-		// from the username to the password field (and back). Uses the
-		// platform hook (the fbdev key pipeline's key state never reaches
-		// LoginMode.Update).
-		if m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials && m.loginWindow != nil {
-			setupOSKHook() // ensure the hook is installed (OSK may not be open)
-			prevL1 := oskL1Handler
-			oskL1Handler = func() {
-				m.loginWindow.AdvanceFocus()
-			}
-			defer func() {
-				oskL1Handler = prevL1
-				if prevL1 == nil && !oskState().open {
-					teardownOSKHook()
-				}
-			}()
-		}
+		// R2 already advances the login form's focus (the login form's
+		// widget responds to F24 as a field switch); no extra wiring needed.
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)
 		}

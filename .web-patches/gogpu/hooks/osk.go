@@ -6,4 +6,4 @@ package hooks
 // handler to the game's on-screen keyboard. The platform calls it on
 // button press while it is non-nil; the game sets it when the keyboard
 // opens and clears it on close. Values: 0=A, 1=B, 2=START, 3=SELECT.
-var OSKButtonHook func(button int) = nil // 0=A, 1=B, 2=START, 3=SELECT, 4=L1, 5=R1
+var OSKButtonHook func(button int) = nil // 0=A, 1=B, 2=START, 3=SELECT

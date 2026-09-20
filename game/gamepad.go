@@ -375,6 +375,16 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 			}
 			return true
 		}
+		// L1/R1 cycle the storage category tabs (Item/Kafra/Armor/Arms/
+		// Ammo/Card/Etc).
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+			m.ui.storageWindow.GamepadTab(ctx, -1)
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
+			m.ui.storageWindow.GamepadTab(ctx, 1)
+			return true
+		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now

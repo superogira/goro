@@ -7,6 +7,28 @@ import "github.com/kivutar/goro/session"
 // through the same amount-picker flow as deposits). The close packet goes to
 // the server via the handheld B stack (gamepad.go).
 
+// GamepadTab cycles the storage category tabs (dir < 0 = L1/previous,
+// dir > 0 = R1/next), mirroring what a tab-rail click does.
+func (w *StorageWindow) GamepadTab(ctx Context, dir int) {
+	if !w.IsOpen() || dir == 0 {
+		return
+	}
+	count := len(storageCategoryTabs)
+	index := 0
+	for i, t := range storageCategoryTabs {
+		if t.category == w.tab {
+			index = i
+			break
+		}
+	}
+	index = ((index+dir)%count + count) % count
+	w.tab = storageCategoryTabs[index].category
+	w.ensureScrollSignal().Set(0)
+	w.setSelectedRow(-1)
+	w.lastClickItem = 0
+	w.refresh(ctx, w.itemInfo)
+}
+
 // GamepadNavigate moves the storage item selection (dy -1 up, +1 down).
 func (w *StorageWindow) GamepadNavigate(ctx Context, dy int) {
 	if !w.IsOpen() || dy == 0 {

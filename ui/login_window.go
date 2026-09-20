@@ -212,6 +212,10 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 					primitives.Box(user).
 						Width(fieldW).
 						Height(fieldH),
+					// Keep checkbox sits on the Account row (like the PC
+					// client's Save ID), not on a separate row below.
+					primitives.Box(w.keep).
+						Height(fieldH),
 				).
 					CrossAlign(primitives.CrossAxisCenter).
 					Gap(12),
@@ -226,13 +230,6 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 						Height(fieldH),
 					primitives.Box(password).
 						Width(fieldW).
-						Height(fieldH),
-				).
-					CrossAlign(primitives.CrossAxisCenter).
-					Gap(12),
-				primitives.HBox(
-					primitives.Box().Width(labelW),
-					primitives.Box(w.keep).
 						Height(fieldH),
 				).
 					CrossAlign(primitives.CrossAxisCenter).

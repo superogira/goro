@@ -1111,7 +1111,16 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 	case btnL1, btnR1:
 		// Shoulder buttons: held for the quit watcher, plus a key edge the
 		// game layer turns into "switch inventory tab" (F20 = L1/previous,
-		// F21 = R1/next).
+		// F21 = R1/next). The OSK hook intercepts L1 for the login form's
+		// Tab when the keyboard overlay is active.
+		if down && hooks.OSKButtonHook != nil {
+			if code == btnL1 {
+				hooks.OSKButtonHook(4) // L1
+			} else {
+				hooks.OSKButtonHook(5) // R1
+			}
+			return
+		}
 		p.setHeld(code, down)
 		if down {
 			key = gpucontext.KeyF20

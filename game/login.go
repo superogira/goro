@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 
@@ -244,12 +243,22 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		// A/Enter to pick an entry, not to type.
 		textInputPhase := m.phase == loginPhaseCreate ||
 			(m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials)
-		// L1 acts as Tab on the credentials form: advances focus from
-		// the username to the password field (and back).
+		// L1/SELECT act as Tab on the credentials form: advances focus
+		// from the username to the password field (and back). Uses the
+		// platform hook (the fbdev key pipeline's key state never reaches
+		// LoginMode.Update).
 		if m.phase == loginPhaseAccount && m.accountStep == loginAccountCredentials && m.loginWindow != nil {
-			if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+			setupOSKHook() // ensure the hook is installed (OSK may not be open)
+			prevL1 := oskL1Handler
+			oskL1Handler = func() {
 				m.loginWindow.AdvanceFocus()
 			}
+			defer func() {
+				oskL1Handler = prevL1
+				if prevL1 == nil && !oskState().open {
+					teardownOSKHook()
+				}
+			}()
 		}
 		if textInputPhase && ctx.Input.JustPressed(input.KeyEnter) && !dialogShowing {
 			tryOpenOSK(true)

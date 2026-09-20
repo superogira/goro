@@ -147,7 +147,10 @@ func (osk *onScreenKeyboard) move(dx, dy int) {
 // oskCallback delivers a typed character or action to the host mode.
 // The host sets this before showing the keyboard; nil callbacks are
 // ignored (the preview still tracks what was typed).
-var oskCallback func(ch string, action string) // action: "type", "bksp", "submit"
+var oskCallback func(ch string, action string)
+
+// oskL1Handler runs when L1 is pressed while the OSK hook is active.
+var oskL1Handler func() // action: "type", "bksp", "submit"
 
 // inject sends the key's effect to the host via the callback.
 func (osk *onScreenKeyboard) inject(_ client.Context) {
@@ -432,6 +435,10 @@ func setupOSKHook() {
 		case 3: // SELECT: toggle symbols
 			osk.symbols = !osk.symbols
 			osk.row, osk.col = 0, 0
+		case 4: // L1: Tab (advance login form focus)
+			if oskL1Handler != nil {
+				oskL1Handler()
+			}
 		}
 	}
 }

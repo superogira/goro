@@ -2755,22 +2755,39 @@ func HideUpdateProgress() {
 }
 
 // drawUpdateProgress renders the persistent self-update overlay: panel,
-// label, and progress bar centered at ~40% screen height.
+// label, and progress bar centered at ~40% screen height. Uses the same
+// cached text-image path as the FPS meter (the direct font raster and the
+// UI label pipeline both proved unreliable from this point in the frame
+// loop on the fbdev backend).
 func (r *runner) drawUpdateProgress(screen *Frame) {
 	state := updateProgress.Load()
 	if state == nil || screen == nil {
 		return
 	}
 	bounds := screen.Bounds()
-	const w = 320.0
-	const h = 64.0
+	const w = 340.0
+	const h = 72.0
 	x := (float64(bounds.Dx()) - w) / 2
 	y := float64(bounds.Dy())*0.4 - h/2
 	DrawRect(screen, x-4, y-4, w+8, h+8, color.RGBA{A: 130})
 	DrawRect(screen, x, y, w, h, color.RGBA{R: 24, G: 20, B: 34, A: 240})
 	DrawRect(screen, x, y, w, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
 	DrawRect(screen, x, y+h-2, w, 2, color.RGBA{R: 214, G: 178, B: 92, A: 255})
-	DrawOutlinedTextAt(screen, state.text, int(x+12), int(y+12), color.RGBA{R: 244, G: 248, B: 252, A: 255}, color.RGBA{A: 200})
+	// Draw the label through the FPS meter's cached text path.
+	if provider := r.app.GPUContextProvider(); provider != nil {
+		box := UITextBoxCommand{
+			Text:   state.text,
+			X:      6,
+			Y:      6,
+			Anchor: UITextBoxAnchorTopLeft,
+		}
+		if cached, err := r.cachedTextBoxImage(provider, box, 1); err == nil {
+			var opts DrawImageOptions
+			opts.GeoM.Translate(x+14, y+12)
+			opts.Filter = FilterNearest
+			screen.DrawImage(cached.image, &opts)
+		}
+	}
 	if state.fraction < 0 {
 		return
 	}
@@ -2781,10 +2798,10 @@ func (r *runner) drawUpdateProgress(screen *Frame) {
 	if fraction > 1 {
 		fraction = 1
 	}
-	const barW = w - 24
-	barX := x + 12
-	barY := y + 38
-	DrawRect(screen, barX, barY, barW, 12, color.RGBA{R: 40, G: 44, B: 54, A: 220})
+	const barW = w - 28
+	barX := x + 14
+	barY := y + 44
+	DrawRect(screen, barX, barY, barW, 14, color.RGBA{R: 40, G: 44, B: 54, A: 220})
 	if fraction > 0 {
 		fillW := barW * fraction
 		if fillW < 2 {

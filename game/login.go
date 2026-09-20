@@ -229,7 +229,8 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 		// widgets into the mode fields and trigger the login.
 		if oskJustSubmitted() && m.loginWindow != nil {
 			m.username, m.password = m.loginWindow.FieldValues()
-			glog.Infof("osk: submitted user=%q pass_len=%d", m.username, len(m.password))
+			m.keepID = m.loginWindow.KeepID
+			m.saveLoginID(ctx)
 			if conns := loginConnections(ctx); len(conns) > 0 {
 				m.connectAndMaybeLogin(ctx, conns[0], true)
 			}

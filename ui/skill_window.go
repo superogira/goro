@@ -1028,8 +1028,11 @@ func skillDefaultPosition(ctx Context) (int, int) {
 
 func skillWindowDefaultPosition(ctx Context, windowWidth, windowHeight int) (int, int) {
 	width, height := ctx.ScreenSize()
-	x := maxInt(windowScreenMargin, (width-windowWidth)/2)
-	y := maxInt(windowScreenMargin, (height-windowHeight)/2)
+	// Right-flush and nudged 5px above center: the MENU panels' character
+	// info window occupies the top-left ~324x134 and covered the centered
+	// skill window on the small screen.
+	x := maxInt(windowScreenMargin, width-windowWidth-windowScreenMargin)
+	y := maxInt(windowScreenMargin, (height-windowHeight)/2-5)
 	return x, y
 }
 

@@ -144,6 +144,56 @@ func (w *CardCompositionWindow) composeSelected(ctx Context) {
 	}
 }
 
+// GamepadNavigate moves the row selection (the handheld d-pad), wrapping
+// top-to-bottom, scrolling the table to keep the selection visible.
+func (w *CardCompositionWindow) GamepadNavigate(ctx Context, dy int) {
+	items := w.items(ctx.Session)
+	if len(items) == 0 {
+		return
+	}
+	row := w.selectedRow(items) + dy
+	if row < 0 {
+		row = len(items) - 1
+	}
+	if row >= len(items) {
+		row = 0
+	}
+	w.selected = items[row]
+	w.ensureRowVisible(row, len(items))
+	w.SetContent(w.widgetTree(ctx))
+	w.Publish(ctx)
+}
+
+// GamepadConfirm inserts the card into the selected row (the handheld A);
+// with no selection yet it takes the first row.
+func (w *CardCompositionWindow) GamepadConfirm(ctx Context) {
+	if w.selectedRow(w.items(ctx.Session)) < 0 {
+		if items := w.items(ctx.Session); len(items) > 0 {
+			w.selected = items[0]
+		}
+	}
+	w.composeSelected(ctx)
+}
+
+// ensureRowVisible scrolls the table so the given row sits inside the
+// six-row window (the handheld driver writes the selection directly).
+func (w *CardCompositionWindow) ensureRowVisible(row, count int) {
+	viewH := float32(cardCompositionRows * cardCompositionRowH)
+	top := float32(row * cardCompositionRowH)
+	scroll := w.ensureScrollSignal()
+	value := scroll.Get()
+	if top < value {
+		value = top
+	}
+	if top+cardCompositionRowH > value+viewH {
+		value = top + cardCompositionRowH - viewH
+	}
+	if maxScroll := float32(maxInt(0, count-cardCompositionRows) * cardCompositionRowH); value > maxScroll {
+		value = maxScroll
+	}
+	scroll.Set(value)
+}
+
 func (w *CardCompositionWindow) ClampScroll(s *session.Session) {
 	items := w.items(s)
 	if w.selectedRow(items) < 0 {

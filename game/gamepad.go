@@ -132,6 +132,10 @@ func (m *WorldMode) closeActiveHandheldWindow(ctx client.Context) bool {
 	}
 	closed := false
 	switch {
+	case m.ui.cardWindow.IsOpen():
+		m.ui.cardWindow.Close()
+		m.ui.cardWindow.Publish(ctx)
+		closed = true
 	case m.ui.settingsWindow.IsOpen():
 		m.ui.settingsWindow.Toggle(ctx)
 		closed = true
@@ -417,6 +421,33 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 					dy = -1
 				}
 				m.ui.storageWindow.GamepadNavigate(ctx, dy)
+			}
+			return true
+		}
+		return true
+	}
+	// The Insert Card window: d-pad walks the equipment list (wrapping,
+	// the table scrolls to follow), A inserts into the selected row, B
+	// closes via the window stack.
+	if m.ui.cardWindow.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.cardWindow.GamepadConfirm(ctx)
+			}
+			return true
+		}
+		dy := 0
+		if ctx.Input.JustPressed(input.KeyArrowUp) {
+			dy--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowDown) {
+			dy++
+		}
+		if dy != 0 {
+			if now.Sub(m.invSelMovedAt) >= gamepadNavFloor {
+				m.invSelMovedAt = now
+				m.ui.cardWindow.GamepadNavigate(ctx, dy)
 			}
 			return true
 		}

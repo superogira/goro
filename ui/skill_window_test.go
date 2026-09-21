@@ -1674,9 +1674,13 @@ func TestSkillWindowCachesOrderedAndGroupedSkills(t *testing.T) {
 }
 
 func TestSkillDefaultPositionCentersOnScreen(t *testing.T) {
+	// Right-flush, 5px above center: the MENU panels' character info
+	// window covers a centered skill window on the small screen.
 	x, y := skillDefaultPosition(Context{ScreenW: 800, ScreenH: 600})
-	if x != 184 || y != 106 {
-		t.Fatalf("skill default position = %d,%d; want centered 184,106", x, y)
+	wantX := 800 - skillWindowWidth - windowScreenMargin
+	wantY := (600 - skillWindowHeight)/2 - 5
+	if x != wantX || y != wantY {
+		t.Fatalf("skill default position = %d,%d; want right-docked %d,%d", x, y, wantX, wantY)
 	}
 
 	x, y = skillDefaultPosition(Context{ScreenW: 320, ScreenH: 240})

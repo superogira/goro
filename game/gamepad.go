@@ -268,12 +268,19 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	// keyboard-blocked gate below, which reports the open dialog itself
 	// and would swallow the press. Floored: the firmware's hold-repeat
 	// pairs otherwise advanced several dialog pages per held press.
-	if m.ui.npcDialog.IsOpen() && ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
-		if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
-			m.gamepadActionAt = now
-			m.ui.npcDialog.Confirm(ctx)
+	if m.ui.npcDialog.IsOpen() {
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.npcDialog.Confirm(ctx)
+			}
+			return true
 		}
-		return true
+		// B has nothing to close in a conversation; consume it so the
+		// plain-screen fallthrough cannot fire the hotbar mid-dialog.
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF18) {
+			return true
+		}
 	}
 	// The direct-drawn MENU overlay owns every button while open; B closes.
 	if m.heldMenuOpen {

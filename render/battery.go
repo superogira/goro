@@ -133,18 +133,14 @@ func (r *runner) drawBatteryBadge(screen *Frame) {
 	)
 	percentText := strconv.Itoa(state.percent) + "%"
 	textW := int(MeasureUIText(percentText, 12)) + 2
+	const panelH = 18
 	panelW := bodyW + tipW + gap + textW + pad*2
-	panelH := bodyH + pad*2 - 1
 	x := (float64(bounds.Dx()) - float64(panelW)) / 2
 	y := 4.0
 
-	// Backdrop panel with hairline top/bottom borders, matching the other
+	// Backdrop panel — background only, no border, matching the other
 	// handheld overlays.
-	panel := color.RGBA{R: 14, G: 18, B: 24, A: 175}
-	border := color.RGBA{R: 120, G: 132, B: 150, A: 120}
-	DrawRect(screen, x, y, float64(panelW), float64(panelH), panel)
-	DrawRect(screen, x, y, float64(panelW), 1, border)
-	DrawRect(screen, x, y+float64(panelH)-1, float64(panelW), 1, border)
+	DrawRect(screen, x, y, float64(panelW), panelH, color.RGBA{R: 14, G: 18, B: 24, A: 175})
 
 	shell := color.RGBA{R: 235, G: 238, B: 244, A: 230}
 	outline := color.RGBA{A: 190}
@@ -160,8 +156,10 @@ func (r *runner) drawBatteryBadge(screen *Frame) {
 		fill = color.RGBA{R: 116, G: 200, B: 118, A: 255}
 	}
 
+	// Icon and text each vertically centered in the 18px panel: the 11px
+	// body sits at +3, the 12px text at +2.
 	ix := x + pad
-	iy := y + pad - 1
+	iy := y + 3
 	// Body outline, tip on the right, proportional fill inside.
 	DrawRect(screen, ix, iy, bodyW, 1, shell)
 	DrawRect(screen, ix, iy+bodyH-1, bodyW, 1, shell)
@@ -183,5 +181,5 @@ func (r *runner) drawBatteryBadge(screen *Frame) {
 		DrawRect(screen, cx-2, iy+5, 2, 3, bolt)
 	}
 
-	DrawOutlinedTextAt(screen, percentText, int(ix+bodyW+tipW+gap), int(iy), shell, outline)
+	DrawOutlinedTextAt(screen, percentText, int(ix+bodyW+tipW+gap), int(y)+2, shell, outline)
 }

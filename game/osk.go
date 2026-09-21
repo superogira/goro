@@ -244,38 +244,51 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	// edges (JustPressed) are cleared by EndFrame between the event dispatch
 	// and game.Update on the fbdev backend, so edges never reach the game
 	// layer. The held state persists across frames (A is held >= 80ms).
+	// Independent if-blocks, NOT a switch: a switch's first-match-wins made
+	// the "!A down" latch-reset case match every frame and the B/START/
+	// SELECT cases below it unreachable dead code.
 	floored := now.Sub(oskShared.actionAt) >= gamepadActionFloor
-	switch {
-	case ctx.Input.KeyCodeDown(gpucontext.KeyF13) && !oskShared.aLatch && floored:
-		oskShared.aLatch = true
-		oskShared.actionAt = now
-		glog.Infof("osk: A down, injecting key=%q", osk.currentKey().label)
-		osk.inject(ctx)
-		return true
-	case !ctx.Input.KeyCodeDown(gpucontext.KeyF13):
+	if ctx.Input.KeyCodeDown(gpucontext.KeyF13) {
+		if !oskShared.aLatch && floored {
+			oskShared.aLatch = true
+			oskShared.actionAt = now
+			glog.Infof("osk: A down, injecting key=%q", osk.currentKey().label)
+			osk.inject(ctx)
+			return true
+		}
+	} else {
 		oskShared.aLatch = false
-	case ctx.Input.KeyCodeDown(gpucontext.KeyF18) && !oskShared.bLatch:
-		oskShared.bLatch = true
-		// B: backspace (navigate to the bksp cell and inject).
-		osk.row, osk.col = len(osk.rows())-1, 2
-		osk.inject(ctx)
-		return true
-	case !ctx.Input.KeyCodeDown(gpucontext.KeyF18):
+	}
+	if ctx.Input.KeyCodeDown(gpucontext.KeyF18) {
+		if !oskShared.bLatch {
+			oskShared.bLatch = true
+			// B: backspace (navigate to the bksp cell and inject).
+			osk.row, osk.col = len(osk.rows())-1, 2
+			osk.inject(ctx)
+			return true
+		}
+	} else {
 		oskShared.bLatch = false
-	case ctx.Input.KeyCodeDown(gpucontext.KeyEnter) && !oskShared.enterLatch:
-		oskShared.enterLatch = true
-		// START: submit.
-		osk.row, osk.col = len(osk.rows())-1, len(osk.rows()[len(osk.rows())-1])-1
-		osk.inject(ctx)
-		return true
-	case !ctx.Input.KeyCodeDown(gpucontext.KeyEnter):
+	}
+	if ctx.Input.KeyCodeDown(gpucontext.KeyEnter) {
+		if !oskShared.enterLatch {
+			oskShared.enterLatch = true
+			// START: submit.
+			osk.row, osk.col = len(osk.rows())-1, len(osk.rows()[len(osk.rows())-1])-1
+			osk.inject(ctx)
+			return true
+		}
+	} else {
 		oskShared.enterLatch = false
-	case ctx.Input.KeyCodeDown(gpucontext.KeyPrintScreen) && !oskShared.selLatch:
-		oskShared.selLatch = true
-		osk.symbols = !osk.symbols
-		osk.row, osk.col = 0, 0
-		return true
-	case !ctx.Input.KeyCodeDown(gpucontext.KeyPrintScreen):
+	}
+	if ctx.Input.KeyCodeDown(gpucontext.KeyPrintScreen) {
+		if !oskShared.selLatch {
+			oskShared.selLatch = true
+			osk.symbols = !osk.symbols
+			osk.row, osk.col = 0, 0
+			return true
+		}
+	} else {
 		oskShared.selLatch = false
 	}
 	dx, dy := 0, 0
@@ -416,12 +429,17 @@ func oskJustSubmitted() bool {
 }
 
 // setupOSKHook wires the platform's button dispatch directly to the OSK
-// (the fbdev event pipeline's key state never reaches game.Update).
+// (the fbdev event pipeline's key state never reaches game.Update). The
+// hook self-uninstalls once the keyboard closes — the world layer has no
+// teardown call, and an installed-but-closed hook must never swallow
+// game buttons. Returning false lets the press fall through to its
+// normal key dispatch.
 func setupOSKHook() {
-	hooks.OSKButtonHook = func(button int) {
+	hooks.OSKButtonHook = func(button int) bool {
 		osk := oskState()
 		if !osk.open {
-			return
+			hooks.OSKButtonHook = nil
+			return false
 		}
 		switch button {
 		case 0: // A: type the selected key
@@ -436,6 +454,7 @@ func setupOSKHook() {
 			osk.symbols = !osk.symbols
 			osk.row, osk.col = 0, 0
 		}
+		return true
 	}
 }
 

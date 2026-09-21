@@ -1046,9 +1046,11 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// The OSK hook short-circuits everything: when the on-screen
 		// keyboard is open, the button goes straight to the game's
 		// keyboard handler (the fbdev event pipeline's key state never
-		// reaches game.Update on this backend).
-		if down && hooks.OSKButtonHook != nil {
-			hooks.OSKButtonHook(0) // A
+		// reaches game.Update on this backend). The same applies to
+		// B/START/SELECT below — all four OSK buttons ride the hook,
+		// because their key-state latches in the game layer are
+		// unreachable on this backend.
+		if down && hooks.OSKButtonHook != nil && hooks.OSKButtonHook(0) {
 			return
 		}
 		if down {
@@ -1065,6 +1067,10 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// B button: a KeyF18 edge the game layer turns into "close the
 		// active window" (or the handheld menu). No companion right-click:
 		// stray context menus on a pointerless device were pure noise.
+		// While the OSK is open, B is the keyboard's close instead.
+		if down && hooks.OSKButtonHook != nil && hooks.OSKButtonHook(1) {
+			return
+		}
 		if down {
 			p.dispatchKey(gpucontext.KeyF18, true)
 			go func() {
@@ -1222,9 +1228,13 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// START is Enter, except while MENU is held — that combo captures
 		// the screen instead. The log line also proves whether START even
 		// reaches the game while MENU is held (field rounds showed no
-		// combo hits at all).
+		// combo hits at all). While the OSK is open, START is the
+		// keyboard's submit (OK).
 		if down {
 			logger().Info("fbdev: start press", "menu_held", p.isHeld(btnMenu))
+		}
+		if down && hooks.OSKButtonHook != nil && hooks.OSKButtonHook(2) {
+			return
 		}
 		if down && p.isHeld(btnMenu) {
 			logger().Info("fbdev: menu+start — screenshot")
@@ -1245,6 +1255,11 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 		// for the game and a quit-combo button for the watcher. The
 		// firmware echoes a SELECT press right after every MENU release;
 		// swallow that echo (still tracked as held for the quit combos).
+		// While the OSK is open, SELECT toggles the keyboard's symbol
+		// page instead.
+		if down && hooks.OSKButtonHook != nil && hooks.OSKButtonHook(3) {
+			return
+		}
 		p.setHeld(btnSel0, down)
 		p.inputMu.Lock()
 		echo := down && time.Now().Before(p.suppressSel0Until)

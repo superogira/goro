@@ -29,7 +29,7 @@ const (
 	npcDialogMaxMessages = 32
 	npcMenuWidth         = 260
 	npcMenuMinRows       = 4
-	npcMenuMaxRows       = 5
+	npcMenuMaxRows       = 8
 	npcMenuRowH          = 20
 	npcMenuPad           = 8
 	npcMenuMinHeight     = ROWindowTitleHeight + npcMenuPad*2 + npcMenuMinRows*npcMenuRowH + ROWindowFooterHeight
@@ -487,7 +487,41 @@ func (d *NPCDialog) moveMenuSelection(step int) {
 	default:
 		d.menuRow += step
 	}
+	d.ensureMenuRowVisible()
 	d.dirty = true
+}
+
+// ensureMenuRowVisible scrolls the option list so the selection stays
+// inside the visible window. The handheld d-pad driver writes menuRow
+// directly; without this the listview never scrolled to follow it and a
+// selection below the fold stayed invisible. The Cancel footer keeps the
+// last option row in view.
+func (d *NPCDialog) ensureMenuRowVisible() {
+	if len(d.options) == 0 {
+		return
+	}
+	rows := minInt(len(d.options), npcMenuMaxRows)
+	viewH := float32(rows * npcMenuRowH)
+	contentH := float32(len(d.options) * npcMenuRowH)
+	sel := d.menuRow
+	if sel < 0 {
+		sel = len(d.options) - 1
+	}
+	top := float32(sel * npcMenuRowH)
+	scroll := d.ensureMenuScrollSignal().Get()
+	if top < scroll {
+		scroll = top
+	}
+	if top+npcMenuRowH > scroll+viewH {
+		scroll = top + npcMenuRowH - viewH
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	if maxScroll := contentH - viewH; scroll > maxScroll {
+		scroll = maxScroll
+	}
+	d.ensureMenuScrollSignal().Set(scroll)
 }
 
 // Confirm activates the current dialog action — the Enter path, exported

@@ -26,11 +26,22 @@ var osk onScreenKeyboard
 var oskShared = struct {
 	actionAt   time.Time
 	movedAt    time.Time
+	holdSince  time.Time
 	aLatch     bool
 	bLatch     bool
 	enterLatch bool
 	selLatch   bool
 }{}
+
+// OSK pacing: faster than the game-wide action/nav floors — typing is the
+// keyboard's whole job — plus a hold-to-repeat cadence for the d-pad
+// (short precision delay, then a fast stride across the board).
+const (
+	oskActionFloor = 100 * time.Millisecond
+	oskNavFloor    = 80 * time.Millisecond
+	oskRepeatDelay = 260 * time.Millisecond
+	oskRepeatEvery = 70 * time.Millisecond
+)
 
 func oskState() *onScreenKeyboard { return &osk }
 
@@ -238,7 +249,7 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	// Independent if-blocks, NOT a switch: a switch's first-match-wins made
 	// the "!A down" latch-reset case match every frame and the B/START/
 	// SELECT cases below it unreachable dead code.
-	floored := now.Sub(oskShared.actionAt) >= gamepadActionFloor
+	floored := now.Sub(oskShared.actionAt) >= oskActionFloor
 	if ctx.Input.KeyCodeDown(gpucontext.KeyF13) {
 		if !oskShared.aLatch && floored {
 			oskShared.aLatch = true
@@ -296,9 +307,35 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 		dy++
 	}
 	if dx != 0 || dy != 0 {
-		if now.Sub(oskShared.movedAt) >= gamepadNavFloor {
+		if now.Sub(oskShared.movedAt) >= oskNavFloor {
 			oskShared.movedAt = now
+			oskShared.holdSince = now
 			osk.move(dx, dy)
+		}
+		return true
+	}
+	// A held direction repeats: after a short precision delay the cursor
+	// strides across the board on its own (one axis at a time — horizontal
+	// wins when both are held).
+	hdx, hdy := 0, 0
+	if ctx.Input.KeyCodeDown(gpucontext.KeyLeft) {
+		hdx--
+	}
+	if ctx.Input.KeyCodeDown(gpucontext.KeyRight) {
+		hdx++
+	}
+	if hdx == 0 {
+		if ctx.Input.KeyCodeDown(gpucontext.KeyUp) {
+			hdy--
+		}
+		if ctx.Input.KeyCodeDown(gpucontext.KeyDown) {
+			hdy++
+		}
+	}
+	if hdx != 0 || hdy != 0 {
+		if now.Sub(oskShared.holdSince) >= oskRepeatDelay && now.Sub(oskShared.movedAt) >= oskRepeatEvery {
+			oskShared.movedAt = now
+			osk.move(hdx, hdy)
 		}
 		return true
 	}

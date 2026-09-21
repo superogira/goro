@@ -1102,7 +1102,11 @@ func (p *fbdevPlatform) handleKey(code uint16, down bool) {
 			return
 		}
 	case btnNorth:
-		// X button: KeyF22 — "inspect the selected card slot".
+		// X button: KeyF22 — "inspect the selected card slot". While the
+		// OSK is open, X is the keyboard's backspace (button 4).
+		if down && hooks.OSKButtonHook != nil && hooks.OSKButtonHook(4) {
+			return
+		}
 		if down {
 			p.dispatchKey(gpucontext.KeyF22, true)
 			go func() {

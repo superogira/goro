@@ -263,12 +263,11 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	} else {
 		oskShared.aLatch = false
 	}
-	if ctx.Input.KeyCodeDown(gpucontext.KeyF18) {
+	if ctx.Input.KeyCodeDown(gpucontext.KeyF18) || ctx.Input.KeyCodeDown(gpucontext.KeyF22) {
 		if !oskShared.bLatch {
 			oskShared.bLatch = true
-			// B: backspace (navigate to the bksp cell and inject).
-			osk.row, osk.col = len(osk.rows())-1, 2
-			osk.inject(ctx)
+			// B/X: backspace.
+			osk.backspace()
 			return true
 		}
 	} else {
@@ -473,8 +472,23 @@ func setupOSKHook() {
 		case 3: // SELECT: toggle symbols
 			osk.symbols = !osk.symbols
 			osk.row, osk.col = 0, 0
+		case 4: // X: backspace
+			osk.backspace()
 		}
 		return true
+	}
+}
+
+// backspace injects the ⌫ cell when the current page carries one (the
+// symbols page does not — X is inert there until the ABC page returns).
+func (osk *onScreenKeyboard) backspace() {
+	last := osk.rows()[len(osk.rows())-1]
+	for ci, key := range last {
+		if key.special == "bksp" {
+			osk.row, osk.col = len(osk.rows())-1, ci
+			osk.inject(client.Context{})
+			return
+		}
 	}
 }
 

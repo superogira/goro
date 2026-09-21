@@ -109,8 +109,10 @@ func startBatteryMonitor() {
 func ptrOf[T any](v T) *T { return &v }
 
 // drawBatteryBadge renders the battery icon and percentage centered at the
-// top edge — direct rects and outlined text, the fbdev-proven paths. While
-// the on-screen keyboard is up it stands down: the OSK panel owns the
+// top edge on a dark panel — over bright maps the bare glyph was unreadable
+// — using direct rects and direct-raster outlined text, the fbdev-proven
+// paths (the queued-label text pipeline draws nothing there). While the
+// on-screen keyboard is up it stands down: the OSK panel owns the
 // top-center band.
 func (r *runner) drawBatteryBadge(screen *Frame) {
 	if screen == nil || OSKActive() {
@@ -126,15 +128,25 @@ func (r *runner) drawBatteryBadge(screen *Frame) {
 		bodyW = 22
 		bodyH = 11
 		tipW  = 2
-		gap   = 5
+		gap   = 6
+		pad   = 5
 	)
 	percentText := strconv.Itoa(state.percent) + "%"
-	textW := float64(MeasureUIText(percentText, 12))
-	totalW := float64(bodyW+tipW+gap) + textW
-	x := (float64(bounds.Dx()) - totalW) / 2
-	y := 6.0
+	textW := int(MeasureUIText(percentText, 12)) + 2
+	panelW := bodyW + tipW + gap + textW + pad*2
+	panelH := bodyH + pad*2 - 1
+	x := (float64(bounds.Dx()) - float64(panelW)) / 2
+	y := 4.0
 
-	shell := color.RGBA{R: 235, G: 238, B: 244, A: 220}
+	// Backdrop panel with hairline top/bottom borders, matching the other
+	// handheld overlays.
+	panel := color.RGBA{R: 14, G: 18, B: 24, A: 175}
+	border := color.RGBA{R: 120, G: 132, B: 150, A: 120}
+	DrawRect(screen, x, y, float64(panelW), float64(panelH), panel)
+	DrawRect(screen, x, y, float64(panelW), 1, border)
+	DrawRect(screen, x, y+float64(panelH)-1, float64(panelW), 1, border)
+
+	shell := color.RGBA{R: 235, G: 238, B: 244, A: 230}
 	outline := color.RGBA{A: 190}
 	var fill color.RGBA
 	switch {
@@ -148,26 +160,28 @@ func (r *runner) drawBatteryBadge(screen *Frame) {
 		fill = color.RGBA{R: 116, G: 200, B: 118, A: 255}
 	}
 
+	ix := x + pad
+	iy := y + pad - 1
 	// Body outline, tip on the right, proportional fill inside.
-	DrawRect(screen, x, y, bodyW, 1, shell)
-	DrawRect(screen, x, y+bodyH-1, bodyW, 1, shell)
-	DrawRect(screen, x, y, 1, bodyH, shell)
-	DrawRect(screen, x+bodyW-1, y, 1, bodyH, shell)
-	DrawRect(screen, x+bodyW, y+3, tipW, bodyH-6, shell)
+	DrawRect(screen, ix, iy, bodyW, 1, shell)
+	DrawRect(screen, ix, iy+bodyH-1, bodyW, 1, shell)
+	DrawRect(screen, ix, iy, 1, bodyH, shell)
+	DrawRect(screen, ix+bodyW-1, iy, 1, bodyH, shell)
+	DrawRect(screen, ix+bodyW, iy+3, tipW, bodyH-6, shell)
 	innerW := bodyW - 4
 	fillW := int(float64(innerW) * float64(state.percent) / 100)
 	if state.percent > 0 && fillW < 1 {
 		fillW = 1
 	}
-	DrawRect(screen, x+2, y+2, float64(fillW), bodyH-4, fill)
+	DrawRect(screen, ix+2, iy+2, float64(fillW), bodyH-4, fill)
 
 	// Charging: a small lightning bolt across the body.
 	if state.charging {
 		bolt := color.RGBA{R: 24, G: 20, B: 34, A: 255}
-		cx := x + bodyW/2
-		DrawRect(screen, cx, y+2, 2, 3, bolt)
-		DrawRect(screen, cx-2, y+5, 2, 3, bolt)
+		cx := ix + bodyW/2
+		DrawRect(screen, cx, iy+2, 2, 3, bolt)
+		DrawRect(screen, cx-2, iy+5, 2, 3, bolt)
 	}
 
-	DrawUIOutlinedTextAt(screen, percentText, x+bodyW+tipW+gap, y-1, shell, outline)
+	DrawOutlinedTextAt(screen, percentText, int(ix+bodyW+tipW+gap), int(iy), shell, outline)
 }

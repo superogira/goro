@@ -401,6 +401,15 @@ func tryOpenOSK(textFocused bool) {
 		osk.open = true
 		osk.row, osk.col = 0, 0
 		osk.preview = ""
+		// Seed every key latch: the key that opened the keyboard (START)
+		// is still held, and the latch handling would otherwise read that
+		// as an immediate OK press in the same frame — the keyboard
+		// flashed on and submitted the instant it opened. Each latch
+		// clears as soon as its own key is released.
+		oskShared.aLatch = true
+		oskShared.bLatch = true
+		oskShared.enterLatch = true
+		oskShared.selLatch = true
 		render.SetOSKActive(true)
 		setupOSKHook()
 		glog.Infof("osk: opened, hook installed")

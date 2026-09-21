@@ -99,7 +99,7 @@ func TestEquipmentGamepadActivateSendsTakeoff(t *testing.T) {
 	s := &session.Session{
 		Inventory: session.Inventory{
 			Items: []session.InventoryItem{
-				{Index: 7, ItemID: 2101, Location: db.EquipShield, Equip: true, Equipped: true},
+				{Index: 7, ItemID: 2101, Location: db.EquipShield, WearLocation: db.EquipShield, Equip: true, Equipped: true},
 			},
 		},
 	}
@@ -137,7 +137,7 @@ func TestEquipmentGamepadInfoOpensDescription(t *testing.T) {
 	s := &session.Session{
 		Inventory: session.Inventory{
 			Items: []session.InventoryItem{
-				{Index: 4, ItemID: 1201, Location: db.EquipWeapon, Equip: true, Equipped: true},
+				{Index: 4, ItemID: 1201, Location: db.EquipWeapon, WearLocation: db.EquipWeapon, Equip: true, Equipped: true},
 			},
 		},
 	}

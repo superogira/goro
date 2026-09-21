@@ -917,6 +917,7 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 		return err
 	}
 	r.drawVolumeHUD(r.screen)
+	r.drawBatteryBadge(r.screen)
 	r.drawScreenNotice(r.screen)
 	r.drawUpdateProgress(r.screen)
 	if err := r.drawFullscreenButton(r.screen, width, height, deviceScale); err != nil {

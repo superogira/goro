@@ -44,6 +44,7 @@ type WorldMode struct {
 	gamepadActionAt     time.Time
 	statsSelMovedAt     time.Time
 	invSelMovedAt       time.Time
+	deathSelMovedAt     time.Time
 	mapLoad             *mapLoadState
 	mapLoadRSWSource    string
 	camera              followCamera
@@ -1398,9 +1399,36 @@ func (m *WorldMode) handleEscapeMenuAction(ctx client.Context) {
 }
 
 func (m *WorldMode) updateDeathUIInput(ctx client.Context) bool {
+	// Handheld: the death menu is the pointerless device's only way out —
+	// d-pad selects (▶ marker), A activates. The gamepad layer never runs
+	// while dead, so this is the menu's only gamepad path.
+	if hudHidden(ctx) && m.ui.escapeMenu.IsOpen() && ctx.Input != nil {
+		now := time.Now()
+		dy := 0
+		if ctx.Input.JustPressed(input.KeyArrowUp) {
+			dy--
+		}
+		if ctx.Input.JustPressed(input.KeyArrowDown) {
+			dy++
+		}
+		if dy != 0 {
+			if now.Sub(m.deathSelMovedAt) >= gamepadNavFloor {
+				m.deathSelMovedAt = now
+				m.ui.escapeMenu.GamepadNavigate(dy)
+			}
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.escapeMenu.GamepadActivate()
+			}
+			return true
+		}
+	}
 	// Active chat owns Escape so the first press leaves text entry. Enter also
-	// gets priority so chat can be activated even while the pointer is over the
-	// death menu. Otherwise the menu owns Escape and may be freely toggled.
+	// gets priority so chat can be activated even while the pointer is over
+	// the death menu. Otherwise the menu owns Escape and may be freely toggled.
 	chatFirst := m.ui.console.Active() || (ctx.Input != nil && ctx.Input.JustPressed(input.KeyEnter))
 	if chatFirst && m.ui.console.UpdateInput(ctx) {
 		return true

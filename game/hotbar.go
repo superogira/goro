@@ -115,10 +115,11 @@ var (
 	hotbarOutline     = color.RGBA{R: 10, G: 12, B: 16, A: 210}
 )
 
-// draw renders the hotbar as a vertical column docked to the right screen
-// edge, vertically centered — the right margin is otherwise unused and
-// nothing on screen collides with it. Icons reuse the WorldMode's cached
-// item/skill painters, so nothing here allocates per frame.
+// draw renders the hotbar as a vertical column docked to the top-right
+// corner — the top, because the bottom-right corner belongs to the FPS/
+// memory stack and a vertically centered bar ran into it. Icons reuse
+// the WorldMode's cached item/skill painters, so nothing here allocates
+// per frame.
 func (h *hotbar) draw(screen *render.Frame, ctx client.Context, m *WorldMode) {
 	if screen == nil || !h.shown {
 		return
@@ -127,7 +128,7 @@ func (h *hotbar) draw(screen *render.Frame, ctx client.Context, m *WorldMode) {
 	width := hotbarCellSize + hotbarWindowPad*2
 	height := hotbarSlotCount*hotbarCellSize + hotbarWindowPad*2
 	x := bounds.Dx() - width - hotbarRightMargin
-	y := (bounds.Dy() - height) / 2
+	y := hotbarRightMargin
 	render.DrawRect(screen, float64(x), float64(y), float64(width), float64(height), hotbarPanelColor)
 	render.DrawRect(screen, float64(x), float64(y), 1, float64(height), hotbarBorderColor)
 	render.DrawRect(screen, float64(x+width-1), float64(y), 1, float64(height), hotbarBorderColor)

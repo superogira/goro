@@ -28,6 +28,10 @@ type EscapeMenu struct {
 	ctx           client.Context
 	webOpen       bool
 	webSyncKey    string
+	// Handheld death-menu navigation: the visible entries' activate
+	// closures (display order) and the d-pad's selected index.
+	deathItems []func()
+	deathSel   int
 }
 
 // IsOpen reports the menu's open state. On web the DOM panel owns the
@@ -353,7 +357,7 @@ func (m *EscapeMenu) widgetTree(ctx client.Context) widget.Widget {
 				rotheme.LargeButton("Cancel", func() {
 					m.Window.Close()
 				}),
-				rotheme.LargeButtonDisabled("Exit to Windows", m.pending, func() {
+				rotheme.LargeButtonDisabled("Exit Game", m.pending, func() {
 					m.RequestQuitGame(ctx)
 				}),
 			).
@@ -365,29 +369,44 @@ func (m *EscapeMenu) widgetTree(ctx client.Context) widget.Widget {
 }
 
 func (m *EscapeMenu) deathWidgetTree(ctx client.Context) widget.Widget {
+	activate := make([]func(), 0, 5)
+	button := func(label string, disabled bool, run func()) widget.Widget {
+		activate = append(activate, run)
+		if len(activate)-1 == m.deathSel {
+			label = "▶ " + label
+		}
+		if disabled {
+			return rotheme.LargeButtonDisabled(label, m.pending, run)
+		}
+		return rotheme.LargeButton(label, run)
+	}
 	buttons := make([]widget.Widget, 0, 5)
 	if client.AutoReviveAvailable(ctx) {
-		buttons = append(buttons, rotheme.LargeButtonDisabled("Return to Life", m.pending, func() {
+		buttons = append(buttons, button("Return to Life", true, func() {
 			m.action = EscapeMenuActionAutoRevive
 			m.refresh(ctx)
 		}))
 	}
 	buttons = append(buttons,
-		rotheme.LargeButtonDisabled("Return to Save Point", m.pending, func() {
+		button("Return to Save Point", true, func() {
 			m.action = EscapeMenuActionSavePoint
 			m.refresh(ctx)
 		}),
-		rotheme.LargeButtonDisabled("Character Select", m.pending, func() {
+		button("Character Select", true, func() {
 			m.action = EscapeMenuActionCharacterSelect
 			m.refresh(ctx)
 		}),
-		rotheme.LargeButtonDisabled("Exit to Windows", m.pending, func() {
+		button("Exit Game", true, func() {
 			m.RequestQuitGame(ctx)
 		}),
-		rotheme.LargeButton("Cancel", func() {
+		button("Cancel", false, func() {
 			m.Window.Close()
 		}),
 	)
+	m.deathItems = activate
+	if m.deathSel >= len(activate) {
+		m.deathSel = 0
+	}
 	return Win(
 		Title("Menu"),
 		CloseButton(false),
@@ -399,4 +418,22 @@ func (m *EscapeMenu) deathWidgetTree(ctx client.Context) widget.Widget {
 				CrossAlign(primitives.CrossAxisStretch),
 		),
 	)
+}
+
+// GamepadNavigate moves the death menu's selection (the handheld d-pad);
+// the marker prefixes the selected entry.
+func (m *EscapeMenu) GamepadNavigate(dy int) {
+	n := len(m.deathItems)
+	if n == 0 {
+		return
+	}
+	m.deathSel = ((m.deathSel+dy)%n + n) % n
+	m.refresh(m.ctx)
+}
+
+// GamepadActivate runs the death menu's selected entry (the handheld A).
+func (m *EscapeMenu) GamepadActivate() {
+	if m.deathSel >= 0 && m.deathSel < len(m.deathItems) && m.deathItems[m.deathSel] != nil {
+		m.deathItems[m.deathSel]()
+	}
 }

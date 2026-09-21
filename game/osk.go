@@ -1,7 +1,6 @@
 package game
 
 import (
-	"fmt"
 	"image/color"
 	"strings"
 	"time"
@@ -85,8 +84,6 @@ type onScreenKeyboard struct {
 	col     int
 	shift   bool
 	symbols bool // false = letters page, true = symbols page
-	// lastTyped tracks the last injection for the preview line.
-	preview string
 }
 
 func (osk *onScreenKeyboard) rows() [][]oskKey {
@@ -146,7 +143,7 @@ func (osk *onScreenKeyboard) move(dx, dy int) {
 
 // oskCallback delivers a typed character or action to the host mode.
 // The host sets this before showing the keyboard; nil callbacks are
-// ignored (the preview still tracks what was typed).
+// ignored.
 var oskCallback func(ch string, action string)
 
 // oskL1Handler runs when L1 is pressed while the OSK hook is active.
@@ -161,17 +158,12 @@ func (osk *onScreenKeyboard) inject(_ client.Context) {
 		return
 	}
 	if key.special == "space" {
-		osk.preview += " "
 		if oskCallback != nil {
 			oskCallback(" ", "type")
 		}
 		return
 	}
 	if key.special == "bksp" {
-		if len(osk.preview) > 0 {
-			runes := []rune(osk.preview)
-			osk.preview = string(runes[:len(runes)-1])
-		}
 		if oskCallback != nil {
 			oskCallback("", "bksp")
 		}
@@ -196,7 +188,6 @@ func (osk *onScreenKeyboard) inject(_ client.Context) {
 	if osk.shift && key.upper != "" {
 		ch = key.upper
 	}
-	osk.preview += ch
 	if osk.shift {
 		osk.shift = false
 	}
@@ -332,7 +323,7 @@ func drawOSK(screen *render.Frame) {
 	gridW := maxCols*oskCellW + (maxCols-1)*oskPad
 	gridH := len(rows)*oskCellH + (len(rows)-1)*oskPad
 	w := float64(gridW + 24)
-	h := float64(gridH + 24 + 28) // grid + preview line + padding
+	h := float64(gridH + 24)
 	x := (float64(bounds.Dx()) - w) / 2
 	y := 8.0 // Top of the screen: clear of the login form below
 
@@ -340,19 +331,9 @@ func drawOSK(screen *render.Frame) {
 	render.DrawRect(screen, x, y, w, 3, c.border)
 	render.DrawRect(screen, x, y+3, w, 2, c.gold)
 
-	// Preview line.
-	label := "Letters"
-	if osk.symbols {
-		label = "Symbols"
-	}
-	shiftLabel := ""
-	if osk.shift {
-		shiftLabel = " (Shift)"
-	}
-	render.DrawOutlinedTextAt(screen, fmt.Sprintf("%s%s: %s", label, shiftLabel, osk.preview), int(x+12), int(y+10), c.muted, c.outline)
-
-	// Grid.
-	gy := y + 34
+	// Grid. (No typed-text preview line: it echoed the password being
+	// typed, in the clear, right above the login form.)
+	gy := y + 12
 	for ri, row := range rows {
 		rowW := len(row)*oskCellW + (len(row)-1)*oskPad
 		rx := x + (w-float64(rowW))/2
@@ -400,7 +381,6 @@ func tryOpenOSK(textFocused bool) {
 	if textFocused {
 		osk.open = true
 		osk.row, osk.col = 0, 0
-		osk.preview = ""
 		// Seed every key latch: the key that opened the keyboard (START)
 		// is still held, and the latch handling would otherwise read that
 		// as an immediate OK press in the same frame — the keyboard
@@ -416,14 +396,6 @@ func tryOpenOSK(textFocused bool) {
 	}
 }
 
-// trimOSKRunes clamps the preview line for drawing.
-func trimOSKRunes(text string, maxRunes int) string {
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text
-	}
-	return string(runes[:maxRunes])
-}
 
 var _ = strings.TrimSpace
 

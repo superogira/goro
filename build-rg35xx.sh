@@ -6,12 +6,16 @@ cd "$(dirname "$0")"
 
 echo "== cross-compiling goro (linux/arm64) =="
 # The build id feeds the boot-time self update (app.RunSelfUpdate
-# compares it against version.txt on the update server).
+# compares it against version.txt on the update server). The same stamp
+# also feeds the on-screen version badge (buildinfo): the short hash as
+# the version plus a human build date/time — without the injection the
+# badge falls back to "dev".
 VERSION="$(git rev-parse --short HEAD)-$(date +%Y%m%d%H%M)"
-echo "build version: $VERSION"
+BUILD_TIME="$(date '+%Y-%m-%d %H:%M')"
+echo "build version: $VERSION ($BUILD_TIME)"
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags nofakecgo \
-  -ldflags "-s -w -X github.com/kivutar/goro/app.buildVersion=$VERSION" \
+  -ldflags "-s -w -X github.com/kivutar/goro/app.buildVersion=$VERSION -X github.com/kivutar/goro/buildinfo.Version=$(git rev-parse --short HEAD) -X 'github.com/kivutar/goro/buildinfo.BuildTime=$BUILD_TIME'" \
   -o dist/rg35xx/GorORG35/goro .
 # version.txt + checksum for publishing to the update server.
 if command -v sha256sum >/dev/null 2>&1; then

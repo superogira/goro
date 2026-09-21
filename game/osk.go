@@ -33,12 +33,14 @@ var oskShared = struct {
 	selLatch   bool
 }{}
 
-// OSK pacing: faster than the game-wide action/nav floors — typing is the
-// keyboard's whole job — plus a hold-to-repeat cadence for the d-pad
-// (short precision delay, then a fast stride across the board).
+// OSK pacing: the tap floors stay near the game-wide values — the
+// firmware emits a repeat press pair ~100-150ms into a held button, and
+// a lower floor let that pair through as a second step (one tap moved
+// two cells). Fast travel comes from the d-pad's hold-to-repeat cadence
+// instead, which is faster than any tap could be.
 const (
 	oskActionFloor = 100 * time.Millisecond
-	oskNavFloor    = 80 * time.Millisecond
+	oskNavFloor    = 180 * time.Millisecond
 	oskRepeatDelay = 260 * time.Millisecond
 	oskRepeatEvery = 70 * time.Millisecond
 )

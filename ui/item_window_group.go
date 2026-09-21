@@ -173,3 +173,22 @@ func (w *ItemWindows) GamepadOpenSelectedCard(ctx Context) bool {
 	}
 	return false
 }
+
+// GamepadViewTopIllustration fires the top-most description window's
+// illustration request (the handheld's View — a card detail's artwork).
+// Reports false when the top window has no View to press, so the caller
+// can ignore the button.
+func (w *ItemWindows) GamepadViewTopIllustration(ctx Context) bool {
+	for i := len(w.descriptions) - 1; i >= 0; i-- {
+		info := w.descriptions[i]
+		if !info.IsOpen() {
+			continue
+		}
+		if !itemInfoShowsCardIllustration(ctx, info.item) {
+			return false
+		}
+		info.requestCardIllustration()
+		return true
+	}
+	return false
+}

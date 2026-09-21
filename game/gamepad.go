@@ -482,6 +482,15 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		// description window; with no description open, X on the Item/Equip
 		// tabs fills the next hotbar slot with the selected item (the Etc
 		// tab keeps X inert).
+		// START views the top description's card illustration (the
+		// footer's View button, which a pointerless device cannot click).
+		if ctx.Input.JustPressed(input.KeyEnter) && m.ui.itemWindows.HasOpenDescriptions() {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.itemWindows.GamepadViewTopIllustration(ctx)
+			}
+			return true
+		}
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF22) {
 			if m.ui.itemWindows.HasOpenDescriptions() {
 				if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
@@ -592,6 +601,15 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
 				m.ui.itemWindows.GamepadOpenSelectedCard(ctx)
+			}
+			return true
+		}
+		// START views the top description's card illustration (the
+		// footer's View button, which a pointerless device cannot click).
+		if ctx.Input.JustPressed(input.KeyEnter) && m.ui.itemWindows.HasOpenDescriptions() {
+			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
+				m.gamepadActionAt = now
+				m.ui.itemWindows.GamepadViewTopIllustration(ctx)
 			}
 			return true
 		}

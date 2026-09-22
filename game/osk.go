@@ -41,7 +41,7 @@ var oskShared = struct {
 // stride at the floor's pace naturally.
 const (
 	oskActionFloor = 100 * time.Millisecond
-	oskNavFloor    = 120 * time.Millisecond
+	oskNavFloor    = 60 * time.Millisecond
 )
 
 func oskState() *onScreenKeyboard { return &osk }

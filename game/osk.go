@@ -41,7 +41,7 @@ var oskShared = struct {
 // stride at the floor's pace naturally.
 const (
 	oskActionFloor = 100 * time.Millisecond
-	oskNavFloor    = 60 * time.Millisecond
+	oskNavFloor    = 0 // probing: rapid-tap stickiness may be the pipeline, not the floor
 )
 
 func oskState() *onScreenKeyboard { return &osk }

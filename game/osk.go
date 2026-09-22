@@ -41,7 +41,9 @@ var oskShared = struct {
 // stride at the floor's pace naturally.
 const (
 	oskActionFloor = 100 * time.Millisecond
-	oskNavFloor    = 0 // probing: rapid-tap stickiness may be the pipeline, not the floor
+	// The d-pad rides the platform hook (one axis change = one move), so
+	// this floor only exists to swallow axis chatter during a hold.
+	oskNavFloor = 100 * time.Millisecond
 )
 
 func oskState() *onScreenKeyboard { return &osk }
@@ -447,6 +449,22 @@ func setupOSKHook() {
 			osk.row, osk.col = 0, 0
 		case 4: // X: backspace
 			osk.backspace()
+		case 5, 6, 7, 8: // d-pad taps: one press = one cell, never auto-repeat
+			now := time.Now()
+			if now.Sub(oskShared.movedAt) < oskNavFloor {
+				return true
+			}
+			oskShared.movedAt = now
+			switch button {
+			case 5:
+				osk.move(-1, 0)
+			case 6:
+				osk.move(1, 0)
+			case 7:
+				osk.move(0, -1)
+			case 8:
+				osk.move(0, 1)
+			}
 		}
 		return true
 	}

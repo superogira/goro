@@ -1545,22 +1545,62 @@ func (p *fbdevPlatform) pointerButton(button gpucontext.Buttons, down bool) {
 }
 
 func (p *fbdevPlatform) handleAbs(code uint16, value int32) {
+	// While the OSK hook is installed, the d-pad is the keyboard's cursor:
+	// every real axis change goes straight to the hook (one call = one
+	// move). The key-edge synthesizer below would also apply its 200ms
+	// neutral-hold before posting a release, which swallowed every
+	// re-press faster than that — rapid taps stuck on one key.
+	button := -1
 	p.inputMu.Lock()
-	defer p.inputMu.Unlock()
 	switch code {
 	case evAbsHat0X:
 		if int(value) != p.hatX {
 			p.hatX = int(value)
 			p.hatXAt = time.Now()
+			button = oskHatButton(p.hatX, false)
 		}
 	case evAbsHat0Y:
 		if int(value) != p.hatY {
 			p.hatY = int(value)
 			p.hatYAt = time.Now()
+			button = oskHatButton(p.hatY, true)
 		}
 	default:
 		p.axes[code] = value
 	}
+	p.inputMu.Unlock()
+	if button < 0 || hooks.OSKButtonHook == nil {
+		return
+	}
+	if hooks.OSKButtonHook(button) {
+		// Keep the posted level in step so the key-edge synthesizer does
+		// not replay the same transition as arrow keys.
+		p.inputMu.Lock()
+		if code == evAbsHat0X {
+			p.hatXPosted = p.hatX
+		} else if code == evAbsHat0Y {
+			p.hatYPosted = p.hatY
+		}
+		p.inputMu.Unlock()
+	}
+}
+
+// oskHatButton maps a d-pad axis level to the OSK hook's button number
+// (5=left, 6=right, 7=up, 8=down); neutral reports -1 (nothing to press).
+func oskHatButton(level int, yAxis bool) int {
+	if level == 0 {
+		return -1
+	}
+	if yAxis {
+		if level < 0 {
+			return 7
+		}
+		return 8
+	}
+	if level < 0 {
+		return 5
+	}
+	return 6
 }
 
 // hatSyncLoop turns the d-pad axes (levels) into key edges for the game.

@@ -24,33 +24,24 @@ var osk onScreenKeyboard
 
 // oskShared carries the pacing timestamps without a mode receiver.
 var oskShared = struct {
-	actionAt       time.Time
-	movedAt        time.Time
-	holdSince      time.Time
-	arrowReleaseAt time.Time
-	arrowsDown     bool
-	aLatch         bool
-	bLatch         bool
-	enterLatch     bool
-	selLatch       bool
+	actionAt   time.Time
+	movedAt    time.Time
+	aLatch     bool
+	bLatch     bool
+	enterLatch bool
+	selLatch   bool
 }{}
 
-// OSK pacing. Two things make a single tap move two cells, and each has
-// its own countermeasure:
-//
-//   - The firmware synthesizes repeat press pairs while a button stays
-//     held; a timing floor alone cannot tell those from a fast re-press.
-//     A new tap only counts after the d-pad was genuinely released for
-//     oskRepressGap — the pairs' release gap is shorter than that.
-//   - A hold-to-repeat shorter than a slow human tap made longish taps
-//     count as holds. The repeat now waits oskRepeatDelay, well past any
-//     tap, before striding.
+// OSK pacing. Movement is edge-only with a debounce floor: one press
+// edge = one cell, always. The held-state (KeyCodeDown) reading proved
+// unreliable on this hardware — after release it lingered "down" long
+// enough that a hold-repeat built on it multi-stepped single taps and
+// merged quick taps into phantom holds. If the firmware emits repeat
+// press pairs while the d-pad is held, those arrive as edges too and
+// stride at the floor's pace naturally.
 const (
 	oskActionFloor = 100 * time.Millisecond
 	oskNavFloor    = 120 * time.Millisecond
-	oskRepressGap  = 70 * time.Millisecond
-	oskRepeatDelay = 400 * time.Millisecond
-	oskRepeatEvery = 70 * time.Millisecond
 )
 
 func oskState() *onScreenKeyboard { return &osk }
@@ -302,30 +293,6 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 	} else {
 		oskShared.selLatch = false
 	}
-	// Held state first: its down→up transition timestamps separate a real
-	// re-press from the firmware's synthesized repeat pairs (the pairs'
-	// release gap is far shorter than oskRepressGap).
-	hdx, hdy := 0, 0
-	if ctx.Input.KeyCodeDown(gpucontext.KeyLeft) {
-		hdx--
-	}
-	if ctx.Input.KeyCodeDown(gpucontext.KeyRight) {
-		hdx++
-	}
-	if hdx == 0 {
-		if ctx.Input.KeyCodeDown(gpucontext.KeyUp) {
-			hdy--
-		}
-		if ctx.Input.KeyCodeDown(gpucontext.KeyDown) {
-			hdy++
-		}
-	}
-	anyDown := hdx != 0 || hdy != 0
-	if oskShared.arrowsDown && !anyDown {
-		oskShared.arrowReleaseAt = now
-	}
-	oskShared.arrowsDown = anyDown
-
 	dx, dy := 0, 0
 	if ctx.Input.JustPressed(input.KeyArrowLeft) {
 		dx--
@@ -340,21 +307,9 @@ func updateGamepadOSK(ctx client.Context, now time.Time) bool {
 		dy++
 	}
 	if dx != 0 || dy != 0 {
-		if now.Sub(oskShared.arrowReleaseAt) >= oskRepressGap &&
-			now.Sub(oskShared.movedAt) >= oskNavFloor {
+		if now.Sub(oskShared.movedAt) >= oskNavFloor {
 			oskShared.movedAt = now
-			oskShared.holdSince = now
 			osk.move(dx, dy)
-		}
-		return true
-	}
-	// A held direction repeats: well past any human tap, the cursor
-	// strides across the board on its own (one axis at a time —
-	// horizontal wins when both are held).
-	if anyDown {
-		if now.Sub(oskShared.holdSince) >= oskRepeatDelay && now.Sub(oskShared.movedAt) >= oskRepeatEvery {
-			oskShared.movedAt = now
-			osk.move(hdx, hdy)
 		}
 		return true
 	}

@@ -109,35 +109,6 @@ func DrawRect(dst *Frame, x, y, w, h float64, c color.Color) {
 	drawSolidQuad(dst, x0, y0, w, h, rgba)
 }
 
-func DrawImageRect(dst *Image, x, y, w, h float64, c color.Color) {
-	if dst == nil || dst.pix == nil || w <= 0 || h <= 0 {
-		return
-	}
-	rgba := color.RGBAModel.Convert(c).(color.RGBA)
-	x0 := clampInt(int(math.Floor(x)), 0, dst.pix.Bounds().Dx())
-	y0 := clampInt(int(math.Floor(y)), 0, dst.pix.Bounds().Dy())
-	x1 := clampInt(int(math.Ceil(x+w)), 0, dst.pix.Bounds().Dx())
-	y1 := clampInt(int(math.Ceil(y+h)), 0, dst.pix.Bounds().Dy())
-	for yy := y0; yy < y1; yy++ {
-		for xx := x0; xx < x1; xx++ {
-			dst.blendPixel(xx, yy, rgba, BlendSourceOver)
-		}
-	}
-}
-
-func DrawUIRect(dst *Frame, x, y, w, h float64, c color.RGBA) {
-	if dst == nil || w <= 0 || h <= 0 {
-		return
-	}
-	dst.uiRects = append(dst.uiRects, UIRectCommand{
-		X:     x,
-		Y:     y,
-		W:     w,
-		H:     h,
-		Color: c,
-	})
-}
-
 func DrawUISpeechBubble(dst *Frame, text string, centerX, bottomY, maxWidth float64) {
 	if dst == nil || text == "" {
 		return
@@ -155,10 +126,6 @@ func DrawUISpeechBubble(dst *Frame, text string, centerX, bottomY, maxWidth floa
 	})
 }
 
-func DrawUITooltip(dst *Frame, text string, centerX, belowY, aboveY float64) {
-	DrawUITooltipBox(dst, text, centerX, belowY, aboveY, 0, 1)
-}
-
 func DrawUITooltipBox(dst *Frame, text string, centerX, belowY, aboveY, maxWidth float64, maxLines int) {
 	if dst == nil || text == "" {
 		return
@@ -172,26 +139,6 @@ func DrawUITooltipBox(dst *Frame, text string, centerX, belowY, aboveY, maxWidth
 		MaxWidth: maxWidth,
 		MaxLines: maxLines,
 	})
-}
-
-func DrawLine(dst *Frame, x0, y0, x1, y1 float64, c color.Color) {
-	if dst == nil {
-		return
-	}
-	rgba := color.RGBAModel.Convert(c).(color.RGBA)
-	steps := int(math.Max(math.Abs(x1-x0), math.Abs(y1-y0)))
-	if steps <= 0 {
-		drawSolidQuad(dst, math.Round(x0), math.Round(y0), 1, 1, rgba)
-		return
-	}
-	for i := 0; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		drawSolidQuad(dst, math.Round(x0+(x1-x0)*t), math.Round(y0+(y1-y0)*t), 1, 1, rgba)
-	}
-}
-
-func DrawBitmapTextAt(dst *Frame, text string, x, y int) {
-	DrawBitmapTextAtColor(dst, text, x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
 }
 
 func DrawBitmapTextAtColor(dst *Frame, text string, x, y int, c color.RGBA) {
@@ -262,17 +209,6 @@ func debugTextSize(text string) (int, int) {
 
 func BitmapTextSize(text string) (int, int) {
 	return debugTextSize(text)
-}
-
-func BitmapTextTopForCenter(containerH int) int {
-	face, lineHeight, baseline, _ := debugTextFont()
-	metrics := face.Metrics()
-	textH := (metrics.Ascent + metrics.Descent).Ceil()
-	ascent := metrics.Ascent.Ceil()
-	if textH <= 0 || ascent <= 0 {
-		return (containerH - lineHeight) / 2
-	}
-	return (containerH-textH)/2 + ascent - baseline
 }
 
 func debugTextFont() (font.Face, int, int, int) {
@@ -369,10 +305,6 @@ func DrawOutlinedTextAt(dst *Frame, text string, x, y int, foreground, outline c
 	opts.GeoM.Translate(float64(x), float64(y))
 	opts.Filter = FilterNearest
 	dst.DrawImage(img, &opts)
-}
-
-func DrawUIOutlinedTextAt(dst *Frame, text string, x, y float64, foreground, outline color.RGBA) {
-	drawOrQueueUITextLabel(dst, text, x, y, foreground, outline, false, true, 12)
 }
 
 func DrawCenteredUIOutlinedTextAt(dst *Frame, text string, centerX, y float64, foreground, outline color.RGBA) {

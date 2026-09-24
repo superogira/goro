@@ -82,6 +82,32 @@ type CharacterWindow struct {
 	webSyncedKey string
 }
 
+
+// drawCharacterHUDCloseGlyph draws the HUD panel's ✕. Upstream's shared
+// DrawCloseButton went away in the unused-helpers cleanup; the glyph is
+// inlined here (the rounded panel behind it is the button surface).
+func drawCharacterHUDCloseGlyph(screen *render.Frame, x, y, w, h int, line color.RGBA) {
+	icon := minInt(w, h) / 2
+	if icon < 6 {
+		icon = minInt(w, h) - 6
+	}
+	if icon%2 == 0 {
+		icon--
+	}
+	if icon < 2 {
+		return
+	}
+	midX := x + w/2
+	midY := y + h/2
+	half := icon / 2
+	for i := 0; i <= half*2; i += 2 {
+		// Top-left → bottom-right and top-right → bottom-left diagonals,
+		// as 2px squares (the shared line helper was removed upstream).
+		render.DrawRect(screen, float64(midX-half+i), float64(midY-half+i), 2, 2, line)
+		render.DrawRect(screen, float64(midX+half-i-1), float64(midY-half+i), 2, 2, line)
+	}
+}
+
 func (w *CharacterWindow) IsOpen() bool {
 	return w != nil && w.open
 }
@@ -261,8 +287,8 @@ func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
 	} else {
 		render.DrawUITextAtSize(screen, title, float64(x+4), float64(y+3), characterHUDTextColor, characterHUDTextSize)
 	}
-	DrawCloseButton(screen, x+w.width-characterHUDCloseSize-4, y+1, characterHUDCloseSize-2, characterHUDCloseSize-2,
-		characterHUDPanelBack, characterHUDMutedColor)
+	drawCharacterHUDCloseGlyph(screen, x+w.width-characterHUDCloseSize-4, y+1, characterHUDCloseSize-2, characterHUDCloseSize-2,
+		characterHUDMutedColor)
 
 	contentW := w.width - 2*characterHUDPadX
 	cx := x + characterHUDPadX

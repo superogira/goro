@@ -6,8 +6,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"path/filepath"
+	"strings"
 
-	"github.com/ebitengine/oto/v3"
 	"github.com/kivutar/goro/res"
 )
 
@@ -35,60 +36,25 @@ func (b *BGM) PlaySFX(path string) (string, error) {
 	return b.PlaySFXVolume(path, 1)
 }
 
-// sfxCacheLimit caps the decoded-PCM cache. Ambient wavs run a few hundred
-// kilobytes each; 12 MiB keeps a map's worth of loops hot without growing
-// unbounded across every sound the session ever played.
-const sfxCacheLimit = 12 << 20
-
-type sfxCacheEntry struct {
-	pcm    []byte
-	source string
-	used   int64
+// PreloadSFX prepares a sound without playing it or opening the audio device.
+// Call it during map loading for sounds that must be ready during gameplay.
+func (b *BGM) PreloadSFX(path string) error {
+	if b == nil || b.disabled || b.sfxVolume <= 0 {
+		return nil
+	}
+	path = normalizeSFXPath(path)
+	if path == "" {
+		return nil
+	}
+	_, err := b.loadSFX(path, b.sfxSampleRate())
+	return err
 }
 
-// cachedSFXPCM returns the context-rate PCM for a previously decoded source
-// path, refreshing its LRU stamp.
-func (b *BGM) cachedSFXPCM(path string) ([]byte, string, bool) {
-	b.sfxCacheMu.Lock()
-	defer b.sfxCacheMu.Unlock()
-	entry, ok := b.sfxCache[path]
-	if !ok {
-		return nil, "", false
+func (b *BGM) sfxSampleRate() int {
+	if b.sampleRate > 0 {
+		return b.sampleRate
 	}
-	b.sfxCacheTick++
-	entry.used = b.sfxCacheTick
-	return entry.pcm, entry.source, true
-}
-
-// storeSFXPCM caches decoded PCM, evicting least-recently-used entries when
-// the cache would exceed sfxCacheLimit.
-func (b *BGM) storeSFXPCM(path, source string, pcm []byte) {
-	b.sfxCacheMu.Lock()
-	defer b.sfxCacheMu.Unlock()
-	if b.sfxCache == nil {
-		b.sfxCache = make(map[string]*sfxCacheEntry)
-	}
-	if old, exists := b.sfxCache[path]; exists {
-		b.sfxCacheBytes -= len(old.pcm)
-	}
-	b.sfxCacheBytes += len(pcm)
-	b.sfxCacheTick++
-	b.sfxCache[path] = &sfxCacheEntry{pcm: pcm, source: source, used: b.sfxCacheTick}
-	for b.sfxCacheBytes > sfxCacheLimit {
-		var oldestKey string
-		var oldest int64
-		first := true
-		for key, entry := range b.sfxCache {
-			if first || entry.used < oldest {
-				oldestKey, oldest, first = key, entry.used, false
-			}
-		}
-		if first {
-			break
-		}
-		b.sfxCacheBytes -= len(b.sfxCache[oldestKey].pcm)
-		delete(b.sfxCache, oldestKey)
-	}
+	return defaultSampleRate
 }
 
 func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
@@ -99,43 +65,46 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	context := b.ensureContext(defaultSampleRate)
+	sampleRate := b.sfxSampleRate()
+	sound, err := b.loadSFX(path, sampleRate)
+	if err != nil {
+		return sound.source, err
+	}
+	context := b.ensureContext(sampleRate)
 	if context == nil {
-		return "", fmt.Errorf("audio context unavailable")
+		return sound.source, fmt.Errorf("audio context unavailable")
 	}
-	// Map ambient sounds retrigger every RSW cycle; re-reading and re-decoding
-	// the wav on the game goroutine each time is a visible stutter on slower
-	// devices. The decoded PCM is cached per source, so steady-state plays
-	// cost a map lookup and a player creation.
-	if pcm, source, ok := b.cachedSFXPCM(path); ok {
-		b.startSFXPlayer(context, pcm, volume)
-		return source, nil
-	}
-	data, source, err := readSFXFile(b.resources, path)
-	if err != nil {
-		return "", err
-	}
-	pcm, sourceRate, err := decodeWAVToPCM16Stereo(data)
-	if err != nil {
-		return source, fmt.Errorf("decode sfx %s: %w", source, err)
-	}
-	if sourceRate != b.sampleRate {
-		pcm, err = resamplePCM16Stereo(pcm, sourceRate, b.sampleRate)
-		if err != nil {
-			return source, fmt.Errorf("resample sfx %s: %w", source, err)
-		}
-	}
-	b.storeSFXPCM(path, source, pcm)
-	b.startSFXPlayer(context, pcm, volume)
-	return source, nil
-}
-
-func (b *BGM) startSFXPlayer(context *oto.Context, pcm []byte, volume float64) {
-	player := context.NewPlayer(bytes.NewReader(pcm))
+	player := context.NewPlayer(bytes.NewReader(sound.pcm))
 	player.SetVolume(b.sfxVolume * clampVolume(volume))
 	b.trimSFXPlayers()
 	b.sfxPlayers = append(b.sfxPlayers, player)
 	player.Play()
+	return sound.source, nil
+}
+
+func (b *BGM) loadSFX(path string, sampleRate int) (decodedSFX, error) {
+	key := sfxCacheKey{path: strings.ToLower(normalizeSFXPath(path)), sampleRate: sampleRate}
+	if sound, ok := b.sfxCache.get(key); ok {
+		return sound, nil
+	}
+	data, source, err := readSFXFile(b.resources, path)
+	if err != nil {
+		return decodedSFX{}, err
+	}
+	sound := decodedSFX{source: source}
+	pcm, sourceRate, err := decodeWAVToPCM16Stereo(data)
+	if err != nil {
+		return sound, fmt.Errorf("decode sfx %s: %w", source, err)
+	}
+	if sourceRate != sampleRate {
+		pcm, err = resamplePCM16Stereo(pcm, sourceRate, sampleRate)
+		if err != nil {
+			return sound, fmt.Errorf("resample sfx %s: %w", source, err)
+		}
+	}
+	sound.pcm = pcm
+	b.sfxCache.put(key, sound)
+	return sound, nil
 }
 
 func (b *BGM) trimSFXPlayers() {
@@ -298,4 +267,43 @@ func readSFXFile(manager *res.Manager, path string) ([]byte, string, error) {
 		}
 	}
 	return nil, "", fmt.Errorf("sfx not found: %s", path)
+}
+
+func normalizeSFXPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.Trim(path, "\"")
+	path = strings.ReplaceAll(path, "/", "\\")
+	path = strings.TrimPrefix(path, ".\\")
+	path = strings.TrimPrefix(path, "data\\")
+	if path == "" {
+		return ""
+	}
+	if filepath.Ext(path) == "" {
+		path += ".wav"
+	}
+	return path
+}
+
+func sfxPathCandidates(path string) []string {
+	normalized := normalizeSFXPath(path)
+	if normalized == "" {
+		return nil
+	}
+	slash := strings.ReplaceAll(normalized, "\\", "/")
+	candidates := []string{normalized, slash}
+	lower := strings.ToLower(normalized)
+	if strings.HasPrefix(lower, "wav\\") {
+		candidates = append(candidates,
+			"data\\"+normalized,
+			"data/"+slash,
+		)
+	} else {
+		candidates = append(candidates,
+			"wav\\"+normalized,
+			"wav/"+slash,
+			"data\\wav\\"+normalized,
+			"data/wav/"+slash,
+		)
+	}
+	return uniqueStrings(candidates)
 }

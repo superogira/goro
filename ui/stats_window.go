@@ -141,14 +141,25 @@ func (w *StatsWindow) Update(ctx Context) bool {
 	if !w.IsOpen() {
 		return false
 	}
+	consumed := w.Window.Update(ctx)
+	w.Publish(ctx)
+	return consumed
+}
+
+// UpdatePresentation follows server changes independently of input dispatch.
+func (w *StatsWindow) UpdatePresentation(ctx Context) {
+	w.EnsureWindow(statsWindowWidth, statsWindowHeight)
+	// SetContent releases the window's drag capture. Leave the snapshot stale
+	// until the drag ends so the next presentation update applies all changes.
+	if !w.IsOpen() || w.dragging {
+		return
+	}
 	nextSnapshot := statsWindowSnapshot(ctx.Session)
 	if nextSnapshot != w.snapshot {
 		w.snapshot = nextSnapshot
 		w.SetContent(w.widgetTree(ctx))
+		w.Publish(ctx)
 	}
-	consumed := w.Window.Update(ctx)
-	w.Publish(ctx)
-	return consumed
 }
 
 func (w *StatsWindow) Rebind(ctx Context) {

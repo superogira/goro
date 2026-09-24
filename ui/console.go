@@ -176,7 +176,7 @@ func (c *ChatConsole) UpdatePresentation(ctx client.Context) {
 	c.syncWebConsole()
 	consoleWebInstallMessageHook()
 	for _, msg := range consoleWebDrainMessages() {
-		c.addMessageColor(msg.Color, "%s", msg.Text)
+		c.addMessageColor(msg.Color, true, "%s", msg.Text)
 	}
 	if consoleWebLogEnabled() {
 		// The page owns the whole console on web: the dormant log is DOM,
@@ -383,43 +383,45 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 }
 
 func (c *ChatConsole) AddMessage(format string, args ...any) {
-	c.addMessageColor(consoleColorChat, format, args...)
+	c.addMessageColor(consoleColorChat, false, format, args...)
 }
 
 func (c *ChatConsole) AddSystemMessage(format string, args ...any) {
-	c.addMessageColor(consoleColorSystem, format, args...)
+	c.addMessageColor(consoleColorSystem, false, format, args...)
 }
 
 func (c *ChatConsole) AddBlueMessage(format string, args ...any) {
-	c.addMessageColor(consoleColorBlue, format, args...)
+	// Each pickup or server confirmation is a separate event, even when its
+	// text matches the preceding message (for example, two single Jellopies).
+	c.addMessageColor(consoleColorBlue, true, format, args...)
 }
 
 func (c *ChatConsole) AddGuildChatMessage(format string, args ...any) {
-	c.addMessageColor(consoleColorGuildChat, format, args...)
+	c.addMessageColor(consoleColorGuildChat, false, format, args...)
 }
 
 func (c *ChatConsole) AddGuildMessage(format string, args ...any) {
-	c.addMessageColor(consoleColorGuild, format, args...)
+	c.addMessageColor(consoleColorGuild, false, format, args...)
 }
 
 func (c *ChatConsole) AddColoredMessage(messageColor color.RGBA, format string, args ...any) {
 	if messageColor.A == 0 {
 		messageColor.A = 255
 	}
-	c.addMessageColor(messageColor, format, args...)
+	c.addMessageColor(messageColor, false, format, args...)
 }
 
 func (c *ChatConsole) AddErrorMessage(format string, args ...any) {
-	c.addMessageColor(consoleColorError, format, args...)
+	c.addMessageColor(consoleColorError, false, format, args...)
 }
 
-func (c *ChatConsole) addMessageColor(messageColor color.RGBA, format string, args ...any) {
+func (c *ChatConsole) addMessageColor(messageColor color.RGBA, allowRepeat bool, format string, args ...any) {
 	text := strings.TrimSpace(fmt.Sprintf(format, args...))
 	if text == "" {
 		return
 	}
 	now := time.Now()
-	if text == c.lastMessage && now.Sub(c.lastMessageAt) < time.Second {
+	if !allowRepeat && text == c.lastMessage && now.Sub(c.lastMessageAt) < time.Second {
 		return
 	}
 	c.lastMessage = text

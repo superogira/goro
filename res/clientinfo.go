@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 
@@ -27,14 +26,6 @@ type Connection struct {
 	LangType        int
 	RegistrationWeb string
 	AdminList       []uint32
-}
-
-func ParseClientInfoFile(path string) (ClientInfo, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ClientInfo{}, err
-	}
-	return ParseClientInfo(data)
 }
 
 func ParseClientInfo(data []byte) (ClientInfo, error) {

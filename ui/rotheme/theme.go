@@ -103,14 +103,6 @@ func (t Theme) AsTheme() *theme.Theme {
 	return base
 }
 
-func (t Theme) IsDark() bool {
-	return false
-}
-
-func (t Theme) OnSurface() widget.Color {
-	return t.Colors.Text
-}
-
 func DrawText(canvas widget.Canvas, text string, bounds geometry.Rect, size float32, color widget.Color, bold bool, align widget.TextAlign) {
 	if text == "" {
 		return

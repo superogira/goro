@@ -236,15 +236,19 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 	m.maybeSendLoginServerPing(ctx, now)
 	m.maybeSendCharServerPing(ctx, now)
 
-	if len(conns) == 0 {
-		return nil, nil
-	}
-
 	if ctx.Config.Login.AutoLogin && !m.autoAttempted {
 		m.autoAttempted = true
+		index := ctx.Config.Login.ServerSlot
+		if index < 0 || index >= len(conns) {
+			return nil, fmt.Errorf("--server-slot %d is unavailable: clientinfo.xml contains %d login servers (slots start at 0)", index, len(conns))
+		}
+		m.selectedLoginServer = index
 		if conn, ok := m.selectedLoginConnection(ctx); ok {
 			m.connectAndMaybeLogin(ctx, conn, false)
 		}
+	}
+	if len(conns) == 0 {
+		return nil, nil
 	}
 
 	loginRefused := false
@@ -325,7 +329,9 @@ func (m *LoginMode) Update(ctx client.Context) (Mode, error) {
 			if err != nil {
 				m.packets = append(m.packets, "parse AC_ACCEPT_LOGIN: "+err.Error())
 			} else {
-				m.applyAccountAcceptLogin(ctx, login)
+				if err := m.applyAccountAcceptLogin(ctx, login); err != nil {
+					return nil, err
+				}
 			}
 		}
 		if pkt.ID == 0x006B {
@@ -541,6 +547,13 @@ func (m *LoginMode) applyLoginParameterChange(ctx client.Context, pkt network.Pa
 }
 
 func (m *LoginMode) applyLoginActorBootstrapPacket(ctx client.Context, pkt network.Packet) bool {
+	if change, ok, err := network.ParseNPCSpriteChange(pkt); err != nil {
+		m.packets = append(m.packets, "parse NPC sprite change: "+err.Error())
+		return true
+	} else if ok {
+		applyNPCSpriteChange(ctx, change)
+		return true
+	}
 	if look, ok, err := network.ParseActorLookChange(pkt); err != nil {
 		m.packets = append(m.packets, "parse actor look change: "+err.Error())
 		return true

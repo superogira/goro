@@ -2,7 +2,6 @@ package game
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"image"
@@ -153,6 +152,9 @@ type WorldMode struct {
 	hoveredWalk        hoveredWalkCellCache
 	bot                *luaBot
 	companionAI        companionAISystem
+	mapImages         *render.ImageGroup
+	mapTextureUploads []*render.Image
+	mapUploadBatch    int
 }
 
 type worldUI struct {
@@ -430,7 +432,6 @@ const (
 	// Warm the base map, then allow a frame for the initial post-ack actors.
 	mapFadePrewarmFrames     = 2
 	actorNameRequestCooldown = time.Second
-	defaultRSMLoadLimit      = 128
 )
 
 var (
@@ -449,6 +450,7 @@ func (m *WorldMode) Name() string {
 }
 
 func (m *WorldMode) Enter(ctx client.Context) Mode {
+	m.releaseMapTextures()
 	now := time.Now()
 	m.bindNPCDialogLifecycle()
 	m.startMapPrewarm()
@@ -612,10 +614,10 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	}
 	if rsw, rswSource, err := loadRSW(ctx.Resources, ctx.World.MapName); err == nil {
 		ctx.World.RSW = rsw
-		ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, rsw, defaultRSMLoadLimit)
+		ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, rsw)
 		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, rsw, ctx.World.RSM)
 		m.playMapBGM(ctx, rswSource)
-		prefetchMapSoundFiles(ctx.Resources, rsw)
+		m.preloadMapSounds(ctx)
 	} else {
 		ctx.World.RSW = nil
 		ctx.World.RSM = nil
@@ -626,6 +628,7 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	// Server-driven digit displays load their sprite on first use; warm it
 	// with the rest of the map.
 	ctx.Resources.Prefetch(serverDigitSpritePrefetchGroups()...)
+	m.preloadMapTextures(ctx)
 	_ = ctx.Network.SendLoadEndAck()
 	return nil
 }
@@ -760,6 +763,8 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	m.updateMail(ctx, now)
 	progressBlocksActions := m.updateServerProgress(ctx, now)
 	if !ctx.Config.Headless {
+		m.ui.inventoryBag.UpdatePresentation(ctx, &m.ui.itemWindows)
+		m.ui.statsWindow.UpdatePresentation(ctx)
 		m.ui.statusIcons.Update(ctx, now)
 		m.ui.pvpCounter.Update(ctx)
 		// The FPS/MEM HUD is a debug instrument (?stats=1 / -render-stats). Kept
@@ -1672,6 +1677,10 @@ func (m *WorldMode) requestNPCTalk(ctx client.Context, actor worldstate.Actor, s
 
 func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
 	render.SetWebLoading(false)
+	if m.prepareMapTextureUploads(screen) {
+		clearWorldScene(screen, ctx.World.MapName)
+		return
+	}
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
@@ -1734,6 +1743,12 @@ func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 }
 
 func (m *WorldMode) FrameSubmitted() {
+	if m.mapUploadBatch > 0 {
+		clear(m.mapTextureUploads[:m.mapUploadBatch])
+		m.mapTextureUploads = m.mapTextureUploads[m.mapUploadBatch:]
+		m.mapUploadBatch = 0
+		return
+	}
 	m.recordCoveredMapFrame()
 }
 
@@ -1982,20 +1997,15 @@ func loadGAT(manager *res.Manager, mapName string) (*res.GAT, string, error) {
 		"data/" + base + ".gat",
 		base + ".gat",
 	}
-	var readErrors []error
-	for _, candidate := range candidates {
-		data, err := manager.ReadFile(candidate)
-		if err != nil {
-			readErrors = append(readErrors, fmt.Errorf("read %s: %w", candidate, err))
-			continue
-		}
-		gat, err := res.ParseGAT(data)
-		if err != nil {
-			return nil, candidate, fmt.Errorf("parse %s: %w", candidate, err)
-		}
-		return gat, candidate, nil
+	data, source, err := manager.ReadFileCandidates(candidates)
+	if err != nil {
+		return nil, source, fmt.Errorf("cannot load GAT for map %s: %w", mapName, err)
 	}
-	return nil, "", fmt.Errorf("cannot load GAT for map %s: %w", mapName, errors.Join(readErrors...))
+	gat, err := res.ParseGAT(data)
+	if err != nil {
+		return nil, source, fmt.Errorf("parse %s: %w", source, err)
+	}
+	return gat, source, nil
 }
 
 func loadRSW(manager *res.Manager, mapName string) (*res.RSW, string, error) {
@@ -2005,22 +2015,16 @@ func loadRSW(manager *res.Manager, mapName string) (*res.RSW, string, error) {
 		"data/" + base + ".rsw",
 		base + ".rsw",
 	}
-	for _, candidate := range candidates {
-		data, err := manager.ReadFile(candidate)
-		if err != nil {
-			continue
-		}
-		rsw, err := res.ParseRSW(data)
-		if err != nil {
-			return nil, candidate, err
-		}
-		return rsw, candidate, nil
+	data, source, err := manager.ReadFileCandidates(candidates)
+	if err != nil {
+		return nil, source, fmt.Errorf("cannot load RSW for map %s: %w", mapName, err)
 	}
-	return nil, "", fmt.Errorf("rsw not found for map %s", mapName)
+	rsw, err := res.ParseRSW(data)
+	return rsw, source, err
 }
 
-func loadRSMModels(manager *res.Manager, rsw *res.RSW, limit int) (map[string]*res.RSM, int) {
-	if rsw == nil || limit == 0 {
+func loadRSMModels(manager *res.Manager, rsw *res.RSW) (map[string]*res.RSM, int) {
+	if rsw == nil {
 		return nil, 0
 	}
 	models := make(map[string]*res.RSM)
@@ -2032,16 +2036,12 @@ func loadRSMModels(manager *res.Manager, rsw *res.RSW, limit int) (map[string]*r
 		if _, ok := models[placement.Filename]; ok {
 			continue
 		}
-		if limit > 0 && len(models) >= limit {
-			break
-		}
-
 		rsm, err := loadRSMModel(manager, placement.Filename)
+		models[placement.Filename] = rsm
 		if err != nil {
 			failures++
 			continue
 		}
-		models[placement.Filename] = rsm
 	}
 	return models, failures
 }

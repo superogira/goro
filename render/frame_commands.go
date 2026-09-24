@@ -58,11 +58,6 @@ type UIActorLabelCommand struct {
 	Size       float32
 }
 
-type UIRectCommand struct {
-	X, Y, W, H float64
-	Color      color.RGBA
-}
-
 type UITextBoxAnchor int
 
 const (

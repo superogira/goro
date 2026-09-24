@@ -9,19 +9,6 @@ import (
 	"github.com/kivutar/goro/session"
 )
 
-const (
-	CursorActionDefault = 0
-	CursorActionTalk    = 1
-	CursorActionClick   = 2
-	CursorActionRotate  = 4
-	CursorActionAttack  = 5
-	CursorActionWarp    = 7
-	CursorActionPick    = 9
-	CursorActionTarget  = 10
-	CursorActionTarget2 = 11
-	CursorActionNoWalk  = 13
-)
-
 type Context = client.Context
 
 type AssetProvider interface {

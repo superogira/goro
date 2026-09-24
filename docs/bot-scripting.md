@@ -31,7 +31,12 @@ Run the same scripts without a window or audio:
 `--headless` enables automatic login and requires credentials and a character
 slot (0–8). These can also come from the existing `[login]` configuration.
 As with `--autologin`, the first login server and first character server are
-selected. The script is optional; without one the client stays connected.
+selected by default. Use `--server-slot N` to select a login server from
+`clientinfo.xml`, and `--char-server-slot N` to select a character server from
+the list returned after login. Both count from 0; an unavailable slot stops
+autologin with an error. The corresponding `[login]` settings are `server_slot`
+and `char_server_slot`. The script is optional; without one the client stays
+connected.
 
 Headless mode updates at 60 Hz without drawing or loading scene assets. It
 keeps the collision grid, game data, network updates, and Lua scripts. Combat

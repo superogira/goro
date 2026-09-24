@@ -106,20 +106,17 @@ func (m *WorldMode) playScheduledSound(ctx client.Context, sound scheduledSound,
 	m.playSFXFirstVolume(ctx, volume, sound.paths...)
 }
 
-// prefetchMapSoundFiles warms the resource cache for the RSW's looping
-// ambient sounds (birds, insects, wind) when the map loads. They retrigger
-// every cycle for as long as the player stands nearby; without prefetch the
-// first trigger pays a synchronous fetch mid-frame on top of the decode.
-func prefetchMapSoundFiles(manager *res.Manager, rsw *res.RSW) {
-	if manager == nil || rsw == nil {
+func (m *WorldMode) preloadMapSounds(ctx client.Context) {
+	if ctx.Audio == nil || ctx.World == nil || ctx.World.RSW == nil {
 		return
 	}
-	for _, sound := range rsw.Sounds {
-		file := strings.TrimSpace(sound.File)
-		if file == "" || sound.Volume <= 0 {
+	for _, sound := range ctx.World.RSW.Sounds {
+		if sound.Volume <= 0 {
 			continue
 		}
-		manager.Prefetch(gameaudio.SFXPathCandidates(file))
+		if err := ctx.Audio.PreloadSFX(sound.File); err != nil {
+			glog.Debugf("preload map sound %s: %v", sound.File, err)
+		}
 	}
 }
 

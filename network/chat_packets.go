@@ -130,10 +130,6 @@ type ChatRoomRoleChange struct {
 	Name  string
 }
 
-func BuildGlobalChatPacket(name, message string) []byte {
-	return BuildGlobalChatPacketForClientDate(name, message, 20080910)
-}
-
 func BuildGlobalChatPacketForClientDate(name, message string, clientDate int) []byte {
 	payload := strings.TrimSpace(name) + " : " + strings.TrimSpace(message)
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(message) == "" {

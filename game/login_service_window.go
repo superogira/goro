@@ -80,7 +80,7 @@ func (m *LoginMode) showLoginServerSelection(ctx client.Context) {
 	m.updateLoginServerWindow(ctx)
 }
 
-func (m *LoginMode) applyAccountAcceptLogin(ctx client.Context, login network.AccountAcceptLogin) {
+func (m *LoginMode) applyAccountAcceptLogin(ctx client.Context, login network.AccountAcceptLogin) error {
 	m.loginPending = false
 	ctx.Session.AccountID = login.AccountID
 	ctx.Session.AuthCode = login.AuthCode
@@ -94,11 +94,16 @@ func (m *LoginMode) applyAccountAcceptLogin(ctx client.Context, login network.Ac
 		m.packets = append(m.packets, fmt.Sprintf("char %s %s:%d users=%d", server.Name, server.Address, server.Port, server.UserCount))
 	}
 	m.enableLoginServerPing(time.Now())
-	if ctx.Config.Login.AutoLogin && len(login.CharServer) > 0 {
-		m.selectCharacterService(ctx, 0, false)
-		return
+	if ctx.Config.Login.AutoLogin {
+		index := ctx.Config.Login.CharServerSlot
+		if index < 0 || index >= len(login.CharServer) {
+			return fmt.Errorf("--char-server-slot %d is unavailable: login returned %d character servers (slots start at 0)", index, len(login.CharServer))
+		}
+		m.selectCharacterService(ctx, index, false)
+		return nil
 	}
 	m.showCharacterServiceSelection(ctx)
+	return nil
 }
 
 func (m *LoginMode) showCharacterServiceSelection(ctx client.Context) {

@@ -29,11 +29,9 @@ const (
 )
 
 const (
-	TeleportSkillID      = teleportSkillID
-	WarpPortalSkillID    = warpPortalSkillID
-	TeleportRandomMap    = teleportRandomMap
-	TeleportSavePointMap = teleportSavePointMap
-	WarpPointCancelMap   = warpPointCancelMap
+	TeleportSkillID   = teleportSkillID
+	WarpPortalSkillID = warpPortalSkillID
+	TeleportRandomMap = teleportRandomMap
 )
 
 type TeleportModal struct {

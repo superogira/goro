@@ -30,15 +30,20 @@ const (
 	deferredWebPackFailed
 )
 
+var errResourceNotFound = errors.New("resource not found")
+
 type Manager struct {
 	Root       string
 	ClientInfo ClientInfo
 	FoundFiles []string
 	Archives   []*GRF
 
-	deferredWebPack *deferredWebPackState
-	webMapPacks     *webMapPackState
-
+	deferredWebPack          *deferredWebPackState
+	webMapPacks              *webMapPackState
+	sprites                  spriteResourceCache
+	looseDirectories         sync.Map
+	resourceAliases          map[string]string
+	resourceAliasesOnce      sync.Once
 	accessoryNames           map[int]string
 	accessoryNamesLoaded     bool
 	itemMetadata             map[int]ItemMetadata
@@ -151,10 +156,72 @@ func (m *Manager) Find(name string) (string, bool) {
 			return candidate, true
 		}
 	}
-	return "", false
+	return m.findCaseInsensitive(name)
 }
 
 func (m *Manager) ReadFile(name string) ([]byte, error) {
+	return m.readResource(name, false)
+}
+
+// ReadFileExact resolves resource aliases, but does not use the legacy suffix
+// fallback for archive entries.
+func (m *Manager) ReadFileExact(name string) ([]byte, error) {
+	return m.readResource(name, true)
+}
+
+func (m *Manager) readResource(name string, exact bool) ([]byte, error) {
+	data, _, err := m.readFileCandidates([]string{name}, exact)
+	return data, err
+}
+
+func (m *Manager) readFileAlias(name string, exact bool) ([]byte, error) {
+	alias, ok := m.resourceAlias(name)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", errResourceNotFound, name)
+	}
+	// Resolve once so self-references and cycles in custom tables terminate.
+	data, err := m.readFileDirect(alias, exact)
+	if err != nil {
+		return nil, fmt.Errorf("resource %s (alias %s): %w", name, alias, err)
+	}
+	return data, nil
+}
+
+// ReadFileCandidates tries exact direct paths, then exact alias targets, and
+// finally the legacy archive suffix fallback if neither was found.
+// The returned name is the candidate that matched, for diagnostics.
+func (m *Manager) ReadFileCandidates(names []string) ([]byte, string, error) {
+	return m.readFileCandidates(names, false)
+}
+
+func (m *Manager) readFileCandidates(names []string, exact bool) ([]byte, string, error) {
+	var readErrors []error
+	for _, exactLookup := range []bool{true, false} {
+		if exact && !exactLookup {
+			break
+		}
+		for _, read := range []func(string, bool) ([]byte, error){m.readFileDirect, m.readFileAlias} {
+			for _, name := range names {
+				data, err := read(name, exactLookup)
+				if err == nil {
+					return data, name, nil
+				}
+				if !errors.Is(err, errResourceNotFound) {
+					// An unreadable direct override must not silently fall back
+					// to a different resource or its alias.
+					return nil, name, err
+				}
+				readErrors = append(readErrors, err)
+			}
+		}
+	}
+	if len(readErrors) == 0 {
+		return nil, "", errResourceNotFound
+	}
+	return nil, "", errors.Join(readErrors...)
+}
+
+func (m *Manager) readFileDirect(name string, exact bool) ([]byte, error) {
 	path, ok := m.Find(name)
 	if ok {
 		return m.readCandidate(path)
@@ -166,6 +233,9 @@ func (m *Manager) ReadFile(name string) ([]byte, error) {
 			return data, nil
 		}
 		if errors.Is(err, ErrGRFNotFound) {
+			if exact {
+				continue
+			}
 			for _, match := range archive.NamesWithSuffix(name) {
 				data, err := archive.ReadFile(match)
 				if err == nil {
@@ -179,34 +249,23 @@ func (m *Manager) ReadFile(name string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	return nil, fmt.Errorf("resource not found: %s", name)
+	return nil, fmt.Errorf("%w: %s", errResourceNotFound, name)
 }
 
-func (m *Manager) ReadFileExact(name string) ([]byte, error) {
-	path, ok := m.Find(name)
-	if ok {
-		return m.readCandidate(path)
-	}
-
-	for _, archive := range m.Archives {
-		data, err := archive.ReadFile(name)
-		if err == nil {
-			return data, nil
-		}
-		if errors.Is(err, ErrGRFNotFound) {
-			continue
-		}
-		return nil, err
-	}
-	return nil, fmt.Errorf("resource not found: %s", name)
-}
-
-// HasFileExact reports whether a resource exists at exactly name. Unlike
-// ReadFile, it does not use the legacy suffix fallback for archive entries.
+// HasFileExact reports whether a resource or its alias exists without the
+// legacy suffix fallback for archive entries.
 func (m *Manager) HasFileExact(name string) bool {
 	if m == nil {
 		return false
 	}
+	if m.hasFileDirect(name) {
+		return true
+	}
+	alias, ok := m.resourceAlias(name)
+	return ok && m.hasFileDirect(alias)
+}
+
+func (m *Manager) hasFileDirect(name string) bool {
 	if _, ok := m.Find(name); ok {
 		return true
 	}
@@ -228,16 +287,14 @@ func (m *Manager) FindFirst(names []string) (string, bool) {
 }
 
 func (m *Manager) ReadFirst(names []string) (string, []byte, bool) {
-	for _, name := range names {
-		data, err := m.ReadFile(name)
-		if err == nil {
-			if path, ok := m.Find(name); ok {
-				return path, data, true
-			}
-			return name, data, true
-		}
+	data, name, err := m.ReadFileCandidates(names)
+	if err != nil {
+		return "", nil, false
 	}
-	return "", nil, false
+	if path, ok := m.Find(name); ok {
+		return path, data, true
+	}
+	return name, data, true
 }
 
 func (m *Manager) IsIndoorMap(mapName string) bool {

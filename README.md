@@ -126,6 +126,9 @@ Useful options:
 --username <username> # prefill the username in login window
 --password <password> # same for password
 --autologin=true # perform server connection and login on startup
+--server-slot 2 # select the third clientinfo.xml login server during autologin (default 0)
+--char-server-slot 0 # select the first character server returned after login (default 0)
+--char-slot 0 # select character slot 0 after autologin
 --force-user-ai=true # start homunculus and mercenary in USER_AI custom mode
 --script <path> # run an optional Lua character-control script in game
 ```

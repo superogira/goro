@@ -129,6 +129,38 @@ func (b *BGM) PlaySFXVolume(path string, volume float64) (string, error) {
 	return source, nil
 }
 
+// PreloadSFX decodes and caches a sound without playing it — map-load
+// warming for ambient loops that retrigger every RSW cycle (the disabled
+// backend's stub carries a matching no-op).
+func (b *BGM) PreloadSFX(path string) error {
+	if b == nil || b.disabled || b.sfxVolume <= 0 {
+		return nil
+	}
+	path = normalizeSFXPath(path)
+	if path == "" {
+		return nil
+	}
+	if _, _, ok := b.cachedSFXPCM(path); ok {
+		return nil
+	}
+	data, source, err := readSFXFile(b.resources, path)
+	if err != nil {
+		return err
+	}
+	pcm, sourceRate, err := decodeWAVToPCM16Stereo(data)
+	if err != nil {
+		return fmt.Errorf("decode sfx %s: %w", source, err)
+	}
+	if sourceRate != b.sampleRate {
+		pcm, err = resamplePCM16Stereo(pcm, sourceRate, b.sampleRate)
+		if err != nil {
+			return fmt.Errorf("resample sfx %s: %w", source, err)
+		}
+	}
+	b.storeSFXPCM(path, source, pcm)
+	return nil
+}
+
 func (b *BGM) startSFXPlayer(output audioOutput, pcm []byte, volume float64) {
 	player := output.NewPlayer(bytes.NewReader(pcm))
 	if player == nil {

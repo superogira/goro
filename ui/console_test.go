@@ -40,6 +40,18 @@ func TestConsoleTypeIntoInputBuildsAndSubmitsDraft(t *testing.T) {
 	}
 }
 
+func TestConsolePreservesRepeatedConfirmationsButSuppressesRepeatedErrors(t *testing.T) {
+	console := &ChatConsole{}
+	console.AddErrorMessage("Cannot use this item.")
+	console.AddErrorMessage("Cannot use this item.")
+	console.AddBlueMessage("You got Jellopy 1.")
+	console.AddBlueMessage("You got Jellopy 1.")
+	console.AddBlueMessage("You got Jellopy 1.")
+	if got := len(console.Messages()); got != 4 {
+		t.Fatalf("messages = %+v, want one error and three pickups", console.Messages())
+	}
+}
+
 func TestConsoleNoShiftCommandTogglesSessionPreference(t *testing.T) {
 	console := &ChatConsole{input: "/ns", active: true}
 	sessionState := &session.Session{}

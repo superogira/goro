@@ -20,6 +20,15 @@ import (
 
 // Exercise headless login, bot updates, and map transitions without drawing.
 func TestHeadlessLoginBotAndWarps(t *testing.T) {
+	for _, slot := range []int{0, 1} {
+		t.Run(fmt.Sprintf("server-slot=%d", slot), func(t *testing.T) {
+			testHeadlessLoginBotAndWarps(t, slot)
+		})
+	}
+}
+
+func testHeadlessLoginBotAndWarps(t *testing.T, serverSlot int) {
+	t.Helper()
 	t.Setenv("DISPLAY", "")
 	t.Setenv("WAYLAND_DISPLAY", "")
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -32,7 +41,11 @@ func TestHeadlessLoginBotAndWarps(t *testing.T) {
 	}
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
 	root := t.TempDir()
-	writeHeadlessFixture(t, root, "clientinfo.xml", []byte(fmt.Sprintf(`<clientinfo><connection><address>127.0.0.1</address><port>%d</port><version>55</version></connection></clientinfo>`, port)))
+	connections := fmt.Sprintf(`<connection><address>127.0.0.1</address><port>%d</port><version>55</version></connection>`, port)
+	if serverSlot > 0 {
+		connections = `<connection><address>127.0.0.1</address><port>1</port><version>1</version></connection>` + connections
+	}
+	writeHeadlessFixture(t, root, "clientinfo.xml", []byte("<clientinfo>"+connections+"</clientinfo>"))
 	gat := make([]byte, 14+3*3*20)
 	copy(gat, "GRAT")
 	gat[4], gat[5] = 1, 2
@@ -55,7 +68,7 @@ end
 		Audio:  config.AudioConfig{Disabled: true},
 		Window: config.WindowConfig{Width: 800, Height: 600},
 		Packet: config.PacketConfig{ClientDate: 20080910},
-		Login:  config.LoginConfig{AutoLogin: true, Username: "tester", Password: "test-password", CharSlot: 0},
+		Login:  config.LoginConfig{AutoLogin: true, Username: "tester", Password: "test-password", ServerSlot: serverSlot, CharServerSlot: serverSlot, CharSlot: 0},
 		Script: config.ScriptConfig{Path: filepath.Join(root, "bot.lua")},
 	}
 	g, err := New(cfg)
@@ -89,12 +102,19 @@ end
 	}
 	login := accept()
 	expectHeadlessPacket(t, login, network.BuildAccountLoginPacket(network.AccountLogin{Username: "tester", Password: "test-password", Version: 55}))
-	accepted := headlessPacket(0x0069, 79)
+	accepted := headlessPacket(0x0069, 47+32*(serverSlot+1))
 	binary.LittleEndian.PutUint16(accepted[2:4], uint16(len(accepted)))
 	binary.LittleEndian.PutUint32(accepted[4:8], 100)
 	binary.LittleEndian.PutUint32(accepted[8:12], 2000000)
-	copy(accepted[47:51], []byte{127, 0, 0, 1})
-	binary.LittleEndian.PutUint16(accepted[51:53], port)
+	for slot := 0; slot <= serverSlot; slot++ {
+		offset := 47 + slot*32
+		copy(accepted[offset:offset+4], []byte{127, 0, 0, 1})
+		serverPort := uint16(1)
+		if slot == serverSlot {
+			serverPort = port
+		}
+		binary.LittleEndian.PutUint16(accepted[offset+4:offset+6], serverPort)
+	}
 	writeHeadlessPacket(t, login, accepted)
 	character := accept()
 	expectHeadlessPacket(t, character, network.BuildCharServerEnterPacket(network.CharServerEnter{AccountID: 2000000, AuthCode: 100}))

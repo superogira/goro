@@ -32,7 +32,6 @@ const (
 	guildWindowTabHeight = 23
 	guildWindowTabWidth  = 68
 	guildEmblemSize      = 24
-	guildTablePadding    = 7
 	guildTableViewportW  = guildWindowWidth
 	guildTableRowH       = 32
 	guildTableHeaderH    = 24

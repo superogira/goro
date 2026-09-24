@@ -283,10 +283,6 @@ func BuildWalkToXYPacketForClientDate(x, y, clientDate int) ([]byte, bool) {
 	return w.Bytes(), true
 }
 
-func BuildChangeDirectionPacket(headDir, dir uint8) []byte {
-	return BuildChangeDirectionPacketForClientDate(headDir, dir, 20080910)
-}
-
 func BuildChangeDirectionPacketForClientDate(headDir, dir uint8, clientDate int) []byte {
 	for _, layout := range changeDirectionPacketLayouts {
 		if clientDate >= layout.date {
@@ -308,10 +304,6 @@ func BuildChangeDirectionPacketForClientDate(headDir, dir uint8, clientDate int)
 	w.Uint16(uint16(headDir))
 	w.Uint8(dir & 7)
 	return w.Bytes()
-}
-
-func BuildActionRequestPacket(targetGID uint32, action uint8) []byte {
-	return BuildActionRequestPacketForClientDate(targetGID, action, 20080910)
 }
 
 func BuildActionRequestPacketForClientDate(targetGID uint32, action uint8, clientDate int) []byte {

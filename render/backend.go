@@ -1749,7 +1749,7 @@ func updateCanvasImage(canvas *ggcanvas.Canvas, dstImage *Image) *Image {
 }
 
 func (r *runner) drawUIOverlay(screen *Frame, deviceScale float64) error {
-	if screen == nil || (len(screen.uiRects) == 0 && len(screen.uiTextBoxes) == 0 && len(screen.uiTextLabels) == 0 && len(screen.uiActorLabels) == 0) {
+	if screen == nil || (len(screen.uiTextBoxes) == 0 && len(screen.uiTextLabels) == 0 && len(screen.uiActorLabels) == 0) {
 		return nil
 	}
 	defer screen.clearUIOverlayCommands()
@@ -1769,9 +1769,6 @@ func (r *runner) drawUIOverlay(screen *Frame, deviceScale float64) error {
 		r.uiOverlayScale = deviceScale
 		r.uiTextCache = nil
 		r.uiBubbleCache = nil
-	}
-	for _, rect := range screen.uiRects {
-		DrawRect(screen, rect.X, rect.Y, rect.W, rect.H, rect.Color)
 	}
 	for _, box := range screen.uiTextBoxes {
 		cached, err := r.cachedTextBoxImage(provider, box, deviceScale)

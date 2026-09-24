@@ -59,6 +59,36 @@ func applyParameterChange(ctx client.Context, change network.ParameterChange) {
 		ctx.Session.Inventory.Weight = value
 	case network.StatusMaxWeight:
 		ctx.Session.Inventory.MaxWeight = value
+	// Derived stats are signed 32-bit values. Keep the unsigned decoding of
+	// experience, zeny and vitals intact while preserving negative modifiers.
+	case network.StatusAttack:
+		ctx.Session.Stats.Attack = int(int32(change.Value))
+	case network.StatusAttackBonus:
+		ctx.Session.Stats.AttackBonus = int(int32(change.Value))
+	case network.StatusMatkMax:
+		ctx.Session.Stats.MatkMax = int(int32(change.Value))
+	case network.StatusMatkMin:
+		ctx.Session.Stats.MatkMin = int(int32(change.Value))
+	case network.StatusDefense:
+		ctx.Session.Stats.Defense = int(int32(change.Value))
+	case network.StatusDefenseBonus:
+		ctx.Session.Stats.DefenseBonus = int(int32(change.Value))
+	case network.StatusMDefense:
+		ctx.Session.Stats.MDefense = int(int32(change.Value))
+	case network.StatusMDefenseBonus:
+		ctx.Session.Stats.MDefenseBonus = int(int32(change.Value))
+	case network.StatusHit:
+		ctx.Session.Stats.Hit = int(int32(change.Value))
+	case network.StatusFlee:
+		ctx.Session.Stats.Flee = int(int32(change.Value))
+	case network.StatusFleeBonus:
+		ctx.Session.Stats.FleeBonus = int(int32(change.Value))
+	case network.StatusCritical:
+		ctx.Session.Stats.Critical = int(int32(change.Value))
+	case network.StatusASPD:
+		ctx.Session.Stats.ASPD = int(int32(change.Value))
+	case network.StatusASPDBonus:
+		ctx.Session.Stats.ASPDBonus = int(int32(change.Value))
 	case network.StatusJobLevel:
 		ctx.Session.Progress.JobLevel = value
 		ctx.Session.Selected.JobLevel = clampInt16(value)

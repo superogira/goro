@@ -128,7 +128,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			if !hasMap || !rswLoaded {
 				return nil
 			}
-			ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, ctx.World.RSW, defaultRSMLoadLimit)
+			ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, ctx.World.RSW)
 			return nil
 		}},
 		{"textures", func() error {
@@ -148,7 +148,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			}
 			if rswLoaded {
 				m.playMapBGM(ctx, m.mapLoadRSWSource)
-				prefetchMapSoundFiles(ctx.Resources, ctx.World.RSW)
+				m.preloadMapSounds(ctx)
 			} else {
 				m.playMapBGM(ctx, ctx.World.MapName)
 			}

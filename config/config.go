@@ -53,6 +53,10 @@ type LoginConfig struct {
 	AutoLogin bool
 	CharSlot  int
 	KeepID    bool
+	// ServerSlot/CharServerSlot pin autologin to a specific entry of the
+	// login and character server lists (upstream).
+	ServerSlot     int
+	CharServerSlot int
 	// SavedUsername remembers the account name between sessions when
 	// KeepID is set (upstream).
 	SavedUsername string
@@ -452,6 +456,8 @@ func parseCLI(cfg *Config, args []string) error {
 	fs.StringVar(&cfg.Login.Username, "username", cfg.Login.Username, "login username")
 	fs.StringVar(&cfg.Login.Password, "password", cfg.Login.Password, "login password")
 	fs.BoolVar(&cfg.Login.AutoLogin, "autologin", cfg.Login.AutoLogin, "attempt login automatically")
+	fs.IntVar(&cfg.Login.ServerSlot, "server-slot", cfg.Login.ServerSlot, "login server entry in clientinfo.xml for autologin, starting at 0")
+	fs.IntVar(&cfg.Login.CharServerSlot, "char-server-slot", cfg.Login.CharServerSlot, "character server entry returned after login for autologin, starting at 0")
 	fs.IntVar(&cfg.Login.CharSlot, "char-slot", cfg.Login.CharSlot, "character slot to select after autologin, 0 to 8")
 	fs.BoolVar(&cfg.Audio.BGM, "bgm", cfg.Audio.BGM, "enable BGM")
 	fs.BoolVar(&cfg.Audio.Disabled, "no-audio", cfg.Audio.Disabled, "disable all audio output")
@@ -583,6 +589,10 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		cfg.Login.Password = value
 	case "login.autologin":
 		return setBool(value, &cfg.Login.AutoLogin)
+	case "login.serverslot":
+		return setInt(value, &cfg.Login.ServerSlot)
+	case "login.charserverslot":
+		return setInt(value, &cfg.Login.CharServerSlot)
 	case "login.charslot":
 		return setInt(value, &cfg.Login.CharSlot)
 	case "login.keepid":
@@ -683,6 +693,12 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Login.CharSlot < -1 || cfg.Login.CharSlot > 8 {
 		return fmt.Errorf("character slot must be between 0 and 8")
+	}
+	if cfg.Login.ServerSlot < 0 {
+		return fmt.Errorf("--server-slot must be non-negative")
+	}
+	if cfg.Login.CharServerSlot < 0 {
+		return fmt.Errorf("--char-server-slot must be non-negative")
 	}
 	if cfg.Audio.BGMVolume < 0 || cfg.Audio.BGMVolume > 1 {
 		return fmt.Errorf("bgm volume must be between 0 and 1")

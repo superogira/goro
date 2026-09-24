@@ -102,11 +102,6 @@ func PlayerCartResourceCandidates(cartNum int, extension string) []string {
 	}
 }
 
-func PlayerBodyResourcePath(job int, sex byte, extension string) string {
-	sexToken := PlayerSexToken(sex)
-	return fmt.Sprintf("%s%s\\%s\\%s_%s.%s", playerHumanSpriteRoot, playerBodyDir, sexToken, PlayerJobToken(job), sexToken, extension)
-}
-
 func PlayerHeadResourceCandidates(job int, head int, sex byte, extension string) []string {
 	sexToken := PlayerSexToken(sex)
 	head = NormalizePlayerHead(head, job)
@@ -391,13 +386,6 @@ func PlayerSexToken(sex byte) string {
 		return playerMaleSex
 	}
 	return playerFemaleSex
-}
-
-func PlayerSexLabel(sex byte) string {
-	if sex != 0 {
-		return "male"
-	}
-	return "female"
 }
 
 func PlayerJobToken(job int) string {

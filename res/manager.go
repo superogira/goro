@@ -104,7 +104,17 @@ func NewManager(root string) (*Manager, error) {
 	}
 
 	m := &Manager{Root: filepath.Clean(root)}
-	m.scanKnownFiles()
+	initialized := false
+	defer func() {
+		if !initialized {
+			for _, archive := range m.Archives {
+				_ = archive.Close()
+			}
+		}
+	}()
+	if err := m.scanKnownFiles(); err != nil {
+		return nil, err
+	}
 	m.ClientInfo = ClientInfo{
 		Connections: []Connection{
 			{Display: "Local rAthena", Address: "127.0.0.1", Port: 6900, Version: 55, LangType: 0},
@@ -121,6 +131,7 @@ func NewManager(root string) (*Manager, error) {
 		}
 	}
 
+	initialized = true
 	return m, nil
 }
 
@@ -457,34 +468,6 @@ func parseFogColor(raw string) (color.RGBA, bool) {
 		B: uint8(value & 0xff),
 		A: 255,
 	}, true
-}
-
-func (m *Manager) scanKnownFiles() {
-	// Note: the .grf archive names are deliberately NOT probed here. On
-	// the web build a Find("fdata.grf") downloads the whole archive into
-	// the file cache (~8.7MB at every cold boot) just to record a path in
-	// FoundFiles that nothing reads; archive discovery happens in
-	// scanArchives on both builds.
-	for _, name := range clientInfoCandidates {
-		if path, ok := m.Find(name); ok {
-			m.FoundFiles = append(m.FoundFiles, path)
-		}
-	}
-	m.scanArchives()
-}
-
-func archivePriority(path string) string {
-	name := strings.ToLower(filepath.Base(path))
-	switch name {
-	case "data.grf":
-		return "z-data.grf"
-	case "rdata.grf":
-		return "y-rdata.grf"
-	case "fdata.grf":
-		return "x-fdata.grf"
-	default:
-		return name
-	}
 }
 
 func normalizePath(name string) string {

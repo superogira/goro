@@ -95,6 +95,23 @@ func sortStringsStable(values []string) {
 	})
 }
 
+// archivePriority orders the classic archives behind custom layers: the
+// shared defaults load last (lowest priority) unless DATA.INI says
+// otherwise, so a custom data.grf wins over the stock one.
+func archivePriority(path string) string {
+	name := strings.ToLower(filepath.Base(path))
+	switch name {
+	case "data.grf":
+		return "z-data.grf"
+	case "rdata.grf":
+		return "y-rdata.grf"
+	case "fdata.grf":
+		return "x-fdata.grf"
+	default:
+		return name
+	}
+}
+
 // archiveHasCandidate is web-only (the in-memory resource pack); loose
 // files and on-disk GRF archives are handled by the candidate walk itself.
 func (m *Manager) archiveHasCandidate(string) bool { return false }

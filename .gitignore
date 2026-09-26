@@ -9,3 +9,6 @@ run.sh
 /profiles/
 /user_*.png
 .tmp_*.png
+*.keystore
+*.jks
+*.p12

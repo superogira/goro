@@ -47,6 +47,54 @@ CGO_ENABLED=0 go build -tags nofakecgo .
 For an Android arm64 development APK and USB installation, see the
 [Android build instructions](packaging/android/README.md).
 
+### Gamepad controls
+
+Enable the bundled keyboard/gamepad script on desktop:
+
+```sh
+./goro --data-dir /path/to/OldRO --script builtin:wasd
+```
+
+You can also use `--script scripts/wasd.lua` to edit the bindings in Lua. Android
+uses the bundled script by default when no other script is configured.
+
+You can also enable it from chat with `/script wasd`. Use `/script none` to stop
+scripting, or `/script` to list bundled scripts. Chat selection lasts for the
+current run, including map changes.
+
+| Control | Action |
+| --- | --- |
+| Left stick / D-pad | Move relative to camera (eight directions) |
+| West face button (Xbox X / PlayStation Square) | Hold to loot |
+| Right stick | Move the pointer |
+| L2 + right stick | Rotate / tilt camera (where the map allows it) |
+| R2 + right stick up/down | Zoom in/out (where the map allows it) |
+| R2 + South / East / West / North | Hotbar slots 1 / 2 / 3 / 4 in the active row |
+| South | Hold to attack selected enemy; confirm armed skill; otherwise left click |
+| East | Cancel skill / clear target; otherwise right click |
+| Start / Menu | Escape menu |
+| Right / left shoulder | Next / previous enemy, or eligible target for an armed skill |
+| D-pad up/down, South/East in NPC dialogs | Select choice, confirm / cancel |
+| Left stick click | Use the armed skill on the highlighted target |
+| Select / Back on Android | Open the keyboard |
+
+Gameplay controls pause while chat or a form has keyboard focus. Keyboard WASD,
+F and Space still work. The first detected controller stays selected until it
+disconnects; connecting and disconnecting controllers does not require a restart.
+
+Skill shortcuts cast immediately on a selected eligible enemy; otherwise use the
+shoulders and South to choose and confirm an actor target. Ground skills use the
+pointer and South. Self skills and items activate immediately.
+
+Backends: Windows XInput, Linux evdev, macOS GameController, and Android
+InputDevice. Windows requires an XInput-compatible controller or driver; Linux
+requires read access to the controller's `/dev/input/event*` node and a driver
+using the kernel's standard gamepad layout. macOS supports controllers exposed
+with an extended gamepad profile by the system framework. Older nonstandard
+controller mappings may need a driver or mapping fix.
+
+### Configuration
+
 Configuration precedence, from highest to lowest:
 
 1. Command-line flags such as `--vsync=false`.

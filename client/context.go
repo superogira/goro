@@ -1,6 +1,7 @@
 package client
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gogpu/ui/geometry"
@@ -63,6 +64,13 @@ type RuntimeSettings interface {
 	SetFPS(bool)
 	ResolutionScale() float64
 	SetResolutionScale(float64)
+}
+
+func (c Context) ScriptPath() string {
+	if c.Session != nil && c.Session.ScriptPath != "" {
+		return c.Session.ScriptPath
+	}
+	return strings.TrimSpace(c.Config.Script.Path)
 }
 
 func (c Context) ScreenSize() (int, int) {

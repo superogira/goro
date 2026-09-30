@@ -9,6 +9,20 @@ Run a script with:
 ./goro --data-dir ~/OldRO --script scripts/loot-and-attack.lua
 ```
 
+The keyboard/gamepad controls script is also bundled in every binary:
+
+```sh
+./goro --data-dir ~/OldRO --script builtin:wasd
+```
+
+Use `--script scripts/wasd.lua` to load an editable copy, or `--script none` to
+disable scripting. The same values work as `path` under `[script]` in `goro.ini`.
+
+In game, use `/script wasd` in chat to select the bundled controls, `/script none`
+to disable scripting, or `/script` to list bundled scripts. `wasd` is currently
+the only bundled script. The selection replaces any configured script for the
+current run, survives map changes, and does not modify `goro.ini`.
+
 The script must define a global `tick()` function. Goro calls it roughly every
 150 ms while the world mode is active.
 
@@ -43,7 +57,7 @@ keeps the collision grid, game data, network updates, and Lua scripts. Combat
 uses server timings and existing fallback durations when no sprite is loaded.
 Stop the process with Ctrl+C.
 
-There is no automatic reconnect or Lua API for answering interactive dialogs.
+There is no automatic reconnect. Scripts can answer NPC dialogs with `goro.npc_dialog`.
 `--no-ui` only hides the graphical client's UI.
 
 ## API
@@ -88,6 +102,59 @@ positions are ZQSD on an AZERTY keyboard.
 
 The keyboard API only reports input. Movement, combat, prompts, and other
 behavior remain Lua policy built from the generic functions below.
+
+### `goro.gamepad`
+
+The same interface works on Windows, Linux, macOS and Android. Goro selects the
+first detected controller and keeps it selected until it disconnects. Input
+snapshots become visible to Lua once per graphical frame; use `input()` for
+press/release edges. Linux and Windows device discovery and polling run in a
+background worker so driver calls cannot block game updates. Queries read shared
+frame state without consuming it; repeated queries during a frame return the same
+edges. Only the window loop drains the device event queues, once per update.
+
+- `connected()` reports whether a controller is connected, regardless of UI focus.
+- `name()` returns its name, or an empty string when disconnected.
+- `available()` reports whether gameplay input is allowed and a controller is connected.
+- `is_down(button)`, `was_pressed(button)`, `was_released(button)` report held state and frame edges.
+- `axis(name)` returns a normalized axis value. Sticks range from -1 to 1 (negative is left/up); triggers range from 0 to 1.
+
+An optional `gamepad(dt)` callback runs before controller pointer dispatch in
+graphical mode. `dt` is elapsed seconds, capped at 0.05. Within this callback,
+button and axis queries also work while a dialog has focus; check `available()`
+before performing gameplay actions. Call `consume(button)` or `consume_pointer()`
+to claim controls for this frame. A claimed mouse button remains suppressed until
+release, so releasing a modifier cannot turn a held skill button into a click.
+The ordinary `input()` callback retains its gameplay focus filtering.
+
+The following actions support scripted controller bindings:
+
+- `goro.use_shortcut(slot)` activates slot 1–9 of the active hotbar row and returns `used, skill_id`: a success flag and the activated skill ID (zero for items).
+- `goro.rotate_camera(yaw, pitch)` adds angles in degrees, respecting map camera locks.
+- `goro.zoom_camera(delta)` adjusts camera distance, respecting map zoom locks and limits; positive zooms out.
+- `goro.camera_yaw()` returns the current map camera yaw in degrees.
+- `goro.cancel_skill()` cancels skill targeting.
+- `goro.npc_dialog()` reports whether an NPC dialog is available; pass `"up"`, `"down"`, `"confirm"`, or `"cancel"` to operate it. Cancellation follows the normal NPC dialog rules.
+- `goro.pointer_over_ui()` reports whether the pointer is over a UI overlay.
+
+Button names are positional: `south`, `east`, `west`, `north`, `left_shoulder`,
+`right_shoulder`, `back`, `start`, `left_stick`, `right_stick`, `dpad_up`,
+`dpad_down`, `dpad_left`, `dpad_right`. Axis names are `left_x`, `left_y`,
+`right_x`, `right_y`, `left_trigger`, `right_trigger`. Unknown names return
+false or zero. The API leaves deadzones to the script; `wasd.lua` uses 0.3.
+
+Outside `gamepad(dt)`, gameplay queries return neutral input while chat/forms
+own the keyboard or the player cannot act. Disconnecting clears axes and held
+buttons and reports release edges; losing window focus clears input without
+generating press or release actions. Headless mode does not poll physical controllers.
+
+`wasd.lua` moves relative to the camera with the left stick/D-pad, uses West for
+loot, L2 + right stick to rotate/tilt the camera, R2 + right stick up/down to zoom,
+and R2 + South/East/West/North for hotbar slots 1–4. Shoulders cycle enemies or
+eligible skill targets; South attacks or confirms and East cancels. NPC dialogs
+use D-pad up/down and South/East.
+Unclaimed right-stick movement, South/East mouse clicks and Start/Escape remain
+shared client menu controls and work even without a script.
 
 ### `goro.player()`
 

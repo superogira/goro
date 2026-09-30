@@ -239,24 +239,10 @@ func (d *NPCDialog) Update(ctx Context) bool {
 		return true
 	}
 	if ctx.Input.JustPressed(input.KeyEscape) {
-		switch d.action {
-		case npcDialogActionMenu:
-			d.choose(ctx, 255)
-		case npcDialogActionClose:
-			d.close(ctx)
-		default:
-			// The original client claims Escape while an NPC dialog is open,
-			// but only closes a menu or a dialog that is waiting for Close.
-			// In particular, a dialog waiting for Next must remain intact.
-			return true
-		}
-		d.publish(ctx)
-		return true
+		return d.Control(ctx, "cancel")
 	}
 	if ctx.Input.JustPressed(input.KeyEnter) {
-		d.Confirm(ctx)
-		d.publish(ctx)
-		return true
+		return d.Control(ctx, "confirm")
 	}
 	// Handheld navigation: the d-pad moves the menu selection through the
 	// options and down to the Cancel row; Confirm (Enter or the gamepad A)
@@ -289,6 +275,53 @@ func (d *NPCDialog) Update(ctx Context) bool {
 		return true
 	}
 	return false
+}
+
+// Control shares dialog actions between keyboard and scripted controllers.
+func (d *NPCDialog) Control(ctx Context, action string) bool {
+	if !d.IsOpen() {
+		return false
+	}
+	switch action {
+	case "confirm":
+		switch d.action {
+		case npcDialogActionNext:
+			d.next(ctx)
+		case npcDialogActionClose:
+			d.close(ctx)
+		case npcDialogActionMenu:
+			d.chooseSelected(ctx)
+		case npcDialogActionNumberInput, npcDialogActionStringInput:
+			d.submitInput(ctx)
+		}
+	case "cancel":
+		// Like Escape in the original client, only cancel menus and Close.
+		switch d.action {
+		case npcDialogActionMenu:
+			d.choose(ctx, 255)
+		case npcDialogActionClose:
+			d.close(ctx)
+		}
+	case "up", "down":
+		if d.action == npcDialogActionMenu && len(d.options) != 0 {
+			delta := 1
+			if action == "up" {
+				delta = -1
+			}
+			// The scripted controller clamps at the list ends (upstream's
+			// contract); the handheld d-pad's menuNavStep path additionally
+			// wraps onto the Cancel row. Scrolling reuses the fork's
+			// keep-selection-visible math, sized for the 8-row window.
+			d.menuRow = max(0, min(len(d.options)-1, d.menuRow+delta))
+			d.ensureMenuRowVisible()
+			d.dirty = true
+			d.refresh(ctx)
+		}
+	default:
+		return false
+	}
+	d.publish(ctx)
+	return true
 }
 
 func (d *NPCDialog) next(ctx Context) {

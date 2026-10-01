@@ -173,6 +173,7 @@ type WorldMode struct {
 	hoveredWalk         hoveredWalkCellCache
 	bot                 *luaBot
 	companionAI         companionAISystem
+	walkSequence      uint64
 	mapImages         *render.ImageGroup
 	mapTextureUploads []*render.Image
 	mapUploadBatch    int
@@ -1894,6 +1895,7 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 			inventory.Weight, inventory.MaxWeight)
 	}
 	m.ui.announcement.Draw(screen, now)
+	m.drawPendingTargetBanner(screen, ctx)
 	m.ui.poptips.Draw(screen, now)
 	m.ui.inventoryBag.DrawTooltip(ctx, screen)
 	m.ui.equipmentWindow.DrawTooltip(ctx, screen)

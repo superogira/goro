@@ -26,6 +26,9 @@ const (
 	effectFuncGroundTexture
 	effectFuncBodyColor
 	effectFuncMapPillar
+	effectFuncHitRing
+	effectFuncHitParticles
+	effectFuncBlessingCircle
 )
 
 const (
@@ -59,6 +62,12 @@ func (m *WorldMode) drawFuncEffect(screen *render.Frame, ctx client.Context, pro
 		m.drawGroundTextureEffect(screen, ctx, component, effect, componentIndex, worldX, worldY, worldZ, progress, now)
 	case effectFuncMapPillar:
 		m.drawMapPillarEffect(screen, ctx, component, worldX, worldY, worldZ, progress)
+	case effectFuncHitRing:
+		m.drawHitRingEffect(screen, ctx, component, effect, worldX, worldY, worldZ, now)
+	case effectFuncHitParticles:
+		m.drawHitParticlesEffect(screen, ctx, projection, component, effect, componentIndex, worldX, worldY, worldZ, now)
+	case effectFuncBlessingCircle:
+		m.drawBlessingCircleEffect(screen, ctx, component, effect, worldX, worldY, worldZ, now)
 	default:
 	}
 }

@@ -320,6 +320,17 @@ func SaveUserSettings(settings UserSettings) (string, error) {
 
 // SaveLoginID (upstream path) upserts the remembered ID into the selected
 // local goro.ini.
+// SaveScriptPath saves an explicit script choice independently of other settings.
+func (cfg Config) SaveScriptPath(path string) (string, error) {
+	if strings.ContainsAny(path, "\r\n\x00") {
+		return "", fmt.Errorf("script path must be a single line without NUL characters")
+	}
+	return cfg.saveConfigValues(map[string]map[string]string{
+		"script": {"path": `"` + path + `"`},
+	})
+}
+
+// SaveLoginID remembers only the ID, independently of explicit login credentials.
 func (cfg Config) SaveLoginID(username string, keep bool) (string, error) {
 	if !keep {
 		username = ""
@@ -718,7 +729,7 @@ func validateConfig(cfg *Config) error {
 }
 
 func upsertINIValues(src string, values map[string]map[string]string) string {
-	sectionOrder := []string{"window", "render", "audio", "gameplay", "login", "chatshortcuts"}
+	sectionOrder := []string{"window", "render", "audio", "gameplay", "login", "chatshortcuts", "script"}
 	seenSections := make(map[string]bool)
 	written := make(map[string]map[string]bool)
 	for section := range values {

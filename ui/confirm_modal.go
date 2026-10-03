@@ -90,15 +90,11 @@ func (m *ConfirmModal) Update(ctx client.Context) bool {
 	// input.State. Only accept keyboard confirmation in a later input frame.
 	if ctx.Input != nil && ctx.Input.FrameID() != m.openedFrame {
 		if ctx.Input.JustPressed(input.KeyEscape) {
-			if m.okOnly {
-				m.Confirm(ctx)
-			} else {
-				m.Cancel(ctx)
-			}
+			m.Control(ctx, "cancel")
 			return true
 		}
 		if ctx.Input.JustPressed(input.KeyEnter) {
-			m.Confirm(ctx)
+			m.Control(ctx, "confirm")
 			return true
 		}
 	}
@@ -120,6 +116,24 @@ func (m *ConfirmModal) DialogMessage() string {
 
 func (m *ConfirmModal) DialogOKOnly() bool {
 	return m.okOnly
+}
+
+// Control shares modal actions with scripted controllers, including suppression
+// of the input frame that opened the modal.
+func (m *ConfirmModal) Control(ctx client.Context, action string) {
+	if !m.IsOpen() || ctx.Input != nil && ctx.Input.FrameID() == m.openedFrame {
+		return
+	}
+	switch action {
+	case "confirm":
+		m.Confirm(ctx)
+	case "cancel":
+		if m.okOnly {
+			m.Confirm(ctx)
+		} else {
+			m.Cancel(ctx)
+		}
+	}
 }
 
 func (m *ConfirmModal) Confirm(ctx client.Context) {

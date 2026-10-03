@@ -32,12 +32,20 @@ func (m *Manager) candidatePaths(normalized string) []string {
 
 // candidateExists reports whether a candidate path refers to a regular file.
 func (m *Manager) candidateExists(candidate string) bool {
+	if m.files != nil {
+		// A granted document tree (Android folder picker) backs the store.
+		info, err := m.statLoose(candidate)
+		return err == nil && !info.IsDir()
+	}
 	stat, err := os.Stat(candidate)
 	return err == nil && !stat.IsDir()
 }
 
 // readCandidate returns the contents of a candidate path returned by Find.
 func (m *Manager) readCandidate(candidate string) ([]byte, error) {
+	if m.files != nil {
+		return m.readLoose(candidate)
+	}
 	return os.ReadFile(candidate)
 }
 

@@ -171,7 +171,7 @@ type WorldMode struct {
 	loadingBG           *render.Image
 	showcase            *loadingShowcase
 	hoveredWalk         hoveredWalkCellCache
-	bot                 *luaBot
+	bot                 *luaScript
 	companionAI         companionAISystem
 	walkSequence      uint64
 	mapImages         *render.ImageGroup

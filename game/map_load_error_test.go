@@ -153,8 +153,8 @@ func TestMissingMapWarpRedirectsToLoginBeforeDrawing(t *testing.T) {
 	writeTestGAT(t, ctx.Resources.Root, ctx.World.MapName)
 	manager := NewManager(ctx, NewWorldMode())
 	world, ok := manager.mode.(*WorldMode)
-	if !ok {
-		t.Fatalf("valid map did not enter world mode: %T", manager.mode)
+	if !ok || manager.InLogin() {
+		t.Fatalf("valid map did not enter world mode: %T, inLogin=%v", manager.mode, manager.InLogin())
 	}
 	world.startMapFadeOut(network.MapChange{MapName: "new_1-1.gat", X: 1, Y: 1}, time.Now().Add(-mapFadeOutDuration))
 	// The map assets load on a background goroutine; let it finish between
@@ -173,7 +173,7 @@ func TestMissingMapWarpRedirectsToLoginBeforeDrawing(t *testing.T) {
 		manager.FrameSubmitted()
 	}
 	login, ok := manager.mode.(*LoginMode)
-	if !ok || login.phase != loginPhaseAccount || !login.disconnectDialog.IsOpen() || ctx.World.GAT != nil {
+	if !ok || !manager.InLogin() || login.phase != loginPhaseAccount || !login.disconnectDialog.IsOpen() || ctx.World.GAT != nil {
 		t.Fatalf("failed warp did not redirect to recovery before drawing: %T", manager.mode)
 	}
 	// All rendering now belongs to login and must not consult the world.

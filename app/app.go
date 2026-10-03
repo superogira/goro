@@ -48,6 +48,12 @@ func New(cfg config.Config) (*Game, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resource manager: %w", err)
 	}
+	return NewWithResources(cfg, resource), nil
+}
+
+// NewWithResources allows platform launchers to supply a granted asset folder.
+// The game owns resource and closes its archives on Close.
+func NewWithResources(cfg config.Config, resource *res.Manager) *Game {
 	if !cfg.Headless {
 		loadClientUIFont(resource)
 	}
@@ -89,7 +95,7 @@ func New(cfg config.Config) (*Game, error) {
 
 	ctx := g.modeContext()
 	g.modes = game.NewManager(ctx, game.NewLoginMode())
-	return g, nil
+	return g
 }
 
 func (g *Game) Update() error {
@@ -100,6 +106,11 @@ func (g *Game) Update() error {
 	// frames so a first-seen actor never stalls the frame on network reads.
 	res.PrefetchTick()
 	return g.modes.Update()
+}
+
+// InLogin reports whether platform controls for login may be shown.
+func (g *Game) InLogin() bool {
+	return g.modes.InLogin()
 }
 
 func (g *Game) Draw(screen *render.Frame) {
@@ -260,6 +271,9 @@ func (g *Game) RequestQuit() {
 // start another game in the same process after a surface is recreated.
 func (g *Game) Close() {
 	g.RequestQuit()
+	if g.modes != nil {
+		g.modes.Close()
+	}
 	if g.resource != nil {
 		for _, archive := range g.resource.Archives {
 			_ = archive.Close()

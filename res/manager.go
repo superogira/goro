@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"io/fs"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ type Manager struct {
 	ClientInfo ClientInfo
 	FoundFiles []string
 	Archives   []*GRF
+	files      fs.FS
 
 	deferredWebPack          *deferredWebPackState
 	webMapPacks              *webMapPackState
@@ -105,7 +107,19 @@ func NewManager(root string) (*Manager, error) {
 		return nil, errors.New("empty root")
 	}
 
-	m := &Manager{Root: filepath.Clean(root)}
+	return newManager(&Manager{Root: filepath.Clean(root)})
+}
+
+// NewManagerFS reads client data from a granted directory, such as an Android
+// document tree. Archive files must support io.ReaderAt; assets are not copied.
+func NewManagerFS(files fs.FS) (*Manager, error) {
+	if files == nil {
+		return nil, errors.New("nil resource filesystem")
+	}
+	return newManager(&Manager{Root: ".", files: files})
+}
+
+func newManager(m *Manager) (*Manager, error) {
 	initialized := false
 	defer func() {
 		if !initialized {

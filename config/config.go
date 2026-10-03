@@ -20,6 +20,7 @@ type Config struct {
 	Background    BackgroundConfig
 	Headless      bool
 	DataDir       string
+	AIStateDir    string
 	Window        WindowConfig
 	Packet        PacketConfig
 	Login         LoginConfig
@@ -174,18 +175,18 @@ func LoadConfig(args []string) (Config, error) {
 }
 
 type UserSettings struct {
-	Fullscreen       bool
-	VSync            bool
-	FPS              bool
-	ResolutionScale  float64
-	BGMVolume   float64
-	SFXVolume   float64
-	NoShift     bool
-	NoCtrl      bool
-	LessEffects bool
-	SnapTargets bool
-	SnapItems   bool
-	SnapRadius  float64
+	Fullscreen      bool
+	VSync           bool
+	FPS             bool
+	ResolutionScale float64
+	BGMVolume       float64
+	SFXVolume       float64
+	NoShift         bool
+	NoCtrl          bool
+	LessEffects     bool
+	SnapTargets     bool
+	SnapItems       bool
+	SnapRadius      float64
 }
 
 func UserConfigPath() (string, error) {
@@ -387,7 +388,7 @@ func defaultConfig() Config {
 			Enabled: true,
 		},
 		Gameplay: GameplayConfig{
-			NoCtrl:    true,
+			NoCtrl:     true,
 			SnapRadius: 1,
 		},
 		Log: glog.LogConfig{

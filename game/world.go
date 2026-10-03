@@ -150,7 +150,7 @@ type WorldMode struct {
 	mapFade            mapFadeState
 	loadingBG          *render.Image
 	hoveredWalk        hoveredWalkCellCache
-	bot                *luaBot
+	bot                *luaScript
 	companionAI        companionAISystem
 	walkSequence      uint64
 	mapImages         *render.ImageGroup

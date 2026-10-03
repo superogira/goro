@@ -36,6 +36,12 @@ type GRF struct {
 	entries map[string]GRFEntry
 }
 
+type grfFile interface {
+	io.Reader
+	io.ReaderAt
+	io.Closer
+}
+
 type GRFEntry struct {
 	Name        string
 	PackedSize  uint32
@@ -50,7 +56,6 @@ func OpenGRF(path string) (*GRF, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	grf, err := OpenGRFReader(path, file)
 	if err != nil {
 		_ = file.Close()
@@ -72,6 +77,22 @@ func OpenGRFReader(path string, r io.ReaderAt) (*GRF, error) {
 		return nil, err
 	}
 	return grf, nil
+}
+
+func (m *Manager) openArchive(path string) (*GRF, error) {
+	if m.files == nil {
+		return OpenGRF(path)
+	}
+	file, err := m.files.Open(filepath.ToSlash(path))
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := file.(grfFile)
+	if !ok {
+		_ = file.Close()
+		return nil, fmt.Errorf("archive %s does not support random access", path)
+	}
+	return OpenGRFReader(path, reader)
 }
 
 func (g *GRF) Close() error {

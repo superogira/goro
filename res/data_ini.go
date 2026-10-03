@@ -23,7 +23,7 @@ func (m *Manager) scanKnownFiles() error {
 
 	var paths []string
 	if iniPath, ok := m.Find("DATA.INI"); ok {
-		data, err := os.ReadFile(iniPath)
+		data, err := m.readLoose(iniPath)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", iniPath, err)
 		}
@@ -79,7 +79,7 @@ func (m *Manager) scanKnownFiles() error {
 		if seen[path] {
 			continue
 		}
-		archive, err := OpenGRF(path)
+		archive, err := m.openArchive(path)
 		if err != nil {
 			return fmt.Errorf("open resource archive %s: %w", path, err)
 		}

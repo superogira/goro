@@ -52,8 +52,8 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/jfreymuth/pulse v0.1.1 h1:9WLNBNCijmtZ14ZJpatgJPu/NjwAl3TIKItSFnTh+9A=
 github.com/jfreymuth/pulse v0.1.1/go.mod h1:cpYspI6YljhkUf1WLXLLDmeaaPFc3CnGLjDZf9dZ4no=
-github.com/kivutar/gg v0.52.4-0.20260907093528-f5ad04483d31 h1:tMRONrxR/Sonjuzo25jRg7X779bmcRZ9dBttwP53B+A=
-github.com/kivutar/gg v0.52.4-0.20260907093528-f5ad04483d31/go.mod h1:76qRbhwszTfk1McnBiCPtnx1ewpR7C6+mfZoxmD5RUU=
+github.com/kivutar/gg v0.52.4-0.20261005130553-221e1f996c41 h1:twFQuvTAJ/ypuNngQBq6odRkoQ8W6GlXRQ5EdLsncIo=
+github.com/kivutar/gg v0.52.4-0.20261005130553-221e1f996c41/go.mod h1:76qRbhwszTfk1McnBiCPtnx1ewpR7C6+mfZoxmD5RUU=
 github.com/lucasb-eyer/go-colorful v1.2.0 h1:1nnpGOrhyZZuNyfu1QjKiUICQ74+3FNCN69Aj6K7nkY=
 github.com/lucasb-eyer/go-colorful v1.2.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

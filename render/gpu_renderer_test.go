@@ -255,6 +255,9 @@ func TestWorldPipelineHonorsIndependentDepthOptions(t *testing.T) {
 			t.Fatalf("pipeline for %+v = %p, want %p", options, got, pipeline)
 		}
 		desc := r.worldPipelineDescriptor(nil, gputypes.BlendStateAlpha(), key.depthTest, key.depthWrite, "test")
+		if desc.DepthStencil.Format != gputypes.TextureFormatDepth32Float {
+			t.Fatalf("GPU depth format = %v, want Depth32Float for AMD Vulkan occlusion", desc.DepthStencil.Format)
+		}
 		wantCompare := gputypes.CompareFunctionAlways
 		if key.depthTest {
 			wantCompare = gputypes.CompareFunctionLessEqual
@@ -262,6 +265,19 @@ func TestWorldPipelineHonorsIndependentDepthOptions(t *testing.T) {
 		if desc.DepthStencil.DepthCompare != wantCompare || desc.DepthStencil.DepthWriteEnabled != key.depthWrite {
 			t.Fatalf("GPU depth state for %+v = %+v", options, desc.DepthStencil)
 		}
+	}
+}
+
+func TestScreenPipelineSharesWorldDepthAttachment(t *testing.T) {
+	r := &gpuRenderer{format: gputypes.TextureFormatBGRA8Unorm}
+	world := r.worldPipelineDescriptor(nil, gputypes.BlendStateAlpha(), true, true, "world")
+	screen := r.screenPipelineDescriptor(nil, gputypes.BlendStateAlpha(), "screen")
+	depth := screen.DepthStencil
+	if depth == nil || depth.Format != world.DepthStencil.Format {
+		t.Fatalf("screen depth attachment = %+v, must match world attachment %+v", depth, world.DepthStencil)
+	}
+	if depth.DepthWriteEnabled || depth.DepthCompare != gputypes.CompareFunctionAlways {
+		t.Fatalf("screen draws must overlay the world without modifying depth: %+v", depth)
 	}
 }
 

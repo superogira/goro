@@ -83,6 +83,9 @@ var (
 	equipmentSlotAccessory2 = equipmentSlotDef{label: "Accessory", location: db.EquipAccessory2, side: equipmentSlotRight, row: 4}
 	equipmentSlotAmmo       = equipmentSlotDef{label: "Ammo", location: db.EquipAmmo, side: equipmentSlotCenter, row: 1}
 
+	// equipmentSlots aggregates every slot for iteration — the web build's
+	// DOM equipment panel walks it (upstream removed it as unused on the
+	// canvas-only build).
 	equipmentSlots = []equipmentSlotDef{
 		equipmentSlotHeadTop,
 		equipmentSlotHeadMid,
@@ -698,13 +701,4 @@ func jobSupportsAmmo(job int) bool {
 	default:
 		return false
 	}
-}
-
-func equipmentSlotByLocation(location uint16) (equipmentSlotDef, bool) {
-	for _, slot := range equipmentSlots {
-		if location&slot.location != 0 {
-			return slot, true
-		}
-	}
-	return equipmentSlotDef{}, false
 }

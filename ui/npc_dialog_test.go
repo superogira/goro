@@ -4,9 +4,136 @@ import (
 	"image/color"
 	"testing"
 
+	"github.com/gogpu/ui/event"
+	"github.com/gogpu/ui/uitest"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 )
+
+func TestNPCDialogMenuDoubleClickConfirmsClickedEntry(t *testing.T) {
+	ctx, manager, app := newWindowInstanceTest()
+	client, server := newIdentifyTestConnection(t)
+	ctx.Network = client
+	var dialog NPCDialog
+	openMenu := func() {
+		dialog.Apply(network.NPCDialog{Kind: network.NPCDialogMenu, NPCID: 100,
+			Options: []string{"Prontera", "Geffen"}})
+		dialog.Update(ctx)
+		app.Frame()
+		app.Window().DrawTo(&uitest.MockCanvas{})
+	}
+	clickRow := func(row int) {
+		x := float32(dialog.menuWindow.x + npcMenuPad + 10)
+		y := float32(dialog.menuWindow.y + ROWindowTitleHeight + npcMenuPad + row*npcMenuRowH + npcMenuRowH/2)
+		app.HandleEvent(uitest.Click(x, y))
+		app.HandleEvent(uitest.Release(x, y))
+	}
+
+	openMenu()
+	clickRow(0)
+	assertNoIdentifyTestPackets(t, client, server)
+
+	// Replacing the menu must discard the previous menu's first click.
+	openMenu()
+	clickRow(0)
+	assertNoIdentifyTestPackets(t, client, server)
+	clickRow(1)
+	if dialog.menuRow != 1 {
+		t.Fatalf("clicked row = %d, want 1", dialog.menuRow)
+	}
+	assertNoIdentifyTestPackets(t, client, server)
+
+	// The mouse's second click confirms its row, even if keyboard navigation
+	// changed selection in between the two clicks.
+	app.HandleEvent(event.NewKeyEvent(event.KeyPress, event.KeyUp, 0, event.ModNone))
+	if dialog.menuRow != 0 {
+		t.Fatalf("keyboard selection = %d, want 0", dialog.menuRow)
+	}
+	clickRow(1)
+	readIdentifyTestPacket(t, server, network.BuildNPCMenuChoicePacket(100, 2))
+	if dialog.action != npcDialogActionNone || dialog.menuWindow.IsOpen() {
+		t.Fatal("confirmed NPC menu stayed active")
+	}
+	if len(manager.overlays) != 0 {
+		t.Fatal("choice-only menu left an empty dialog while awaiting the server")
+	}
+	assertNoIdentifyTestPackets(t, client, server)
+
+	// A following menu requires its own double click.
+	openMenu()
+	clickRow(1)
+	assertNoIdentifyTestPackets(t, client, server)
+	clickRow(1)
+	readIdentifyTestPacket(t, server, network.BuildNPCMenuChoicePacket(100, 2))
+	assertNoIdentifyTestPackets(t, client, server)
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+	dialog.Update(ctx)
+	if dialog.IsOpen() || len(manager.overlays) != 0 {
+		t.Fatal("server close left a choice-only interaction open")
+	}
+}
+
+func TestNPCDialogPromptsOnlyShowRequestedWindows(t *testing.T) {
+	for _, prompt := range []struct {
+		name string
+		kind network.NPCDialogKind
+	}{
+		{"menu", network.NPCDialogMenu},
+		{"number", network.NPCDialogNumberInput},
+		{"text", network.NPCDialogStringInput},
+	} {
+		for _, withText := range []bool{false, true} {
+			name := prompt.name
+			if withText {
+				name += "_with_dialog"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx, manager, _ := newWindowInstanceTest()
+				var dialog NPCDialog
+				wantWindows := 1
+				if withText {
+					dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Where to?"})
+					wantWindows++
+				}
+				dialog.Apply(network.NPCDialog{Kind: prompt.kind, NPCID: 100, Options: []string{"Prontera", "Geffen"}})
+				dialog.Update(ctx)
+				if dialog.dialogWindow.IsOpen() != withText || len(manager.overlays) != wantWindows {
+					t.Fatalf("dialog=%t overlays=%d, want dialog=%t overlays=%d", dialog.dialogWindow.IsOpen(), len(manager.overlays), withText, wantWindows)
+				}
+				if prompt.kind == network.NPCDialogMenu && !dialog.menuWindow.IsOpen() || prompt.kind != network.NPCDialogMenu && !dialog.inputWindow.IsOpen() {
+					t.Fatal("requested prompt did not open")
+				}
+				dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+				dialog.Update(ctx)
+				if withText {
+					if !dialog.dialogWindow.IsOpen() || dialog.action != npcDialogActionClose || len(manager.overlays) != 1 {
+						t.Fatal("text dialog did not retain its Close button")
+					}
+				} else if dialog.IsOpen() || len(manager.overlays) != 0 {
+					t.Fatal("standalone prompt did not close")
+				}
+			})
+		}
+	}
+}
+
+func TestNPCDialogTextAfterStandaloneMenuOpensDialog(t *testing.T) {
+	ctx, manager, _ := newWindowInstanceTest()
+	var dialog NPCDialog
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogMenu, NPCID: 100, Options: []string{"Prontera"}})
+	dialog.Update(ctx)
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Welcome!"})
+	dialog.Update(ctx)
+	if !dialog.dialogWindow.IsOpen() || dialog.menuWindow.IsOpen() || len(manager.overlays) != 1 {
+		t.Fatal("NPC text did not replace the standalone menu with a dialog")
+	}
+	dialog.ResetPublished(ctx)
+	dialog.Apply(network.NPCDialog{Kind: network.NPCDialogMenu, NPCID: 100, Options: []string{"Prontera"}})
+	dialog.Update(ctx)
+	if dialog.dialogWindow.IsOpen() || !dialog.menuWindow.IsOpen() || len(manager.overlays) != 1 {
+		t.Fatal("a new choice-only interaction reopened the previous text dialog")
+	}
+}
 
 func TestNPCDialogControllerSelectionScrollsAndClamps(t *testing.T) {
 	dialog := NPCDialog{}

@@ -1687,6 +1687,11 @@ func (r *runner) drawUIDragLayer(screen *Frame) {
 	opts.GeoM.Translate(float64(drawRect.Min.X), float64(drawRect.Min.Y))
 	// UI raster is text — linear for fractional device scales (see drawCachedOverlayImage).
 	opts.Filter = FilterLinear
+	// Translucent while the drag is live; restored on release, even while
+	// the async UI is catching up.
+	if !r.uiDrag.releasePending {
+		opts.ColorScale.ScaleAlpha(0.7)
+	}
 	screen.DrawImage(r.uiDrag.image, &opts)
 }
 

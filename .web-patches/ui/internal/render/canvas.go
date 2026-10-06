@@ -112,9 +112,9 @@ func (c *Canvas) FillRectDirect(r geometry.Rect, color widget.Color) {
 	if !c.isVisible(r) {
 		return
 	}
+	x, y, w, h := c.pixelAlignedRect(r)
 	c.dc.FillRectCPU(
-		float64(r.Min.X), float64(r.Min.Y),
-		float64(r.Width()), float64(r.Height()),
+		x, y, w, h,
 		gg.RGBA{R: float64(color.R), G: float64(color.G), B: float64(color.B), A: float64(color.A)},
 	)
 }
@@ -332,8 +332,8 @@ func (c *Canvas) PushClip(r geometry.Rect) {
 	// this will also drive hardware scissor for GPU rendering.
 	c.dc.Push()
 	clip := c.currentClip
-	c.dc.ClipRect(float64(clip.Min.X), float64(clip.Min.Y),
-		float64(clip.Width()), float64(clip.Height()))
+	x, y, w, h := c.pixelAlignedRect(clip)
+	c.dc.ClipRect(x, y, w, h)
 }
 
 // PushClipRoundRect pushes a rounded rectangle clipping region.
@@ -665,9 +665,27 @@ func (c *Canvas) applyTransformPoint(p geometry.Point) geometry.Point {
 	return p
 }
 
+// pixelAlignedRect rounds a rect outward to whole device pixels, then back
+// to logical units, so the same rect rasterizes identically whether it
+// arrives as a damage clip or as part of a full repaint (ported from the
+// upstream ui pin that fixed fractional-scale repaint seams).
+func (c *Canvas) pixelAlignedRect(r geometry.Rect) (x, y, w, h float64) {
+	if r.IsEmpty() {
+		return 0, 0, 0, 0
+	}
+	scale := c.dc.DeviceScale()
+	x = math.Floor(float64(r.Min.X)*scale) / scale
+	y = math.Floor(float64(r.Min.Y)*scale) / scale
+	right := math.Ceil(float64(r.Max.X)*scale) / scale
+	bottom := math.Ceil(float64(r.Max.Y)*scale) / scale
+	return x, y, right - x, bottom - y
+}
+
 // isVisible returns true if the rectangle intersects with the current clip bounds.
 func (c *Canvas) isVisible(r geometry.Rect) bool {
-	return c.currentClip.Intersects(r)
+	// Include the antialiasing fringe and the outward rounding of rectangular
+	// clips. This only relaxes culling; the actual clip still limits painting.
+	return !c.currentClip.IsEmpty() && c.currentClip.Intersects(r.Expand(float32(2/c.dc.DeviceScale())))
 }
 
 // FillSVGPath fills an SVG path within the given bounds.

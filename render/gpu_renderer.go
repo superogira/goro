@@ -26,6 +26,10 @@ const (
 	billboardInstanceStride     = billboardInstanceFloatCount * 4
 )
 
+// Depth24Plus produces incorrect model occlusion on affected AMD Vulkan
+// setups. Keep the explicit float format consistent across all attachments.
+const depthFormat = gputypes.TextureFormatDepth32Float
+
 type gpuRenderer struct {
 	dev                    *wgpu.Device
 	queue                  *wgpu.Queue
@@ -343,7 +347,11 @@ func (r *gpuRenderer) init(_ *gogpu.Context) error {
 }
 
 func (r *gpuRenderer) createPipeline(shader *wgpu.ShaderModule, blend gputypes.BlendState, label string) (*wgpu.RenderPipeline, error) {
-	return r.dev.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+	return r.dev.CreateRenderPipeline(r.screenPipelineDescriptor(shader, blend, label))
+}
+
+func (r *gpuRenderer) screenPipelineDescriptor(shader *wgpu.ShaderModule, blend gputypes.BlendState, label string) *wgpu.RenderPipelineDescriptor {
+	return &wgpu.RenderPipelineDescriptor{
 		Label:  label,
 		Layout: r.layout,
 		Vertex: wgpu.VertexState{
@@ -364,12 +372,10 @@ func (r *gpuRenderer) createPipeline(shader *wgpu.ShaderModule, blend gputypes.B
 			FrontFace: gputypes.FrontFaceCCW,
 			CullMode:  gputypes.CullModeNone,
 		},
-		// The screen pass always attaches a depth view; WebGPU requires
-		// every pipeline drawing in that pass to declare a matching
-		// depth-stencil state. Always-compare without depth writes is the
-		// depth-test-disabled equivalent of omitting the state on Vulkan.
+		// Screen draws share the world's render pass, so their attachment
+		// format must match even though they neither test nor write depth.
 		DepthStencil: &wgpu.DepthStencilState{
-			Format:            gputypes.TextureFormatDepth24Plus,
+			Format:            depthFormat,
 			DepthWriteEnabled: false,
 			DepthCompare:      gputypes.CompareFunctionAlways,
 		},
@@ -382,7 +388,7 @@ func (r *gpuRenderer) createPipeline(shader *wgpu.ShaderModule, blend gputypes.B
 				WriteMask: gputypes.ColorWriteMaskAll,
 			}},
 		},
-	})
+	}
 }
 
 func (r *gpuRenderer) createWorldPipeline(shader *wgpu.ShaderModule, blend gputypes.BlendState, depthTest, depthWrite bool, label string) (*wgpu.RenderPipeline, error) {
@@ -416,7 +422,7 @@ func (r *gpuRenderer) worldPipelineDescriptor(shader *wgpu.ShaderModule, blend g
 			CullMode:  gputypes.CullModeNone,
 		},
 		DepthStencil: &wgpu.DepthStencilState{
-			Format:            gputypes.TextureFormatDepth24Plus,
+			Format:            depthFormat,
 			DepthWriteEnabled: depthWrite,
 			DepthCompare:      worldDepthCompare(depthTest),
 		},
@@ -470,7 +476,7 @@ func (r *gpuRenderer) createWorldBillboardPipeline(shader *wgpu.ShaderModule, bl
 			CullMode:  gputypes.CullModeNone,
 		},
 		DepthStencil: &wgpu.DepthStencilState{
-			Format:            gputypes.TextureFormatDepth24Plus,
+			Format:            depthFormat,
 			DepthWriteEnabled: false,
 			DepthCompare:      worldDepthCompare(depthTest),
 		},
@@ -1307,7 +1313,7 @@ func (r *gpuRenderer) ensureDepth(width, height int) error {
 		MipLevelCount: 1,
 		SampleCount:   1,
 		Dimension:     gputypes.TextureDimension2D,
-		Format:        gputypes.TextureFormatDepth24Plus,
+		Format:        depthFormat,
 		Usage:         wgpu.TextureUsageRenderAttachment,
 	})
 	if err != nil {

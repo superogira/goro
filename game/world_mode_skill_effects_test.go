@@ -496,8 +496,10 @@ func TestTorchEffectSpecMatchesRoBrowserShape(t *testing.T) {
 	if component.posX != 0.1 || component.posZ != 0.8 || component.sizeStart != effectTableSize(100) || component.angleStart != 270 || !component.rotateToTarget {
 		t.Fatalf("torch placement = %+v", component)
 	}
-	if got := worldEffectSpriteAngle(component); got != 360 {
-		t.Fatalf("torch effective angle = %.1f, want 360.0", got)
+	ctx := client.Context{World: worldstate.New()}
+	angle, ok := effectSpriteRobrowserRotation(ctx, sceneProjection{}, component, worldEffect{effectID: effectTorch}, 0)
+	if !ok || math.Abs(angle+2*math.Pi) > 0.001 {
+		t.Fatalf("torch effective angle = %.3f, %v, want -2π radians, true", angle, ok)
 	}
 }
 
@@ -3338,7 +3340,7 @@ func TestWorldEffectBillboardSparklingAlphaMatchesRobrowser(t *testing.T) {
 func TestWorldEffectBillboardAngleCanRotateWithCamera(t *testing.T) {
 	projection := newSceneProjectionForTargetYaw(800, 600, 0, 0, 0, 45)
 	component := worldEffectComponent{angleStart: 90, angleEnd: 180, rotateWithCamera: true}
-	got := worldEffectBillboardAngle(component, projection, 0.5)
+	got := worldEffectBillboardAngleForEffect(component, projection, worldEffect{}, 0, 0.5)
 	want := degreesToRadians(180)
 	if math.Abs(got-want) > 0.001 {
 		t.Fatalf("angle = %.3f, want %.3f", got, want)

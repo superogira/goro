@@ -2,6 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"github.com/gogpu/ui/event"
+	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/ui/rotheme"
 	"image/color"
 	"math"
 	"strconv"
@@ -42,22 +47,35 @@ const (
 	characterHUDStatColumn = 146
 	characterHUDTextSize   = 13
 
-	hudEdgeTabW           = 26
-	hudEdgeTabH           = 44
-	characterHUDExpLabelW = 64
+	hudEdgeTabW                  = 26
+	hudEdgeTabH                  = 44
+	characterHUDExpLabelW        = 64
+	characterWindowHeightAlt     = 140 // upstream's widget window height
+	characterWindowCompactHeight = 80
+
+	characterEXPPanelPaddingX float32 = 6
+	characterEXPPanelPaddingY float32 = 4
+	characterEXPPanelGap      float32 = 2
+	characterEXPPanelRadius   float32 = 5
+	characterEXPLabelWidth    float32 = 76
+	characterEXPLabelBarGap   float32 = 6
+	characterEXPBarHeight     float32 = 6
+	characterTextLineHeight   float32 = 1.2
 )
 
 var (
-	characterHUDHPColor      = PlayerHPBarColor
-	characterHUDSPColor      = PlayerSPBarColor
-	characterHUDTextColor    = color.RGBA{R: 235, G: 242, B: 250, A: 255}
-	characterHUDMutedColor   = color.RGBA{R: 190, G: 200, B: 214, A: 255}
-	characterHUDBarBackColor = color.RGBA{R: 64, G: 70, B: 82, A: 160}
-	characterHUDEXPColor     = color.RGBA{R: 170, G: 182, B: 200, A: 255}
-	characterHUDBackground   = color.RGBA{R: 14, G: 18, B: 24, A: 189}
-	characterHUDPanelBack    = color.RGBA{R: 255, G: 255, B: 255, A: 18}
-	characterHUDBorder       = color.RGBA{R: 180, G: 198, B: 218, A: 94}
-	characterHUDRadius       = float32(8)
+	characterHUDHPColor        = PlayerHPBarColor
+	characterHUDSPColor        = PlayerSPBarColor
+	characterHUDTextColor      = color.RGBA{R: 235, G: 242, B: 250, A: 255}
+	characterHUDMutedColor     = color.RGBA{R: 190, G: 200, B: 214, A: 255}
+	characterHUDBarBackColor   = color.RGBA{R: 64, G: 70, B: 82, A: 160}
+	characterHUDEXPColor       = color.RGBA{R: 170, G: 182, B: 200, A: 255}
+	characterHUDBackground     = color.RGBA{R: 14, G: 18, B: 24, A: 189}
+	characterHUDPanelBack      = color.RGBA{R: 255, G: 255, B: 255, A: 18}
+	characterHUDBorder         = color.RGBA{R: 180, G: 198, B: 218, A: 94}
+	characterHUDRadius         = float32(8)
+	characterWindowEXPColor    = WindowBorderColor
+	characterWindowJobEXPColor = WindowBorderColor
 )
 
 // CharacterWindow is the always-on character HUD overlay. It keeps the
@@ -81,7 +99,6 @@ type CharacterWindow struct {
 
 	webSyncedKey string
 }
-
 
 // drawCharacterHUDCloseGlyph draws the HUD panel's ✕. Upstream's shared
 // DrawCloseButton went away in the unused-helpers cleanup; the glyph is
@@ -362,20 +379,8 @@ func drawHUDExpRow(screen *render.Frame, x, y, width int, label string, level in
 // webSyncState mirrors the HUD into the page DOM (web builds only): the
 // full field set travels on every snapshot change; visibility changes
 // push on their own.
-// characterWindowSnapshot keys the HUD state so unchanged frames push
-// nothing to the page.
-func characterWindowSnapshot(s *session.Session) string {
-	character, vitals, progress, inventory := characterWindowData(s)
-	return fmt.Sprintf(
-		"name=%s;job=%d;hp=%d/%d;sp=%d/%d;bl=%d;jl=%d;bexp=%d/%d;jexp=%d/%d;zeny=%d;weight=%d/%d",
-		character.Name, character.Job,
-		vitals.HP, vitals.MaxHP, vitals.SP, vitals.MaxSP,
-		progress.BaseLevel, progress.JobLevel,
-		progress.BaseExp, progress.NextBaseExp, progress.JobExp, progress.NextJobExp,
-		inventory.Zeny, inventory.Weight, inventory.MaxWeight,
-	)
-}
-
+// characterWindowSnapshot (below, upstream's fuller format with the job
+// display name) keys the HUD state so unchanged frames push nothing.
 func (w *CharacterWindow) webSyncState(ctx client.Context) {
 	snapshot := characterWindowSnapshot(ctx.Session)
 	key := strconv.FormatBool(w.open) + "|" + strconv.FormatBool(w.dismissed) + "|" + snapshot
@@ -446,6 +451,115 @@ func characterWindowData(s *session.Session) (session.Character, session.Vitals,
 		progress.JobLevel = int(character.JobLevel)
 	}
 	return character, vitals, progress, s.Inventory
+}
+
+func characterWindowSnapshot(s *session.Session) string {
+	character, vitals, progress, inventory := characterWindowData(s)
+	return fmt.Sprintf(
+		"name=%s;job=%d;%s;hp=%d/%d;sp=%d/%d;bl=%d;jl=%d;bexp=%d/%d;jexp=%d/%d;zeny=%d;weight=%d/%d",
+		character.Name,
+		character.Job,
+		db.JobDisplayName(int(character.Job)),
+		vitals.HP,
+		vitals.MaxHP,
+		vitals.SP,
+		vitals.MaxSP,
+		progress.BaseLevel,
+		progress.JobLevel,
+		progress.BaseExp,
+		progress.NextBaseExp,
+		progress.JobExp,
+		progress.NextJobExp,
+		inventory.Zeny,
+		inventory.Weight,
+		inventory.MaxWeight,
+	)
+}
+
+// Widget helpers from upstream's restyled window; the canvas HUD does
+// not call these, but the shared tests exercise them.
+func characterTextCell(text string, width float32, color widget.Color) widget.Widget {
+	return characterAlignedTextCell(text, width, color, primitives.TextAlignStart)
+}
+
+func characterAlignedTextCell(text string, width float32, color widget.Color, align primitives.TextAlign) widget.Widget {
+	return primitives.Box(
+		rotheme.Text(text).
+			Color(color).
+			Align(align),
+	).Width(width).CrossAlign(primitives.CrossAxisStretch)
+}
+
+func characterLevelProgressRow(label string, level int, current, next int64, fill widget.Color, width float32) widget.Widget {
+	barWidth := max(float32(0), width-characterEXPLabelWidth-characterEXPLabelBarGap)
+	textHeight := rotheme.Default.Typography.TextSize * characterTextLineHeight
+	barTop := max(float32(0), (textHeight-characterEXPBarHeight)/2)
+	return primitives.HBox(
+		characterTextCell(fmt.Sprintf("%s Lv. %d", label, level), characterEXPLabelWidth, rotheme.Default.Colors.Text),
+		primitives.Box(
+			newCharacterBarWidgetWithBackground(ratioInt64(current, next), fill, widget.ColorWhite, barWidth, characterEXPBarHeight),
+		).PaddingTop(barTop),
+	).
+		Width(width).
+		Gap(characterEXPLabelBarGap)
+}
+
+func characterEXPPanel(progress session.Progress, width float32) widget.Widget {
+	rowWidth := max(float32(0), width-2*characterEXPPanelPaddingX)
+	return primitives.Box(
+		characterLevelProgressRow("Base", progress.BaseLevel, progress.BaseExp, progress.NextBaseExp, Color(characterWindowEXPColor), rowWidth),
+		characterLevelProgressRow("Job", progress.JobLevel, progress.JobExp, progress.NextJobExp, Color(characterWindowJobEXPColor), rowWidth),
+	).
+		Width(width).
+		PaddingXY(characterEXPPanelPaddingX, characterEXPPanelPaddingY).
+		Gap(characterEXPPanelGap).
+		Background(rotheme.Default.Colors.WindowFooter).
+		Rounded(characterEXPPanelRadius)
+}
+
+type characterBarWidget struct {
+	widget.WidgetBase
+	ratio      float64
+	fill       widget.Color
+	background widget.Color
+	width      float32
+	height     float32
+}
+
+func newCharacterBarWidgetWithBackground(ratio float64, fill, background widget.Color, width, height float32) *characterBarWidget {
+	w := &characterBarWidget{ratio: ratio, fill: fill, background: background, width: width, height: height}
+	w.SetVisible(true)
+	w.SetEnabled(false)
+	return w
+}
+
+func (w *characterBarWidget) Layout(ctx widget.Context, constraints geometry.Constraints) geometry.Size {
+	size := constraints.Constrain(geometry.Sz(w.width, w.height))
+	w.SetBounds(geometry.FromPointSize(w.Position(), size))
+	return size
+}
+
+func (w *characterBarWidget) Draw(ctx widget.Context, canvas widget.Canvas) {
+	if !w.IsVisible() {
+		return
+	}
+	bounds := w.Bounds()
+	canvas.DrawRect(bounds, w.background)
+	if w.ratio > 0 {
+		fillW := float32(math.Round(float64(bounds.Width()) * w.ratio))
+		if fillW < 1 {
+			fillW = 1
+		}
+		if fillW > bounds.Width() {
+			fillW = bounds.Width()
+		}
+		canvas.DrawRect(geometry.NewRect(bounds.Min.X, bounds.Min.Y, fillW, bounds.Height()), w.fill)
+	}
+	canvas.StrokeRect(bounds, rotheme.Default.Colors.WindowBorder, 1)
+}
+
+func (w *characterBarWidget) Event(ctx widget.Context, e event.Event) bool {
+	return false
 }
 
 func displayWeight(raw int) int {

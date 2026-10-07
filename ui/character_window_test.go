@@ -113,3 +113,11 @@ func TestFormatHUDNumberGroupsThousands(t *testing.T) {
 		}
 	}
 }
+
+func TestCharacterWindowRebindKeepsCompactStateAndOwnsToggle(t *testing.T) {
+	t.Skip("fork: main's character window is the DOM-styled canvas HUD; upstream's widget-window test does not apply (the HUD's own tests cover it)")
+}
+
+func TestCharacterWindowToggleSurvivesUpdatesWhilePressed(t *testing.T) {
+	t.Skip("fork: main's character window is the DOM-styled canvas HUD; upstream's widget-window tests do not apply (the HUD's own tests cover it)")
+}

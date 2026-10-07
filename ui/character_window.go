@@ -2,11 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"image/color"
-	"math"
-	"strconv"
-	"strings"
-
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
@@ -15,6 +10,10 @@ import (
 	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/session"
 	"github.com/kivutar/goro/ui/rotheme"
+	"image/color"
+	"math"
+	"strconv"
+	"strings"
 )
 
 const (

@@ -718,9 +718,6 @@ func (c *ChatConsole) submitOrganizeParty(ctx client.Context, text string) {
 		c.AddErrorMessage("send failed: %s", err)
 		return
 	}
-	if ctx.Session != nil {
-		ctx.Session.Party.Name = name
-	}
 }
 
 func (c *ChatConsole) submitCreateGuild(ctx client.Context, text string) {

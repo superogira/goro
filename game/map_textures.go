@@ -22,6 +22,10 @@ func (m *WorldMode) ownMapImage(img *render.Image) *render.Image {
 }
 
 func (m *WorldMode) releaseMapTextures() {
+	if m.spriteUpscaler != nil {
+		close(m.spriteUpscaler.stop)
+		m.spriteUpscaler = nil
+	}
 	m.mapImages.Release()
 	m.mapImages = nil
 	m.mapTextureUploads = nil
@@ -38,6 +42,10 @@ func (m *WorldMode) Leave() {
 func (m *WorldMode) preloadMapTextures(ctx client.Context) {
 	if ctx.Config.Headless || ctx.Resources == nil || ctx.World == nil {
 		return
+	}
+	m.textureUpscaling = ctx.Config.Render.TextureUpscaling
+	if ctx.Runtime != nil {
+		m.textureUpscaling = ctx.Runtime.TextureUpscaling()
 	}
 	seen := make(map[*render.Image]bool)
 	add := func(img *render.Image) {
@@ -86,11 +94,11 @@ func (m *WorldMode) prepareMapTextureUploads(screen *render.Frame) bool {
 	m.mapUploadBatch = 0
 	bytes := 0
 	for _, img := range m.mapTextureUploads {
-		size := len(img.RGBA().Pix)
+		size := img.ByteSize()
 		if m.mapUploadBatch > 0 && (bytes+size > mapTextureUploadBytes || m.mapUploadBatch >= mapTextureUploadCount) {
 			break
 		}
-		screen.PrepareImage(img, groundTextureDrawOptions())
+		screen.PrepareImage(img)
 		m.mapUploadBatch++
 		bytes += size
 	}

@@ -63,6 +63,7 @@ func (m *LoginMode) selectLoginServer(ctx client.Context, index int) {
 		return
 	}
 	m.selectedLoginServer = index
+	m.playConfirmSFX(ctx)
 	m.hideServiceWindow(ctx)
 	m.accountStep = loginAccountCredentials
 	m.status = "enter account credentials"

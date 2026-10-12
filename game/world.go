@@ -152,10 +152,12 @@ type WorldMode struct {
 	hoveredWalk        hoveredWalkCellCache
 	bot                *luaScript
 	companionAI        companionAISystem
-	walkSequence      uint64
-	mapImages         *render.ImageGroup
-	mapTextureUploads []*render.Image
-	mapUploadBatch    int
+	walkSequence       uint64
+	mapImages          *render.ImageGroup
+	mapTextureUploads  []*render.Image
+	mapUploadBatch     int
+	textureUpscaling   bool // Captured when loading the map; cached meshes keep matching UVs.
+	spriteUpscaler     *spriteUpscaler
 }
 
 type worldUI struct {

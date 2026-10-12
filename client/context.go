@@ -64,6 +64,18 @@ type RuntimeSettings interface {
 	SetFPS(bool)
 	ResolutionScale() float64
 	SetResolutionScale(float64)
+	Anisotropy() int
+	SetAnisotropy(int)
+	TextureUpscaling() bool
+	SetTextureUpscaling(bool)
+	SmoothSprites() bool
+	SetSmoothSprites(bool)
+	MSAA() bool
+	SetMSAA(bool)
+	Bloom() bool
+	SetBloom(bool)
+	SSAO() bool
+	SetSSAO(bool)
 }
 
 func (c Context) ScriptPath() string {

@@ -1,12 +1,81 @@
 package game
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
+	gameui "github.com/kivutar/goro/ui"
 )
+
+func TestPartyCreationWaitsForServerMembership(t *testing.T) {
+	for _, command := range []bool{false, true} {
+		name := "window"
+		if command {
+			name = "organize command"
+		}
+		t.Run(name, func(t *testing.T) {
+			netClient, conn := newBotTestConnection(t, 20080910)
+			s := &session.Session{AccountID: 123, Party: session.Party{RefuseInvites: true}}
+			ctx := client.Context{Session: s, Network: netClient}
+			mode := &WorldMode{}
+			request := func() {
+				t.Helper()
+				if command {
+					mode.ui.console.SendText(ctx, `/organize "Friends"`)
+					readBotTestPackets(t, conn, network.BuildMakePartyPacket("Friends"))
+				} else {
+					mode.createPartyFromWindow(ctx, gameui.PartyCreateWindowAction{
+						Name: "Friends", ItemPickup: 1, ItemDivision: 1,
+					})
+					readBotTestPackets(t, conn, network.BuildMakeParty2Packet("Friends", 1, 1))
+				}
+				if s.Party.Active() {
+					t.Fatalf("request created unconfirmed party: %+v", s.Party)
+				}
+			}
+			request()
+			// Basic Skill below level 7 is rejected through ZC_ACK_TOUSESKILL,
+			// without a party creation response.
+			mode.applySkillFailAck(ctx, network.SkillFailAck{SkillID: 1, Number: 4})
+			if s.Party.Active() {
+				t.Fatalf("rejected party is active: %+v", s.Party)
+			}
+			if messages := mode.ui.console.Messages(); len(messages) != 1 || messages[0].Text != "Cannot form a party." {
+				t.Fatalf("rejection messages = %+v", messages)
+			}
+			request() // A refused request must not block another attempt.
+			mode.handlePartyCreateResult(ctx, network.PartyCreateResult{Result: 0})
+			applyPartyList(ctx, network.PartyList{
+				Name: "Friends", Members: []network.PartyMember{{AccountID: 123, Name: "Alice"}},
+			})
+			if !s.Party.Active() || s.Party.Name != "Friends" || len(s.Party.Members) != 1 || s.Party.Members[0].AccountID != 123 {
+				t.Fatalf("confirmed party = %+v", s.Party)
+			}
+			if !s.Party.RefuseInvites {
+				t.Fatal("creation changed the invitation preference")
+			}
+		})
+	}
+}
+
+func TestPartyCreationFailurePreservesServerState(t *testing.T) {
+	for _, party := range []session.Party{
+		{RefuseInvites: true},
+		{Name: "Existing", Members: []session.PartyMember{{AccountID: 123}}},
+	} {
+		for _, result := range []uint8{1, 2, 3} {
+			s := &session.Session{Party: party}
+			mode := &WorldMode{}
+			mode.handlePartyCreateResult(client.Context{Session: s}, network.PartyCreateResult{Result: result})
+			if !reflect.DeepEqual(s.Party, party) {
+				t.Fatalf("result %d changed party state from %+v to %+v", result, party, s.Party)
+			}
+		}
+	}
+}
 
 func TestPartyVitalsDoNotCreateMembers(t *testing.T) {
 	s := &session.Session{}

@@ -65,11 +65,6 @@ func (m *WorldMode) createPartyFromWindow(ctx client.Context, action gameui.Part
 		glog.Warnf("party create failed name=%q pickup=%d division=%d: %v", name, action.ItemPickup, action.ItemDivision, err)
 		return
 	}
-	if ctx.Session != nil {
-		ctx.Session.Party.Name = name
-		ctx.Session.Party.ItemPickupRule = action.ItemPickup
-		ctx.Session.Party.ItemDivisionRule = action.ItemDivision
-	}
 }
 
 func (m *WorldMode) openPartyMemberInfo(ctx client.Context, member session.PartyMember) {
@@ -128,13 +123,10 @@ func (m *WorldMode) handlePartyCreateResult(ctx client.Context, result network.P
 		m.ui.console.AddBlueMessage("Party created.")
 		syncLocalPartyVitals(ctx)
 	case 1:
-		clearPendingParty(ctx)
 		m.ui.console.AddErrorMessage("Party name already exists.")
 	case 2:
-		clearPendingParty(ctx)
 		m.ui.console.AddErrorMessage("You are already in a party.")
 	case 3:
-		clearPendingParty(ctx)
 		m.ui.console.AddErrorMessage("Cannot organize a party on this map.")
 	default:
 		// rAthena documents unknown ZC_ACK_MAKE_GROUP results as "nothing".
@@ -352,13 +344,6 @@ func partyDisplayName(name string) string {
 		return "Player"
 	}
 	return name
-}
-
-func clearPendingParty(ctx client.Context) {
-	if ctx.Session == nil || len(ctx.Session.Party.Members) > 0 {
-		return
-	}
-	ctx.Session.Party = session.Party{}
 }
 
 func syncLocalPartyVitals(ctx client.Context) {

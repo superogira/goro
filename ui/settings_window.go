@@ -15,13 +15,22 @@ import (
 
 const (
 	settingsWindowW = 300
-	settingsWindowH = 430
+	settingsWindowH = 359
+)
+
+type settingsTab int
+
+const (
+	settingsTabDisplay settingsTab = iota
+	settingsTabSound
+	settingsTabGameplay
 )
 
 type SettingsWindow struct {
 	Window
 	webOpen    bool
 	webSyncKey string
+	tab        settingsTab
 }
 
 // IsOpen reports the settings window's open state. On web the DOM panel
@@ -105,8 +114,50 @@ func (w *SettingsWindow) widgetTree(ctx client.Context) widget.Widget {
 
 func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 	return primitives.Box(
-		rotheme.Label("Display"),
+		w.tabStrip(),
+		primitives.Box().Height(1).Background(rotheme.Default.Colors.WindowBorder),
+		primitives.Expanded(w.tabContent(ctx)),
+	).CrossAlign(primitives.CrossAxisStretch)
+}
 
+func (w *SettingsWindow) tabStrip() widget.Widget {
+	var tabs []widget.Widget
+	for _, def := range []struct {
+		tab   settingsTab
+		label string
+	}{
+		{settingsTabDisplay, "Display"},
+		{settingsTabSound, "Sound"},
+		{settingsTabGameplay, "Gameplay"},
+	} {
+		tabs = append(tabs, newTabWidget(tabWidgetConfig{
+			label:  def.label,
+			active: w.tab == def.tab,
+			width:  88,
+			height: 24,
+			onClick: func() {
+				w.tab = def.tab
+				w.refresh(w.ctx)
+			},
+		}))
+	}
+	tabs = append(tabs, primitives.Expanded(primitives.Box()))
+	return primitives.HBox(tabs...).Gap(-1)
+}
+
+func (w *SettingsWindow) tabContent(ctx client.Context) widget.Widget {
+	switch w.tab {
+	case settingsTabSound:
+		return w.soundTree(ctx)
+	case settingsTabGameplay:
+		return w.gameplayTree(ctx)
+	default:
+		return w.displayTree(ctx)
+	}
+}
+
+func (w *SettingsWindow) displayTree(ctx client.Context) widget.Widget {
+	return primitives.Box(
 		rotheme.Checkbox(
 			checkbox.Checked(settingsRuntimeFullscreen(ctx)),
 			checkbox.LabelOpt("Fullscreen"),
@@ -144,18 +195,85 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 		),
 
 		primitives.HBox(
-			rotheme.Text("Resolution"),
-			resolutionScaleButtons(ctx, func(scale float64) {
+			primitives.Expanded(rotheme.Text("Anisotropic filtering")),
+			rotheme.Button(anisotropyLabel(settingsAnisotropy(ctx)), func() {
+				level := settingsAnisotropy(ctx) * 2
+				if level == 0 {
+					level = 2
+				} else if level > 16 {
+					level = 0
+				}
 				if ctx.Runtime != nil {
-					ctx.Runtime.SetResolutionScale(scale)
+					ctx.Runtime.SetAnisotropy(level)
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}).Width(48),
+		).Gap(8).Height(rotheme.Default.Typography.TextSize+rotheme.ButtonPaddingY*2),
+
+		primitives.HBox(
+			primitives.Expanded(rotheme.Text("Upscaling (Next map)")),
+			rotheme.Button(textureUpscalingLabel(settingsTextureUpscaling(ctx)), func() {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetTextureUpscaling(!ctx.Runtime.TextureUpscaling())
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}).Width(48),
+		).Gap(8).Height(rotheme.Default.Typography.TextSize+rotheme.ButtonPaddingY*2),
+
+		rotheme.Checkbox(
+			checkbox.Checked(settingsSmoothSprites(ctx)),
+			checkbox.LabelOpt("Smooth world sprites"),
+			checkbox.OnToggle(func(enabled bool) {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetSmoothSprites(enabled)
 				}
 				w.saveSettings(ctx)
 				w.refresh(ctx)
 			}),
-		).Gap(6),
+		),
 
-		rotheme.Label("Sound"),
+		rotheme.Checkbox(
+			checkbox.Checked(settingsMSAA(ctx)),
+			checkbox.LabelOpt("Anti-aliasing 4x (Restart)"),
+			checkbox.OnToggle(func(enabled bool) {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetMSAA(enabled)
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}),
+		),
 
+		rotheme.Checkbox(
+			checkbox.Checked(settingsBloom(ctx)),
+			checkbox.LabelOpt("Bloom"),
+			checkbox.OnToggle(func(enabled bool) {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetBloom(enabled)
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}),
+		),
+
+		rotheme.Checkbox(
+			checkbox.Checked(settingsSSAO(ctx)),
+			checkbox.LabelOpt("Ambient occlusion"),
+			checkbox.OnToggle(func(enabled bool) {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetSSAO(enabled)
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}),
+		),
+	).Padding(14).Gap(8)
+}
+
+func (w *SettingsWindow) soundTree(ctx client.Context) widget.Widget {
+	return primitives.Box(
 		primitives.HBox(
 			rotheme.Text("BGM Vol"),
 			primitives.Expanded(
@@ -191,9 +309,11 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 				),
 			),
 		).Gap(8),
+	).Padding(14).Gap(8)
+}
 
-		rotheme.Label("Gameplay"),
-
+func (w *SettingsWindow) gameplayTree(ctx client.Context) widget.Widget {
+	return primitives.Box(
 		rotheme.Checkbox(
 			checkbox.Checked(settingsNoShift(ctx)),
 			checkbox.LabelOpt("No Shift"),
@@ -278,6 +398,17 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 				w.refresh(ctx)
 			}),
 		),
+
+		primitives.HBox(
+			rotheme.Text("Resolution"),
+			resolutionScaleButtons(ctx, func(scale float64) {
+				if ctx.Runtime != nil {
+					ctx.Runtime.SetResolutionScale(scale)
+				}
+				w.saveSettings(ctx)
+				w.refresh(ctx)
+			}),
+		).Gap(6),
 	).
 		Padding(14).
 		Gap(8)
@@ -292,18 +423,24 @@ func (w *SettingsWindow) refresh(ctx client.Context) {
 
 func (w *SettingsWindow) saveSettings(ctx client.Context) {
 	settings := config.UserSettings{
-		Fullscreen:      settingsRuntimeFullscreen(ctx),
-		VSync:           settingsRuntimeVSync(ctx),
-		FPS:             settingsRuntimeFPS(ctx),
-		ResolutionScale: settingsResolutionScale(ctx),
-		BGMVolume:       settingsVolumeBGM(ctx),
-		SFXVolume:       settingsVolumeSFX(ctx),
-		NoShift:         settingsNoShift(ctx),
-		NoCtrl:          settingsNoCtrl(ctx),
-		LessEffects:     settingsLessEffects(ctx),
-		SnapTargets:     settingsSnapTargets(ctx),
-		SnapItems:       settingsSnapItems(ctx),
-		SnapRadius:      settingsSnapRadius(ctx),
+		Fullscreen:       settingsRuntimeFullscreen(ctx),
+		VSync:            settingsRuntimeVSync(ctx),
+		FPS:              settingsRuntimeFPS(ctx),
+		ResolutionScale:  settingsResolutionScale(ctx),
+		Anisotropy:       settingsAnisotropy(ctx),
+		TextureUpscaling: settingsTextureUpscaling(ctx),
+		SmoothSprites:    settingsSmoothSprites(ctx),
+		MSAA:             settingsMSAA(ctx),
+		Bloom:            settingsBloom(ctx),
+		SSAO:             settingsSSAO(ctx),
+		BGMVolume:        settingsVolumeBGM(ctx),
+		SFXVolume:        settingsVolumeSFX(ctx),
+		NoShift:          settingsNoShift(ctx),
+		NoCtrl:           settingsNoCtrl(ctx),
+		LessEffects:      settingsLessEffects(ctx),
+		SnapTargets:      settingsSnapTargets(ctx),
+		SnapItems:        settingsSnapItems(ctx),
+		SnapRadius:       settingsSnapRadius(ctx),
 	}
 	path, err := ctx.Config.SaveUserSettings(settings)
 	if err != nil {
@@ -388,6 +525,41 @@ func absFloat(v float64) float64 {
 	return v
 }
 
+func settingsAnisotropy(ctx client.Context) int {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.Anisotropy()
+	}
+	return ctx.Config.Render.Anisotropy
+}
+
+func settingsSmoothSprites(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.SmoothSprites()
+	}
+	return ctx.Config.Render.SmoothSprites
+}
+
+func settingsTextureUpscaling(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.TextureUpscaling()
+	}
+	return ctx.Config.Render.TextureUpscaling
+}
+
+func textureUpscalingLabel(enabled bool) string {
+	if enabled {
+		return "2x"
+	}
+	return "Off"
+}
+
+func anisotropyLabel(level int) string {
+	if level == 0 {
+		return "Off"
+	}
+	return fmt.Sprintf("%dx", level)
+}
+
 func settingsNoShift(ctx client.Context) bool {
 	if ctx.Session != nil {
 		return ctx.Session.NoShift
@@ -433,4 +605,25 @@ func settingsSnapRadius(ctx client.Context) float64 {
 		return v
 	}
 	return 1
+}
+
+func settingsMSAA(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.MSAA()
+	}
+	return ctx.Config.Render.MSAA
+}
+
+func settingsBloom(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.Bloom()
+	}
+	return ctx.Config.Render.Bloom
+}
+
+func settingsSSAO(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.SSAO()
+	}
+	return ctx.Config.Render.SSAO
 }

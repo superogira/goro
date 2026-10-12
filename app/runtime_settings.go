@@ -5,22 +5,68 @@ import (
 	"sync/atomic"
 
 	"github.com/gogpu/gogpu"
+	"github.com/kivutar/goro/config"
 )
 
 type runtimeSettings struct {
-	fullscreen atomic.Bool
-	vsync      atomic.Bool
-	fps        atomic.Bool
-	resScale   atomic.Uint32 // IEEE-754 bits; 0 = 1.0
+	fullscreen       atomic.Bool
+	vsync            atomic.Bool
+	fps              atomic.Bool
+	resScale         atomic.Uint32 // IEEE-754 bits; 0 = 1.0
+	anisotropy       atomic.Int32
+	textureUpscaling atomic.Bool
+	smoothSprites    atomic.Bool
+	msaa             atomic.Bool
+	bloom            atomic.Bool
+	ssao             atomic.Bool
 }
 
-func newRuntimeSettings(fullscreen, vsync, fps bool, resolutionScale float64) *runtimeSettings {
+func newRuntimeSettings(cfg config.Config) *runtimeSettings {
 	settings := &runtimeSettings{}
-	settings.fullscreen.Store(fullscreen)
-	settings.vsync.Store(vsync)
-	settings.fps.Store(fps)
-	settings.SetResolutionScale(resolutionScale)
+	settings.fullscreen.Store(cfg.Window.Fullscreen)
+	settings.vsync.Store(cfg.Render.VSync)
+	settings.fps.Store(cfg.Render.FPS)
+	settings.SetResolutionScale(cfg.Render.ResolutionScale)
+	settings.SetAnisotropy(cfg.Render.Anisotropy)
+	settings.SetTextureUpscaling(cfg.Render.TextureUpscaling)
+	settings.SetSmoothSprites(cfg.Render.SmoothSprites)
+	settings.SetMSAA(cfg.Render.MSAA)
+	settings.SetBloom(cfg.Render.Bloom)
+	settings.SetSSAO(cfg.Render.SSAO)
 	return settings
+}
+
+func (s *runtimeSettings) TextureUpscaling() bool {
+	return s != nil && s.textureUpscaling.Load()
+}
+
+func (s *runtimeSettings) SetTextureUpscaling(value bool) {
+	if s != nil {
+		s.textureUpscaling.Store(value)
+	}
+}
+
+func (s *runtimeSettings) SmoothSprites() bool {
+	return s == nil || s.smoothSprites.Load()
+}
+
+func (s *runtimeSettings) SetSmoothSprites(value bool) {
+	if s != nil {
+		s.smoothSprites.Store(value)
+	}
+}
+
+func (s *runtimeSettings) Anisotropy() int {
+	if s == nil {
+		return 0
+	}
+	return int(s.anisotropy.Load())
+}
+
+func (s *runtimeSettings) SetAnisotropy(value int) {
+	if s != nil {
+		s.anisotropy.Store(int32(value))
+	}
 }
 
 func (s *runtimeSettings) Fullscreen() bool {
@@ -89,4 +135,34 @@ func (s *runtimeSettings) SetResolutionScale(value float64) {
 		s.resScale.Store(math.Float32bits(float32(value)))
 	}
 	gogpu.SetBrowserResolutionScale(value)
+}
+
+func (s *runtimeSettings) MSAA() bool {
+	return s != nil && s.msaa.Load()
+}
+
+func (s *runtimeSettings) SetMSAA(value bool) {
+	if s != nil {
+		s.msaa.Store(value)
+	}
+}
+
+func (s *runtimeSettings) Bloom() bool {
+	return s != nil && s.bloom.Load()
+}
+
+func (s *runtimeSettings) SetBloom(value bool) {
+	if s != nil {
+		s.bloom.Store(value)
+	}
+}
+
+func (s *runtimeSettings) SSAO() bool {
+	return s != nil && s.ssao.Load()
+}
+
+func (s *runtimeSettings) SetSSAO(value bool) {
+	if s != nil {
+		s.ssao.Store(value)
+	}
 }

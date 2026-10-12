@@ -143,10 +143,57 @@ bgm_volume = 0.55
 [render]
 graphics_api = vulkan
 vsync = true
+anisotropy = 8
+texture_upscaling = false
+smooth_sprites = true
+msaa = false
+bloom = false
+ssao = false
 
 [network]
 trace = false
 ```
+
+Anisotropic filtering sharpens terrain and model textures viewed at an angle.
+It defaults to 8x and can be changed live in Settings, or with `--anisotropy`:
+`0` (off), `2`, `4`, `8`, or `16`. It falls back to trilinear filtering on
+unsupported adapters. The current DX12 backend also uses trilinear filtering.
+
+"Upscaling (Next map)" in Settings enlarges terrain, model, and world sprite
+textures with xBR 2x. It defaults off; `--texture-upscaling` enables it at launch. Changes
+apply when the next map loads, including reconnecting to the current map.
+Terrain and model textures are processed on the CPU once per map load, before
+generating mipmaps, and reused during rendering on every backend. Upscaled textures use roughly
+four times the pixel memory and take longer to load. Textures larger than 1024
+pixels on either axis keep their original size. Characters, monsters, NPCs,
+companions, and dropped items are processed after composing their animation frames,
+in a background worker. Each frame keeps its original size and position in the
+world, displays normally until its 2x version is ready, and reuses the result
+for the rest of the map. UI, effects, shadows, water, and lightmaps are unchanged.
+
+"Smooth world sprites" in Settings switches characters, monsters, NPCs, and
+dropped items between smooth (default) and crisp nearest-neighbor sampling.
+It applies immediately and is saved as `smooth_sprites`. Use
+`--smooth-sprites=false` to start with crisp sprites. UI, shadows, effects,
+and the cached sprite composition keep their existing filtering.
+
+"Anti-aliasing 4x (Restart)" in Settings enables 4x MSAA for the world,
+including terrain and model edges. UI and text stay at native resolution.
+It defaults off to avoid the extra GPU memory and rendering cost, and is saved
+as `msaa`. Restart after changing it, or launch with `--msaa` to try it.
+
+"Bloom" in Settings adds a subtle glow around bright world pixels. It defaults
+off, applies immediately, and is saved as `bloom`; `--bloom` enables it at launch.
+It works with or without MSAA. The blur runs at quarter resolution and is
+composited before the UI, keeping text and windows sharp. This is a brightness
+filter on the existing scene, so bright scenery and sprites can glow too.
+
+"Ambient occlusion" in Settings adds subtle contact shading to terrain and
+models. It defaults off and applies immediately; `--ssao` enables it at launch.
+It uses a separate geometry depth pass and half-resolution occlusion, works
+with MSAA and bloom, and is applied before water, effects, sprites, and UI.
+This is an optional visual enhancement, not an original-client effect; it adds
+GPU work and can darken areas already shaded by the map's baked lighting.
 
 Command-line options override the ini file:
 
@@ -258,7 +305,8 @@ only suppresses it inside the map so the session stays playable.
 
 These are tutorials on how to setup a development environment.
 
-- [Server setup](docs/rathena-setup.md)
+- [rAthena server setup](docs/rathena-setup.md)
+- [Hercules server setup](docs/hercules-setup.md)
 - [Client setup](docs/client-setup.md)
 - [Homunculus and mercenary support](docs/companions-20080910.md)
 - [Lua bot scripting](docs/bot-scripting.md)

@@ -18,6 +18,9 @@ func TestRendererShadersParse(t *testing.T) {
 		"screen":          screenShaderWGSL,
 		"world":           worldShaderWGSL,
 		"world-billboard": worldBillboardShaderWGSL,
+		"bloom":           bloomShaderWGSL,
+		"ssao":            ssaoShaderWGSL,
+		"ssao-depth":      worldShaderWGSL + ssaoDepthShaderWGSL,
 	} {
 		ast, err := naga.Parse(source)
 		if err != nil {
@@ -34,6 +37,9 @@ func TestRendererShadersGenerateSPIRV(t *testing.T) {
 		"screen":          screenShaderWGSL,
 		"world":           worldShaderWGSL,
 		"world-billboard": worldBillboardShaderWGSL,
+		"bloom":           bloomShaderWGSL,
+		"ssao":            ssaoShaderWGSL,
+		"ssao-depth":      worldShaderWGSL + ssaoDepthShaderWGSL,
 	} {
 		ast, err := naga.Parse(source)
 		if err != nil {
@@ -268,16 +274,17 @@ func TestWorldPipelineHonorsIndependentDepthOptions(t *testing.T) {
 	}
 }
 
-func TestScreenPipelineSharesWorldDepthAttachment(t *testing.T) {
-	r := &gpuRenderer{format: gputypes.TextureFormatBGRA8Unorm}
-	world := r.worldPipelineDescriptor(nil, gputypes.BlendStateAlpha(), true, true, "world")
-	screen := r.screenPipelineDescriptor(nil, gputypes.BlendStateAlpha(), "screen")
-	depth := screen.DepthStencil
-	if depth == nil || depth.Format != world.DepthStencil.Format {
-		t.Fatalf("screen depth attachment = %+v, must match world attachment %+v", depth, world.DepthStencil)
-	}
-	if depth.DepthWriteEnabled || depth.DepthCompare != gputypes.CompareFunctionAlways {
-		t.Fatalf("screen draws must overlay the world without modifying depth: %+v", depth)
+func TestScreenPipelineIsIndependentOfWorldMSAA(t *testing.T) {
+	for _, samples := range []uint32{1, 4} {
+		r := &gpuRenderer{format: gputypes.TextureFormatBGRA8Unorm, sampleCount: samples}
+		world := r.worldPipelineDescriptor(nil, gputypes.BlendStateAlpha(), true, true, "world")
+		screen := r.screenPipelineDescriptor(nil, gputypes.BlendStateAlpha(), "screen")
+		if world.Multisample.Count != samples || world.Multisample.Mask != 0xFFFFFFFF {
+			t.Fatalf("world multisampling = %+v, want all %d samples", world.Multisample, samples)
+		}
+		if screen.DepthStencil != nil || screen.Multisample.Count > 1 {
+			t.Fatalf("UI must use a single-sample pass without depth: %+v", screen)
+		}
 	}
 }
 

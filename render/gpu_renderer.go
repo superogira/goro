@@ -56,15 +56,21 @@ type gpuRenderer struct {
 	uniform                *wgpu.Buffer
 	worldUniform           *wgpu.Buffer
 	samplers               map[samplerKey]*wgpu.Sampler
+	lightmapSampler        *wgpu.Sampler
+	anisotropy             int
+	anisotropySupported    bool
+	smoothSprites          bool
 	textures               map[*Image]*gpuImageTexture
 	imageGroups            map[*ImageGroup]struct{}
 	bindGroups             map[bindGroupKey]*wgpu.BindGroup
 	worldMeshes            map[*WorldMesh]*gpuWorldMesh
-	frame                  uint64
-	depthTex               *wgpu.Texture
-	depthView              *wgpu.TextureView
-	depthWidth             int
-	depthHeight            int
+	sampleCount            uint32
+	depthTarget            gpuRenderTarget
+	msaaTarget             gpuRenderTarget
+	bloomEnabled           bool
+	bloom                  *gpuBloom
+	ssaoEnabled            bool
+	ssao                   *gpuSSAO
 	worldVertexBuf         dynamicGPUBuffer
 	worldIndexBuf          dynamicGPUBuffer
 	screenVertexBuf        dynamicGPUBuffer
@@ -91,11 +97,12 @@ type gpuRenderer struct {
 }
 
 type gpuImageTexture struct {
-	tex      *gogpu.Texture
-	version  uint64
-	width    int
-	height   int
-	lastUsed uint64
+	tex       *wgpu.Texture
+	view      *wgpu.TextureView
+	version   uint64
+	width     int
+	height    int
+	mipLevels int
 }
 
 type dynamicGPUBuffer struct {
@@ -108,7 +115,6 @@ type gpuWorldMesh struct {
 	indexBuf   *wgpu.Buffer
 	indexCount uint32
 	version    uint64
-	lastUsed   uint64
 }
 
 type worldMeshBatch struct {
@@ -169,13 +175,14 @@ func (s *renderPassState) setIndexBuffer(pass *wgpu.RenderPassEncoder, buf *wgpu
 }
 
 type samplerKey struct {
-	filter  Filter
-	address Address
+	filter     Filter
+	address    Address
+	anisotropy uint16
 }
 
 type bindGroupKey struct {
-	texture      *gogpu.Texture
-	lightTexture *gogpu.Texture
+	texture      *gpuImageTexture
+	lightTexture *gpuImageTexture
 	sampler      *wgpu.Sampler
 	layout       *wgpu.BindGroupLayout
 }
@@ -197,6 +204,15 @@ func newGPURenderer(ctx *gogpu.Context, app *gogpu.App, cfg config.RenderConfig)
 		worldDebug:   cfg.WorldDebugStats,
 		damageSource: ctx.RegisterDamageSource("goro"),
 	}
+	r.anisotropy = cfg.Anisotropy
+	r.smoothSprites = cfg.SmoothSprites
+	r.bloomEnabled = cfg.Bloom
+	r.ssaoEnabled = cfg.SSAO
+	r.sampleCount = 1
+	if cfg.MSAA {
+		r.sampleCount = 4
+	}
+	r.anisotropySupported = app.GPUContextProvider().DownlevelCapabilities().Flags.Contains(gputypes.DownlevelFlagsAnisotropicFiltering)
 	if r.queue == nil {
 		r.queue = r.dev.Queue()
 	}
@@ -209,6 +225,12 @@ func newGPURenderer(ctx *gogpu.Context, app *gogpu.App, cfg config.RenderConfig)
 
 func (r *gpuRenderer) init(_ *gogpu.Context) error {
 	var err error
+	// A separate bilinear sampler keeps the lightmap atlas from sampling into
+	// neighboring tiles when the surface texture uses anisotropic filtering.
+	r.lightmapSampler, err = r.sampler(DrawTrianglesOptions{Filter: FilterLinear, Address: AddressClampToEdge}, nil)
+	if err != nil {
+		return err
+	}
 	r.uniform, err = r.dev.CreateBuffer(&wgpu.BufferDescriptor{
 		Label: "goro-screen-uniform",
 		Size:  16,
@@ -268,6 +290,7 @@ func (r *gpuRenderer) init(_ *gogpu.Context) error {
 			{Binding: 1, Visibility: wgpu.ShaderStageFragment, Sampler: &gputypes.SamplerBindingLayout{Type: gputypes.SamplerBindingTypeFiltering}},
 			{Binding: 2, Visibility: wgpu.ShaderStageFragment, Texture: &gputypes.TextureBindingLayout{SampleType: gputypes.TextureSampleTypeFloat, ViewDimension: gputypes.TextureViewDimension2D}},
 			{Binding: 3, Visibility: wgpu.ShaderStageFragment, Texture: &gputypes.TextureBindingLayout{SampleType: gputypes.TextureSampleTypeFloat, ViewDimension: gputypes.TextureViewDimension2D}},
+			{Binding: 4, Visibility: wgpu.ShaderStageFragment, Sampler: &gputypes.SamplerBindingLayout{Type: gputypes.SamplerBindingTypeFiltering}},
 		},
 	})
 	if err != nil {
@@ -375,13 +398,6 @@ func (r *gpuRenderer) screenPipelineDescriptor(shader *wgpu.ShaderModule, blend 
 			FrontFace: gputypes.FrontFaceCCW,
 			CullMode:  gputypes.CullModeNone,
 		},
-		// Screen draws share the world's render pass, so their attachment
-		// format must match even though they neither test nor write depth.
-		DepthStencil: &wgpu.DepthStencilState{
-			Format:            depthFormat,
-			DepthWriteEnabled: false,
-			DepthCompare:      gputypes.CompareFunctionAlways,
-		},
 		Fragment: &wgpu.FragmentState{
 			Module:     shader,
 			EntryPoint: "fs_main",
@@ -424,6 +440,7 @@ func (r *gpuRenderer) worldPipelineDescriptor(shader *wgpu.ShaderModule, blend g
 			FrontFace: gputypes.FrontFaceCCW,
 			CullMode:  gputypes.CullModeNone,
 		},
+		Multisample: gputypes.MultisampleState{Count: r.sampleCount, Mask: 0xFFFFFFFF},
 		DepthStencil: &wgpu.DepthStencilState{
 			Format:            depthFormat,
 			DepthWriteEnabled: depthWrite,
@@ -478,6 +495,7 @@ func (r *gpuRenderer) createWorldBillboardPipeline(shader *wgpu.ShaderModule, bl
 			FrontFace: gputypes.FrontFaceCCW,
 			CullMode:  gputypes.CullModeNone,
 		},
+		Multisample: gputypes.MultisampleState{Count: r.sampleCount, Mask: 0xFFFFFFFF},
 		DepthStencil: &wgpu.DepthStencilState{
 			Format:            depthFormat,
 			DepthWriteEnabled: false,
@@ -507,10 +525,6 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 	if screen == nil {
 		return false, nil
 	}
-	r.frame++
-	if r.frame%gpuTrimInterval == 0 {
-		r.trimStaleResources()
-	}
 	surface := ctx.SurfaceView()
 	if surface == nil {
 		return false, nil
@@ -524,7 +538,7 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 		return false, nil
 	}
 	for _, upload := range screen.imageUploads {
-		if _, err := r.ensureTexture(ctx, upload.image, upload.options); err != nil {
+		if _, err := r.ensureTexture(upload); err != nil {
 			return false, err
 		}
 	}
@@ -536,11 +550,53 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 			return false, fmt.Errorf("upload world uniform: %w", err)
 		}
 	}
-	if err := r.ensureDepth(width, height); err != nil {
-		return false, err
+	if screen.camera.Enabled {
+		if err := r.depthTarget.ensure(r.dev, width, height, depthFormat, r.sampleCount, wgpu.TextureUsageRenderAttachment); err != nil {
+			return false, fmt.Errorf("create world depth: %w", err)
+		}
+		if r.sampleCount > 1 {
+			if err := r.msaaTarget.ensure(r.dev, width, height, r.format, r.sampleCount, wgpu.TextureUsageRenderAttachment); err != nil {
+				return false, fmt.Errorf("create MSAA color: %w", err)
+			}
+		}
+	}
+	worldTarget := surface
+	bloomActive := r.bloomEnabled && screen.camera.Enabled
+	if bloomActive {
+		if r.bloom == nil {
+			var err error
+			r.bloom, err = newGPUBloom(r.dev, r.format)
+			if err != nil {
+				return false, fmt.Errorf("create bloom: %w", err)
+			}
+		}
+		if err := r.bloom.ensure(r.dev, r.format, width, height); err != nil {
+			return false, fmt.Errorf("prepare bloom: %w", err)
+		}
+		worldTarget = r.bloom.targets[0].view
+	} else if r.bloom != nil && !r.bloomEnabled {
+		r.bloom.releaseTargets()
 	}
 	worldBuildStart := time.Now()
 	world := r.buildWorldFrame(screen)
+	ssaoActive := r.ssaoEnabled && screen.camera.Enabled
+	if ssaoActive {
+		if r.ssao == nil {
+			var err error
+			r.ssao, err = r.newSSAO()
+			if err != nil {
+				return false, fmt.Errorf("create SSAO: %w", err)
+			}
+		}
+		if err := r.ssao.ensure(r.dev, width, height); err != nil {
+			return false, fmt.Errorf("prepare SSAO: %w", err)
+		}
+		if err := r.ssao.uploadCamera(r.queue, screen.camera); err != nil {
+			return false, err
+		}
+	} else if r.ssao != nil && !r.ssaoEnabled {
+		r.ssao.releaseTargets()
+	}
 	frame := r.buildFrame(screen)
 	r.lastWorldBuildDur = time.Since(worldBuildStart)
 	r.lastWorldBatchCount = len(world.batches)
@@ -582,84 +638,77 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer enc.DiscardEncoding()
+	if ssaoActive {
+		if err := r.drawSSAO(enc, meshBatches, world, worldVertexBuf, worldIndexBuf); err != nil {
+			return false, fmt.Errorf("draw SSAO: %w", err)
+		}
+	}
 	clear := clearValue(screen.clear)
-	pass, err := enc.BeginRenderPass(&wgpu.RenderPassDescriptor{
-		ColorAttachments: []wgpu.RenderPassColorAttachment{{
-			View:       surface,
-			LoadOp:     gputypes.LoadOpClear,
-			StoreOp:    gputypes.StoreOpStore,
-			ClearValue: clear,
-		}},
-		DepthStencilAttachment: &wgpu.RenderPassDepthStencilAttachment{
-			View:            r.depthView,
-			DepthLoadOp:     gputypes.LoadOpClear,
-			DepthStoreOp:    gputypes.StoreOpStore,
-			DepthClearValue: 1,
-		},
-	})
-	if err != nil {
-		return false, err
-	}
-	worldState := renderPassState{}
 	if screen.camera.Enabled {
-		for _, batch := range meshBatches {
-			if err := r.drawWorldMeshBatch(ctx, pass, batch, &worldState); err != nil {
-				_ = pass.End()
-				return false, err
+		pass, err := enc.BeginRenderPass(r.worldPassDescriptor(worldTarget, clear))
+		if err != nil {
+			return false, err
+		}
+		if err := r.drawWorldOpaque(pass, meshBatches, world, worldVertexBuf, worldIndexBuf, nil); err != nil {
+			_ = pass.End()
+			return false, err
+		}
+		if ssaoActive {
+			pass.SetPipeline(r.ssao.composite)
+			pass.SetBindGroup(0, r.ssao.groups[1], nil)
+			pass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
+		}
+		worldState := renderPassState{}
+		if worldVertexBuf != nil && worldIndexBuf != nil {
+			worldState.setVertexBuffer(pass, worldVertexBuf)
+			worldState.setIndexBuffer(pass, worldIndexBuf)
+			for _, batch := range world.batches {
+				if batch.indexCount == 0 || batch.key.options.DepthWrite {
+					continue
+				}
+				if err := r.drawWorldBatch(pass, batch, &worldState, nil); err != nil {
+					_ = pass.End()
+					return false, err
+				}
 			}
 		}
-	}
-	if worldVertexBuf != nil && worldIndexBuf != nil && screen.camera.Enabled {
-		worldState.setVertexBuffer(pass, worldVertexBuf)
-		worldState.setIndexBuffer(pass, worldIndexBuf)
-		for _, batch := range world.batches {
-			if batch.indexCount == 0 {
-				continue
-			}
-			tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
-			if err != nil {
-				_ = pass.End()
-				return false, err
-			}
-			sampler, err := r.sampler(batch.key.options)
-			if err != nil {
-				_ = pass.End()
-				return false, err
-			}
-			lightTex, err := r.ensureBatchLightTexture(ctx, batch.key)
-			if err != nil {
-				_ = pass.End()
-				return false, err
-			}
-			bg, err := r.bindWorldGroup(r.worldUniform, 96, tex.tex, lightTex.tex, sampler)
-			if err != nil {
-				_ = pass.End()
-				return false, err
-			}
-			worldState.setPipeline(pass, r.worldPipelineFor(batch.key.options))
-			worldState.setBindGroup(pass, bg)
-			pass.DrawIndexed(gputypes.DrawIndexedArgs{
-				IndexCount:    batch.indexCount,
-				InstanceCount: 1,
-				FirstIndex:    batch.firstIndex,
-			})
-		}
-	}
-	if screen.camera.Enabled {
 		for _, meshCommand := range screen.worldMeshes {
 			mesh := meshCommand.Mesh
 			if mesh == nil || mesh.options.DepthWrite {
 				continue
 			}
-			if err := r.drawWorldMesh(ctx, pass, mesh, &worldState); err != nil {
+			if err := r.drawWorldMesh(pass, mesh, &worldState); err != nil {
 				_ = pass.End()
 				return false, err
 			}
 		}
-		if err := r.drawWorldBillboards(ctx, pass, screen.worldBillboards); err != nil {
+		if err := r.drawWorldBillboards(pass, screen.worldBillboards); err != nil {
 			_ = pass.End()
 			return false, err
 		}
+		if err := pass.End(); err != nil {
+			return false, err
+		}
+	}
+	if bloomActive {
+		if err := r.bloom.draw(enc, surface); err != nil {
+			return false, fmt.Errorf("draw bloom: %w", err)
+		}
+	}
+	// Resolve the world before drawing the UI at native resolution. The UI
+	// pass has no depth attachment and always uses single-sample pipelines.
+	load := gputypes.LoadOpClear
+	if screen.camera.Enabled {
+		load = gputypes.LoadOpLoad
+	}
+	pass, err := enc.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{{
+			View: surface, LoadOp: load, StoreOp: gputypes.StoreOpStore, ClearValue: clear,
+		}},
+	})
+	if err != nil {
+		return false, err
 	}
 	if vertexBuf != nil && indexBuf != nil {
 		pass.SetVertexBuffer(0, vertexBuf, 0)
@@ -669,17 +718,17 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 		if batch.indexCount == 0 {
 			continue
 		}
-		tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
+		tex, err := r.ensureTexture(batch.key.texture)
 		if err != nil {
 			_ = pass.End()
 			return false, err
 		}
-		sampler, err := r.sampler(batch.key.options)
+		sampler, err := r.sampler(batch.key.options, batch.key.texture)
 		if err != nil {
 			_ = pass.End()
 			return false, err
 		}
-		bg, err := r.bindGroup(r.bgl, r.uniform, 16, tex.tex, sampler)
+		bg, err := r.bindGroup(r.bgl, r.uniform, 16, tex, sampler)
 		if err != nil {
 			_ = pass.End()
 			return false, err
@@ -775,39 +824,47 @@ func maxFloat32(a, b float32) float32 {
 	return b
 }
 
-func (r *gpuRenderer) ensureTexture(ctx *gogpu.Context, img *Image, opts DrawTrianglesOptions) (*gpuImageTexture, error) {
+func (r *gpuRenderer) ensureTexture(img *Image) (*gpuImageTexture, error) {
 	if img == nil || img.pix == nil {
 		return nil, fmt.Errorf("nil render texture")
 	}
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	levels := 1 + len(img.mipmaps)
 	existing := r.textures[img]
-	if existing != nil && existing.version == img.version && existing.width == w && existing.height == h {
-		existing.lastUsed = r.frame
-		return existing, nil
-	}
 	if existing != nil {
-		if existing.width == w && existing.height == h {
-			if err := existing.tex.UpdateData(img.RGBA().Pix); err != nil {
-				return nil, fmt.Errorf("update render texture: %w", err)
+		if existing.width == w && existing.height == h && existing.mipLevels == levels {
+			if existing.version != img.version {
+				if err := r.uploadImage(existing, img); err != nil {
+					return nil, err
+				}
 			}
-			existing.version = img.version
-			existing.lastUsed = r.frame
 			return existing, nil
 		}
-		r.releaseTexture(existing.tex)
+		r.releaseTexture(existing)
 		delete(r.textures, img)
 	}
-	tex, err := ctx.Renderer().NewTextureFromRGBAWithOptions(w, h, img.RGBA().Pix, gogpu.TextureOptions{
-		Label:        "goro-image-texture",
-		MagFilter:    gpuFilter(opts.Filter),
-		MinFilter:    gpuFilter(opts.Filter),
-		AddressModeU: gpuAddress(opts.Address),
-		AddressModeV: gpuAddress(opts.Address),
+	tex, err := r.dev.CreateTexture(&wgpu.TextureDescriptor{
+		Label:         "goro-image-texture",
+		Size:          wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
+		MipLevelCount: uint32(levels),
+		SampleCount:   1,
+		Dimension:     gputypes.TextureDimension2D,
+		Format:        gputypes.TextureFormatRGBA8Unorm,
+		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create render texture: %w", err)
 	}
-	out := &gpuImageTexture{tex: tex, version: img.version, width: w, height: h, lastUsed: r.frame}
+	out := &gpuImageTexture{tex: tex, width: w, height: h, mipLevels: levels}
+	if err := r.uploadImage(out, img); err != nil {
+		out.release()
+		return nil, err
+	}
+	out.view, err = r.dev.CreateTextureView(tex, nil)
+	if err != nil {
+		out.release()
+		return nil, fmt.Errorf("create render texture view: %w", err)
+	}
 	r.textures[img] = out
 	if img.group != nil {
 		if r.imageGroups == nil {
@@ -818,21 +875,41 @@ func (r *gpuRenderer) ensureTexture(ctx *gogpu.Context, img *Image, opts DrawTri
 	return out, nil
 }
 
-func (r *gpuRenderer) ensureBatchLightTexture(ctx *gogpu.Context, key drawBatchKey) (*gpuImageTexture, error) {
-	if key.lightTexture != nil && key.lightTexture.pix != nil {
-		return r.ensureTexture(ctx, key.lightTexture, DrawTrianglesOptions{Filter: FilterLinear, Address: AddressClampToZero})
+func (r *gpuRenderer) uploadImage(tex *gpuImageTexture, img *Image) error {
+	for level := 0; level < tex.mipLevels; level++ {
+		pix := img.pix
+		if level > 0 {
+			pix = img.mipmaps[level-1]
+		}
+		err := r.queue.WriteTexture(
+			&wgpu.ImageCopyTexture{Texture: tex.tex, MipLevel: uint32(level), Aspect: gputypes.TextureAspectAll},
+			pix.Pix,
+			&wgpu.ImageDataLayout{BytesPerRow: uint32(pix.Stride), RowsPerImage: uint32(pix.Rect.Dy())},
+			&wgpu.Extent3D{Width: uint32(pix.Rect.Dx()), Height: uint32(pix.Rect.Dy()), DepthOrArrayLayers: 1},
+		)
+		if err != nil {
+			return fmt.Errorf("upload render texture mip %d: %w", level, err)
+		}
 	}
-	return r.ensureTexture(ctx, r.neutralLightmapImage(), DrawTrianglesOptions{Filter: FilterLinear, Address: AddressClampToZero})
+	tex.version = img.version
+	return nil
 }
 
-func (r *gpuRenderer) ensureMeshLightTexture(ctx *gogpu.Context, mesh *WorldMesh) (*gpuImageTexture, error) {
+func (r *gpuRenderer) ensureBatchLightTexture(key drawBatchKey) (*gpuImageTexture, error) {
+	if key.lightTexture != nil && key.lightTexture.pix != nil {
+		return r.ensureTexture(key.lightTexture)
+	}
+	return r.ensureTexture(r.neutralLightmapImage())
+}
+
+func (r *gpuRenderer) ensureMeshLightTexture(mesh *WorldMesh) (*gpuImageTexture, error) {
 	if mesh != nil && mesh.lightTexture != nil && mesh.lightTexture.pix != nil {
-		return r.ensureTexture(ctx, mesh.lightTexture, DrawTrianglesOptions{Filter: FilterLinear, Address: AddressClampToZero})
+		return r.ensureTexture(mesh.lightTexture)
 	}
 	if mesh == nil {
 		return nil, fmt.Errorf("nil world mesh")
 	}
-	return r.ensureTexture(ctx, r.neutralLightmapImage(), DrawTrianglesOptions{Filter: FilterLinear, Address: AddressClampToZero})
+	return r.ensureTexture(r.neutralLightmapImage())
 }
 
 func (r *gpuRenderer) neutralLightmapImage() *Image {
@@ -843,7 +920,7 @@ func (r *gpuRenderer) neutralLightmapImage() *Image {
 	return r.neutralLightmap
 }
 
-func (r *gpuRenderer) releaseTexture(tex *gogpu.Texture) {
+func (r *gpuRenderer) releaseTexture(tex *gpuImageTexture) {
 	if tex == nil {
 		return
 	}
@@ -855,7 +932,18 @@ func (r *gpuRenderer) releaseTexture(tex *gogpu.Texture) {
 			delete(r.bindGroups, key)
 		}
 	}
-	tex.Destroy()
+	tex.release()
+}
+
+func (tex *gpuImageTexture) release() {
+	if tex.view != nil {
+		tex.view.Release()
+		tex.view = nil
+	}
+	if tex.tex != nil {
+		tex.tex.Release()
+		tex.tex = nil
+	}
 }
 
 func (r *gpuRenderer) releaseImageTexture(img *Image) {
@@ -866,12 +954,25 @@ func (r *gpuRenderer) releaseImageTexture(img *Image) {
 	if existing == nil {
 		return
 	}
-	r.releaseTexture(existing.tex)
+	r.releaseTexture(existing)
 	delete(r.textures, img)
 }
 
-func (r *gpuRenderer) sampler(opts DrawTrianglesOptions) (*wgpu.Sampler, error) {
-	key := samplerKey{filter: opts.Filter, address: opts.Address}
+func imageSamplerKey(opts DrawTrianglesOptions, texture *Image, anisotropy int) samplerKey {
+	key := samplerKey{filter: opts.Filter, address: opts.Address, anisotropy: 1}
+	if opts.Filter == FilterLinear && texture != nil && len(texture.mipmaps) > 0 {
+		key.anisotropy = uint16(max(1, min(16, anisotropy)))
+	}
+	return key
+}
+
+func (r *gpuRenderer) sampler(opts DrawTrianglesOptions, texture *Image) (*wgpu.Sampler, error) {
+	opts.Filter = opts.Filter.resolveSprite(r.smoothSprites)
+	anisotropy := 1
+	if r.anisotropySupported {
+		anisotropy = r.anisotropy
+	}
+	key := imageSamplerKey(opts, texture, anisotropy)
 	if sampler := r.samplers[key]; sampler != nil {
 		return sampler, nil
 	}
@@ -882,8 +983,9 @@ func (r *gpuRenderer) sampler(opts DrawTrianglesOptions) (*wgpu.Sampler, error) 
 		AddressModeW: gputypes.AddressModeClampToEdge,
 		MagFilter:    gpuFilter(opts.Filter),
 		MinFilter:    gpuFilter(opts.Filter),
-		MipmapFilter: gputypes.FilterModeNearest,
+		MipmapFilter: gpuFilter(opts.Filter),
 		LodMaxClamp:  32,
+		Anisotropy:   key.anisotropy,
 	})
 	if err != nil {
 		return nil, err
@@ -892,7 +994,7 @@ func (r *gpuRenderer) sampler(opts DrawTrianglesOptions) (*wgpu.Sampler, error) 
 	return sampler, nil
 }
 
-func (r *gpuRenderer) bindGroup(layout *wgpu.BindGroupLayout, uniform *wgpu.Buffer, uniformSize uint64, tex *gogpu.Texture, sampler *wgpu.Sampler) (*wgpu.BindGroup, error) {
+func (r *gpuRenderer) bindGroup(layout *wgpu.BindGroupLayout, uniform *wgpu.Buffer, uniformSize uint64, tex *gpuImageTexture, sampler *wgpu.Sampler) (*wgpu.BindGroup, error) {
 	key := bindGroupKey{texture: tex, sampler: sampler, layout: layout}
 	if bg := r.bindGroups[key]; bg != nil {
 		return bg, nil
@@ -903,7 +1005,7 @@ func (r *gpuRenderer) bindGroup(layout *wgpu.BindGroupLayout, uniform *wgpu.Buff
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: uniform, Size: uniformSize},
 			{Binding: 1, Sampler: sampler},
-			{Binding: 2, TextureView: tex.View()},
+			{Binding: 2, TextureView: tex.view},
 		},
 	})
 	if err != nil {
@@ -913,7 +1015,7 @@ func (r *gpuRenderer) bindGroup(layout *wgpu.BindGroupLayout, uniform *wgpu.Buff
 	return bg, nil
 }
 
-func (r *gpuRenderer) bindWorldGroup(uniform *wgpu.Buffer, uniformSize uint64, tex, lightTex *gogpu.Texture, sampler *wgpu.Sampler) (*wgpu.BindGroup, error) {
+func (r *gpuRenderer) bindWorldGroup(uniform *wgpu.Buffer, uniformSize uint64, tex, lightTex *gpuImageTexture, sampler *wgpu.Sampler) (*wgpu.BindGroup, error) {
 	key := bindGroupKey{texture: tex, lightTexture: lightTex, sampler: sampler, layout: r.worldBGL}
 	if bg := r.bindGroups[key]; bg != nil {
 		return bg, nil
@@ -924,8 +1026,9 @@ func (r *gpuRenderer) bindWorldGroup(uniform *wgpu.Buffer, uniformSize uint64, t
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: uniform, Size: uniformSize},
 			{Binding: 1, Sampler: sampler},
-			{Binding: 2, TextureView: tex.View()},
-			{Binding: 3, TextureView: lightTex.View()},
+			{Binding: 2, TextureView: tex.view},
+			{Binding: 3, TextureView: lightTex.view},
+			{Binding: 4, Sampler: r.lightmapSampler},
 		},
 	})
 	if err != nil {
@@ -935,7 +1038,7 @@ func (r *gpuRenderer) bindWorldGroup(uniform *wgpu.Buffer, uniformSize uint64, t
 	return bg, nil
 }
 
-func (r *gpuRenderer) drawWorldMesh(ctx *gogpu.Context, pass *wgpu.RenderPassEncoder, mesh *WorldMesh, state *renderPassState) error {
+func (r *gpuRenderer) drawWorldMesh(pass *wgpu.RenderPassEncoder, mesh *WorldMesh, state *renderPassState) error {
 	if mesh == nil || mesh.texture == nil || mesh.texture.pix == nil || len(mesh.vertices) == 0 || len(mesh.indices) == 0 {
 		return nil
 	}
@@ -946,19 +1049,19 @@ func (r *gpuRenderer) drawWorldMesh(ctx *gogpu.Context, pass *wgpu.RenderPassEnc
 	if err != nil {
 		return err
 	}
-	tex, err := r.ensureTexture(ctx, mesh.texture, mesh.options)
+	tex, err := r.ensureTexture(mesh.texture)
 	if err != nil {
 		return err
 	}
-	lightTex, err := r.ensureMeshLightTexture(ctx, mesh)
+	lightTex, err := r.ensureMeshLightTexture(mesh)
 	if err != nil {
 		return err
 	}
-	sampler, err := r.sampler(mesh.options)
+	sampler, err := r.sampler(mesh.options, mesh.texture)
 	if err != nil {
 		return err
 	}
-	bg, err := r.bindWorldGroup(r.worldUniform, 96, tex.tex, lightTex.tex, sampler)
+	bg, err := r.bindWorldGroup(r.worldUniform, 96, tex, lightTex, sampler)
 	if err != nil {
 		return err
 	}
@@ -1024,30 +1127,33 @@ func (r *gpuRenderer) depthWriteWorldMeshBatches(screen *Frame) []worldMeshBatch
 	return r.worldMeshBatches
 }
 
-func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPassEncoder, batch worldMeshBatch, state *renderPassState) error {
+func (r *gpuRenderer) drawWorldMeshBatch(pass *wgpu.RenderPassEncoder, batch worldMeshBatch, state *renderPassState, pipeline *wgpu.RenderPipeline) error {
 	if len(batch.meshes) == 0 || batch.key.texture == nil || batch.key.texture.pix == nil {
 		return nil
 	}
 	if state == nil {
 		state = &renderPassState{}
 	}
-	tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
+	tex, err := r.ensureTexture(batch.key.texture)
 	if err != nil {
 		return err
 	}
-	lightTex, err := r.ensureBatchLightTexture(ctx, batch.key)
+	lightTex, err := r.ensureBatchLightTexture(batch.key)
 	if err != nil {
 		return err
 	}
-	sampler, err := r.sampler(batch.key.options)
+	sampler, err := r.sampler(batch.key.options, batch.key.texture)
 	if err != nil {
 		return err
 	}
-	bg, err := r.bindWorldGroup(r.worldUniform, 96, tex.tex, lightTex.tex, sampler)
+	bg, err := r.bindWorldGroup(r.worldUniform, 96, tex, lightTex, sampler)
 	if err != nil {
 		return err
 	}
-	state.setPipeline(pass, r.worldPipelineFor(batch.key.options))
+	if pipeline == nil {
+		pipeline = r.worldPipelineFor(batch.key.options)
+	}
+	state.setPipeline(pass, pipeline)
 	state.setBindGroup(pass, bg)
 	gpuBatch, err := r.ensureWorldMeshBatch(batch)
 	if err != nil {
@@ -1065,7 +1171,7 @@ func (r *gpuRenderer) drawWorldMeshBatch(ctx *gogpu.Context, pass *wgpu.RenderPa
 	return nil
 }
 
-func (r *gpuRenderer) drawWorldBillboards(ctx *gogpu.Context, pass *wgpu.RenderPassEncoder, commands []WorldBillboardCommand) error {
+func (r *gpuRenderer) drawWorldBillboards(pass *wgpu.RenderPassEncoder, commands []WorldBillboardCommand) error {
 	if len(commands) == 0 || r.billboardQuadBuf == nil {
 		return nil
 	}
@@ -1085,15 +1191,15 @@ func (r *gpuRenderer) drawWorldBillboards(ctx *gogpu.Context, pass *wgpu.RenderP
 	}
 	pass.SetVertexBuffer(0, r.billboardQuadBuf, 0)
 	for _, batch := range batches {
-		tex, err := r.ensureTexture(ctx, batch.key.texture, batch.key.options)
+		tex, err := r.ensureTexture(batch.key.texture)
 		if err != nil {
 			return err
 		}
-		sampler, err := r.sampler(batch.key.options)
+		sampler, err := r.sampler(batch.key.options, batch.key.texture)
 		if err != nil {
 			return err
 		}
-		bg, err := r.bindWorldGroup(r.worldUniform, 96, tex.tex, tex.tex, sampler)
+		bg, err := r.bindWorldGroup(r.worldUniform, 96, tex, tex, sampler)
 		if err != nil {
 			return err
 		}
@@ -1193,7 +1299,6 @@ func appendBillboardInstanceData(dst []float32, cmd WorldBillboardCommand) []flo
 
 func (r *gpuRenderer) ensureWorldMesh(mesh *WorldMesh) (*gpuWorldMesh, error) {
 	if cached := r.worldMeshes[mesh]; cached != nil && cached.version == mesh.version {
-		cached.lastUsed = r.frame
 		return cached, nil
 	}
 	if old := r.worldMeshes[mesh]; old != nil {
@@ -1241,7 +1346,6 @@ func (r *gpuRenderer) ensureWorldMesh(mesh *WorldMesh) (*gpuWorldMesh, error) {
 		indexBuf:   indexBuf,
 		indexCount: uint32(len(indices)),
 		version:    mesh.version,
-		lastUsed:   r.frame,
 	}
 	r.worldMeshes[mesh] = gpuMesh
 	return gpuMesh, nil
@@ -1302,88 +1406,6 @@ func (r *gpuRenderer) worldPipelineFor(options DrawTrianglesOptions) *wgpu.Rende
 	return r.worldPipelines[worldPipelineKey{blend, options.DepthTest, options.DepthWrite}]
 }
 
-func (r *gpuRenderer) ensureDepth(width, height int) error {
-	if r.depthView != nil && r.depthWidth == width && r.depthHeight == height {
-		return nil
-	}
-	if r.depthView != nil {
-		r.depthView.Release()
-		r.depthView = nil
-	}
-	if r.depthTex != nil {
-		r.depthTex.Release()
-		r.depthTex = nil
-	}
-	tex, err := r.dev.CreateTexture(&wgpu.TextureDescriptor{
-		Label: "goro-depth",
-		Size: wgpu.Extent3D{
-			Width:              uint32(width),
-			Height:             uint32(height),
-			DepthOrArrayLayers: 1,
-		},
-		MipLevelCount: 1,
-		SampleCount:   1,
-		Dimension:     gputypes.TextureDimension2D,
-		Format:        depthFormat,
-		Usage:         wgpu.TextureUsageRenderAttachment,
-	})
-	if err != nil {
-		return err
-	}
-	view, err := r.dev.CreateTextureView(tex, nil)
-	if err != nil {
-		tex.Release()
-		return err
-	}
-	r.depthTex = tex
-	r.depthView = view
-	r.depthWidth = width
-	r.depthHeight = height
-	return nil
-}
-
-// gpuTrimInterval is how often the renderer checks its strong resource caches
-// for entries nothing has drawn in a while, and gpuStaleResourceFrames is the
-// no-draw age after which a cached GPU texture or retained mesh is released.
-// Map changes rebuild every texture and mesh as fresh objects; without this
-// trim the caches kept every visited map's CPU pixels and GPU resources alive
-// forever, which OOMed the 1GB handheld after a few warp round trips.
-const (
-	gpuTrimInterval        = 120
-	gpuStaleResourceFrames = 600
-)
-
-// trimStaleResources drops cache entries that no frame has referenced within
-// gpuStaleResourceFrames. Released entries are not destroyed in use: the only
-// criterion is a long gap since the last draw, and anything that comes back
-// simply re-uploads through ensureTexture/ensureWorldMesh.
-func (r *gpuRenderer) trimStaleResources() {
-	if r.frame <= gpuStaleResourceFrames {
-		return
-	}
-	for img, entry := range r.textures {
-		if entry == nil || r.frame-entry.lastUsed >= gpuStaleResourceFrames {
-			if entry != nil && entry.tex != nil {
-				r.releaseTexture(entry.tex)
-			}
-			delete(r.textures, img)
-		}
-	}
-	for mesh, entry := range r.worldMeshes {
-		if entry == nil || r.frame-entry.lastUsed >= gpuStaleResourceFrames {
-			if entry != nil {
-				if entry.vertexBuf != nil {
-					entry.vertexBuf.Release()
-				}
-				if entry.indexBuf != nil {
-					entry.indexBuf.Release()
-				}
-			}
-			delete(r.worldMeshes, mesh)
-		}
-	}
-}
-
 func (r *gpuRenderer) release() {
 	for key, batch := range r.worldMeshBatchCache {
 		batch.release()
@@ -1396,8 +1418,8 @@ func (r *gpuRenderer) release() {
 		}
 	}
 	for _, tex := range r.textures {
-		if tex != nil && tex.tex != nil {
-			tex.tex.Destroy()
+		if tex != nil {
+			tex.release()
 		}
 	}
 	for _, mesh := range r.worldMeshes {
@@ -1468,12 +1490,14 @@ func (r *gpuRenderer) release() {
 	if r.worldUniform != nil {
 		r.worldUniform.Release()
 	}
-	if r.depthView != nil {
-		r.depthView.Release()
+	if r.bloom != nil {
+		r.bloom.release()
 	}
-	if r.depthTex != nil {
-		r.depthTex.Release()
+	if r.ssao != nil {
+		r.ssao.release()
 	}
+	r.depthTarget.release()
+	r.msaaTarget.release()
 }
 
 func gpuFilter(filter Filter) gputypes.FilterMode {

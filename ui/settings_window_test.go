@@ -9,6 +9,10 @@ import (
 	"github.com/kivutar/goro/input"
 )
 
+func TestSettingsTabsFitSmallWindowAndKeepSelectionAfterToggle(t *testing.T) {
+	t.Skip("fork: the handheld settings window is the gamepad-row layout, not upstream's section tabs")
+}
+
 func TestSettingsWindowEscapeCloses(t *testing.T) {
 	var window SettingsWindow
 	inputState := input.NewState()

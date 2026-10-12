@@ -50,6 +50,11 @@ func TestMapTexturesPreloadAllSourcesAndReuseDrawCaches(t *testing.T) {
 	if len(m.mapTextureUploads) != 35 || len(m.textures) != 34 || len(m.textureMiss) != 1 {
 		t.Fatalf("uploads=%d textures=%d missing=%d; want 2 shared/model + 32 water + lightmap", len(m.mapTextureUploads), len(m.textures), len(m.textureMiss))
 	}
+	for _, name := range []string{"ground.png", "model.png"} {
+		if img := m.textures[name]; img.ByteSize() != 12 {
+			t.Fatalf("%s: missing 1x1 mip below the 2x1 base", name)
+		}
+	}
 	// Even if the file becomes unreadable, normal rendering uses preparation.
 	if err := os.WriteFile(filepath.Join(ctx.Resources.Root, "ground.png"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -59,11 +64,11 @@ func TestMapTexturesPreloadAllSourcesAndReuseDrawCaches(t *testing.T) {
 		t.Fatal("normal loader did not reuse preloaded pixels or transparency changed")
 	}
 	for frame := 0; frame < 32; frame++ {
-		if img := m.waterTexture(ctx.Resources, 700, frame); img == nil {
-			t.Fatalf("water frame %d missing", frame)
+		if img := m.waterTexture(ctx.Resources, 700, frame); img == nil || img.ByteSize() != 8 {
+			t.Fatalf("water frame %d missing or mipmapped", frame)
 		}
 	}
-	if atlas := m.gndMeshCache.groundLightmap.image; atlas == nil || atlas != m.mapTextureUploads[1] {
+	if atlas := m.gndMeshCache.groundLightmap.image; atlas == nil || atlas != m.mapTextureUploads[1] || atlas.ByteSize() != len(atlas.RGBA().Pix) {
 		t.Fatal("lightmap preparation was not retained")
 	}
 }
@@ -85,6 +90,48 @@ func TestMapTexturesSkipDryMapsAndHeadless(t *testing.T) {
 		// A nil resource manager makes any attempted file read fail this test.
 		m.drawGNDWater(render.NewFrame(100, 100), nil, ctx.World.GND, ctx.World.RSW, sceneProjection{}, time.Now(), sceneFog{})
 	}
+}
+
+type mapTextureRuntime struct {
+	client.RuntimeSettings
+	upscale bool
+}
+
+func (r *mapTextureRuntime) TextureUpscaling() bool { return r.upscale }
+
+func TestMapTextureUpscalingIsCachedAndAppliesOnNextMap(t *testing.T) {
+	m, ctx := mapTextureFixture(t)
+	runtime := &mapTextureRuntime{upscale: true}
+	ctx.Runtime = runtime
+	m.preloadMapTextures(ctx)
+	for _, name := range []string{"ground.png", "model.png"} {
+		img := m.textures[name]
+		if img.Bounds() != image.Rect(0, 0, 4, 2) || img.ByteSize() != 44 {
+			t.Fatalf("%s was not upscaled with mipmaps", name)
+		}
+		if m.groundTexture(ctx.Resources, name) != img {
+			t.Fatal("draw-time access did not reuse the upscaled texture")
+		}
+	}
+	if m.waterTexture(ctx.Resources, 700, 0).ByteSize() != 8 {
+		t.Fatal("upscaling changed a water texture")
+	}
+	if atlas := m.gndMeshCache.groundLightmap.image; atlas.ByteSize() != len(atlas.RGBA().Pix) {
+		t.Fatal("upscaling changed the lightmap")
+	}
+	runtime.upscale = false
+	delete(m.textures, "model.png")
+	if m.groundTexture(ctx.Resources, "model.png").Bounds().Dx() != 4 {
+		t.Fatal("late model load ignored the current map's captured upscale setting")
+	}
+	m.Leave()
+	m.textures = make(map[string]*render.Image)
+	ctx.Config.Render.TextureUpscaling = true // The runtime setting must take precedence.
+	m.preloadMapTextures(ctx)
+	if m.textures["ground.png"].Bounds().Dx() != 2 {
+		t.Fatal("next map did not pick up the disabled runtime setting")
+	}
+	m.Leave()
 }
 
 func TestMapTextureUploadsWaitForSubmissionBeforeFade(t *testing.T) {
@@ -138,6 +185,15 @@ func TestMapTextureUploadsRespectBytesAndAllowOneOversizedImage(t *testing.T) {
 	m.prepareMapTextureUploads(f)
 	if m.mapUploadBatch != 1 {
 		t.Fatal("single large texture cannot make progress")
+	}
+}
+
+func TestMapTextureUploadBudgetIncludesMipmaps(t *testing.T) {
+	texture := render.NewImageWithMipmaps(image.NewRGBA(image.Rect(0, 0, 1024, 1024)))
+	m := &WorldMode{mapTextureUploads: []*render.Image{texture, texture}}
+	m.prepareMapTextureUploads(render.NewFrame(100, 100))
+	if m.mapUploadBatch != 1 {
+		t.Fatal("two 4 MiB base levels fit the budget, but their mip chains do not")
 	}
 }
 

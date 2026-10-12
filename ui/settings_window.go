@@ -13,7 +13,15 @@ import (
 
 const (
 	settingsWindowW = 300
-	settingsWindowH = 430
+	settingsWindowH = 359
+)
+
+type settingsTab int
+
+const (
+	settingsTabDisplay settingsTab = iota
+	settingsTabSound
+	settingsTabGameplay
 )
 
 type SettingsWindow struct {
@@ -178,18 +186,24 @@ func (w *SettingsWindow) refresh(ctx client.Context) {
 
 func (w *SettingsWindow) saveSettings(ctx client.Context) {
 	settings := config.UserSettings{
-		Fullscreen:      settingsRuntimeFullscreen(ctx),
-		VSync:           settingsRuntimeVSync(ctx),
-		FPS:             settingsRuntimeFPS(ctx),
-		ResolutionScale: settingsResolutionScale(ctx),
-		BGMVolume:       settingsVolumeBGM(ctx),
-		SFXVolume:       settingsVolumeSFX(ctx),
-		NoShift:         settingsNoShift(ctx),
-		NoCtrl:          settingsNoCtrl(ctx),
-		LessEffects:     settingsLessEffects(ctx),
-		SnapTargets:     settingsSnapTargets(ctx),
-		SnapItems:       settingsSnapItems(ctx),
-		SnapRadius:      settingsSnapRadius(ctx),
+		Fullscreen:       settingsRuntimeFullscreen(ctx),
+		VSync:            settingsRuntimeVSync(ctx),
+		FPS:              settingsRuntimeFPS(ctx),
+		ResolutionScale:  settingsResolutionScale(ctx),
+		Anisotropy:       settingsAnisotropy(ctx),
+		TextureUpscaling: settingsTextureUpscaling(ctx),
+		SmoothSprites:    settingsSmoothSprites(ctx),
+		MSAA:             settingsMSAA(ctx),
+		Bloom:            settingsBloom(ctx),
+		SSAO:             settingsSSAO(ctx),
+		BGMVolume:        settingsVolumeBGM(ctx),
+		SFXVolume:        settingsVolumeSFX(ctx),
+		NoShift:          settingsNoShift(ctx),
+		NoCtrl:           settingsNoCtrl(ctx),
+		LessEffects:      settingsLessEffects(ctx),
+		SnapTargets:      settingsSnapTargets(ctx),
+		SnapItems:        settingsSnapItems(ctx),
+		SnapRadius:       settingsSnapRadius(ctx),
 	}
 	path, err := ctx.Config.SaveUserSettings(settings)
 	if err != nil {
@@ -274,6 +288,41 @@ func absFloat(v float64) float64 {
 	return v
 }
 
+func settingsAnisotropy(ctx client.Context) int {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.Anisotropy()
+	}
+	return ctx.Config.Render.Anisotropy
+}
+
+func settingsSmoothSprites(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.SmoothSprites()
+	}
+	return ctx.Config.Render.SmoothSprites
+}
+
+func settingsTextureUpscaling(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.TextureUpscaling()
+	}
+	return ctx.Config.Render.TextureUpscaling
+}
+
+func textureUpscalingLabel(enabled bool) string {
+	if enabled {
+		return "2x"
+	}
+	return "Off"
+}
+
+func anisotropyLabel(level int) string {
+	if level == 0 {
+		return "Off"
+	}
+	return fmt.Sprintf("%dx", level)
+}
+
 func settingsNoShift(ctx client.Context) bool {
 	if ctx.Session != nil {
 		return ctx.Session.NoShift
@@ -319,4 +368,25 @@ func settingsSnapRadius(ctx client.Context) float64 {
 		return v
 	}
 	return 1
+}
+
+func settingsMSAA(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.MSAA()
+	}
+	return ctx.Config.Render.MSAA
+}
+
+func settingsBloom(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.Bloom()
+	}
+	return ctx.Config.Render.Bloom
+}
+
+func settingsSSAO(ctx client.Context) bool {
+	if ctx.Runtime != nil {
+		return ctx.Runtime.SSAO()
+	}
+	return ctx.Config.Render.SSAO
 }

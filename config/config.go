@@ -109,6 +109,12 @@ type RenderConfig struct {
 	GraphicsAPI        string
 	PowerPreference    string
 	ForceSoftware      bool
+	Anisotropy         int
+	TextureUpscaling   bool
+	SmoothSprites      bool
+	MSAA               bool
+	Bloom              bool
+	SSAO               bool
 	VSync              bool
 	FPS                bool
 	ResolutionScale    float64
@@ -202,18 +208,24 @@ func LoadConfig(args []string) (Config, error) {
 }
 
 type UserSettings struct {
-	Fullscreen      bool
-	VSync           bool
-	FPS             bool
-	ResolutionScale float64
-	BGMVolume       float64
-	SFXVolume       float64
-	NoShift         bool
-	NoCtrl          bool
-	LessEffects     bool
-	SnapTargets     bool
-	SnapItems       bool
-	SnapRadius      float64
+	Fullscreen        bool
+	VSync             bool
+	FPS               bool
+	ResolutionScale   float64
+	Anisotropy        int
+	TextureUpscaling  bool
+	SmoothSprites     bool
+	MSAA              bool
+	Bloom             bool
+	SSAO              bool
+	BGMVolume         float64
+	SFXVolume         float64
+	NoShift           bool
+	NoCtrl            bool
+	LessEffects       bool
+	SnapTargets       bool
+	SnapItems         bool
+	SnapRadius        float64
 }
 
 func UserConfigPath() (string, error) {
@@ -261,9 +273,15 @@ func userSettingsValues(settings UserSettings) map[string]map[string]string {
 			"fullscreen": formatINIValueBool(settings.Fullscreen),
 		},
 		"render": {
-			"vsync":            formatINIValueBool(settings.VSync),
-			"fps":              formatINIValueBool(settings.FPS),
-			"resolution_scale": formatINIValueFloat(settings.ResolutionScale),
+			"vsync":             formatINIValueBool(settings.VSync),
+			"fps":               formatINIValueBool(settings.FPS),
+			"resolution_scale":  formatINIValueFloat(settings.ResolutionScale),
+			"anisotropy":        strconv.Itoa(settings.Anisotropy),
+			"texture_upscaling": formatINIValueBool(settings.TextureUpscaling),
+			"smooth_sprites":    formatINIValueBool(settings.SmoothSprites),
+			"msaa":              formatINIValueBool(settings.MSAA),
+			"bloom":             formatINIValueBool(settings.Bloom),
+			"ssao":              formatINIValueBool(settings.SSAO),
 		},
 		"audio": {
 			"bgm_volume": formatINIValueFloat(settings.BGMVolume),
@@ -281,6 +299,9 @@ func userSettingsValues(settings UserSettings) map[string]map[string]string {
 }
 
 func validateUserSettings(settings UserSettings) error {
+	if err := validateAnisotropy(settings.Anisotropy); err != nil {
+		return err
+	}
 	if settings.BGMVolume < 0 || settings.BGMVolume > 1 {
 		return fmt.Errorf("bgm volume must be between 0 and 1")
 	}
@@ -408,6 +429,8 @@ func defaultConfig() Config {
 		Render: RenderConfig{
 			GraphicsAPI:        "vulkan",
 			AsyncUI:            defaultAsyncUI(),
+			Anisotropy:         8,
+			SmoothSprites:      true,
 			VSync:              true,
 			ResolutionScale:    1,
 			BenchWarmupSeconds: 0,
@@ -479,6 +502,12 @@ func parseCLI(cfg *Config, args []string) error {
 	fs.StringVar(&cfg.Render.GraphicsAPI, "graphics-api", cfg.Render.GraphicsAPI, "graphics API: auto, vulkan, dx12, metal, gles, software")
 	fs.StringVar(&cfg.Render.PowerPreference, "power-preference", cfg.Render.PowerPreference, "GPU power preference: low, high")
 	fs.BoolVar(&cfg.Render.ForceSoftware, "gpu-software", cfg.Render.ForceSoftware, "request the software GPU adapter")
+	fs.IntVar(&cfg.Render.Anisotropy, "anisotropy", cfg.Render.Anisotropy, "anisotropic texture filtering: 0 (off), 2, 4, 8, 16")
+	fs.BoolVar(&cfg.Render.TextureUpscaling, "texture-upscaling", cfg.Render.TextureUpscaling, "upscale terrain, model, and world sprite textures 2x with xBR")
+	fs.BoolVar(&cfg.Render.SSAO, "ssao", cfg.Render.SSAO, "enable subtle ambient occlusion for terrain and models")
+	fs.BoolVar(&cfg.Render.Bloom, "bloom", cfg.Render.Bloom, "enable subtle bloom for bright world pixels")
+	fs.BoolVar(&cfg.Render.MSAA, "msaa", cfg.Render.MSAA, "enable 4x multisample anti-aliasing for the world")
+	fs.BoolVar(&cfg.Render.SmoothSprites, "smooth-sprites", cfg.Render.SmoothSprites, "smooth world sprites (false uses nearest-neighbor filtering)")
 	fs.BoolVar(&cfg.Render.VSync, "vsync", cfg.Render.VSync, "enable vsync")
 	fs.Float64Var(&cfg.Render.ResolutionScale, "resolution-scale", cfg.Render.ResolutionScale, "canvas backing-store scale from 0.1 to 1 (web)")
 	fs.BoolVar(&cfg.Render.FPS, "fps", cfg.Render.FPS, "show measured FPS counter")
@@ -635,6 +664,18 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		cfg.Render.PowerPreference = value
 	case "render.gpusoftware":
 		return setBool(value, &cfg.Render.ForceSoftware)
+	case "render.anisotropy":
+		return setInt(value, &cfg.Render.Anisotropy)
+	case "render.textureupscaling":
+		return setBool(value, &cfg.Render.TextureUpscaling)
+	case "render.ssao":
+		return setBool(value, &cfg.Render.SSAO)
+	case "render.bloom":
+		return setBool(value, &cfg.Render.Bloom)
+	case "render.msaa":
+		return setBool(value, &cfg.Render.MSAA)
+	case "render.smoothsprites":
+		return setBool(value, &cfg.Render.SmoothSprites)
 	case "render.vsync":
 		return setBool(value, &cfg.Render.VSync)
 	case "render.fps":
@@ -694,6 +735,9 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 }
 
 func validateConfig(cfg *Config) error {
+	if err := validateAnisotropy(cfg.Render.Anisotropy); err != nil {
+		return err
+	}
 	if cfg.Window.Width <= 0 {
 		return fmt.Errorf("window width must be positive")
 	}
@@ -727,6 +771,15 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("invalid log level %q", cfg.Log.Level)
 	}
 	return nil
+}
+
+func validateAnisotropy(level int) error {
+	switch level {
+	case 0, 2, 4, 8, 16:
+		return nil
+	default:
+		return fmt.Errorf("anisotropy must be 0 (off), 2, 4, 8, or 16")
+	}
 }
 
 func upsertINIValues(src string, values map[string]map[string]string) string {

@@ -5,6 +5,35 @@ import (
 	"testing"
 )
 
+func TestParseSpiritSphereCount(t *testing.T) {
+	for _, id := range []uint16{PacketZCSpirits, PacketZCSpirits2} {
+		data := make([]byte, 8)
+		binary.LittleEndian.PutUint16(data, id)
+		binary.LittleEndian.PutUint32(data[2:], 0x12345678)
+		binary.LittleEndian.PutUint16(data[6:], 3)
+		update, ok, err := ParseSpiritSphereCount(Packet{ID: id, Data: data})
+		if err != nil || !ok || update.ActorID != 0x12345678 || update.Count != 3 {
+			t.Fatalf("packet 0x%04X: %+v, ok=%t, err=%v", id, update, ok, err)
+		}
+		if PacketLengths2008()[id] != len(data) {
+			t.Fatalf("packet 0x%04X missing from receive framer", id)
+		}
+		binary.LittleEndian.PutUint16(data[6:], 0)
+		update, ok, err = ParseSpiritSphereCount(Packet{ID: id, Data: data})
+		if err != nil || !ok || update.Count != 0 {
+			t.Fatal("cleared sphere count was not parsed")
+		}
+		for n := 0; n < len(data); n++ {
+			if _, _, err := ParseSpiritSphereCount(Packet{ID: id, Data: data[:n]}); err == nil {
+				t.Fatalf("packet 0x%04X accepted %d bytes", id, n)
+			}
+		}
+	}
+	if _, ok, err := ParseSpiritSphereCount(Packet{ID: PacketZCMVP}); ok || err != nil {
+		t.Fatal("unrelated packet accepted")
+	}
+}
+
 func TestParseSpecialEffectNotify(t *testing.T) {
 	data := make([]byte, 10)
 	binary.LittleEndian.PutUint16(data[0:2], PacketZCNotifyEffect)

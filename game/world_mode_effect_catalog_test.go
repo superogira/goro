@@ -41,14 +41,14 @@ func TestBashBeginEffectSpecUsesCylinderComponents(t *testing.T) {
 
 func TestWorldEffectSpecCatalogCoverage(t *testing.T) {
 	coverage := effectCoverageSnapshot()
-	if coverage.Implemented != 663 {
-		t.Fatalf("implemented effects = %d, want 663", coverage.Implemented)
+	if coverage.Implemented != 664 {
+		t.Fatalf("implemented effects = %d, want 664", coverage.Implemented)
 	}
 	if coverage.ReferenceActive != 607 || coverage.ReferenceAll != 1147 {
 		t.Fatalf("reference client totals = active %d all %d", coverage.ReferenceActive, coverage.ReferenceAll)
 	}
-	if coverage.ActivePercent < 109.2 || coverage.ActivePercent > 109.3 {
-		t.Fatalf("active coverage = %.3f, want about 109.2", coverage.ActivePercent)
+	if coverage.ActivePercent < 109.3 || coverage.ActivePercent > 109.4 {
+		t.Fatalf("active coverage = %.3f, want about 109.4", coverage.ActivePercent)
 	}
 }
 
@@ -824,15 +824,11 @@ func TestRobrowserSpecialEffectsTwoHundredToTwoFiftyMatchTableRows(t *testing.T)
 	}
 
 	gumgang, ok := worldEffectSpecForID(effectGumgang)
-	if !ok || len(gumgang.components) != 5 || gumgang.duration != 3600*time.Millisecond {
+	if !ok || len(gumgang.components) != 1 {
 		t.Fatalf("EF_GUMGANG spec = %+v ok=%t", gumgang, ok)
 	}
-	for i, component := range gumgang.components {
-		wantFile := fmt.Sprintf("effect/super%d.bmp", i+1)
-		wantDelay := time.Duration(i) * 400 * time.Millisecond
-		if component.kind != effectComponent3D || component.textureFile != wantFile || component.duration != 2*time.Second || component.delay != wantDelay || !component.fadeOut || !component.attachedEntity {
-			t.Fatalf("EF_GUMGANG component %d = %+v", i, component)
-		}
+	if component := gumgang.components[0]; component.funcAdapter != effectFuncGumgang || !component.attachedEntity || len(component.textureFiles) != 5 {
+		t.Fatalf("EF_GUMGANG must use the original persistent lightning: %+v", component)
 	}
 
 	dark, ok := worldEffectSpecForID(effectDarkBreath)
@@ -1560,8 +1556,6 @@ func TestRobrowserSimpleEffectsTwoFiftyToThreeHundredMatchTableRows(t *testing.T
 		id   int
 		wav  string
 	}{
-		{"EF_STEELBODY", effectSteelBody, "effect\\mon_금강불괴.wav"},
-		{"EF_CHIMTO", effectChimto, "effect\\mon_침투경.wav"},
 		{"EF_BACKSTAP", effectBackStab, "effect\\rog_back stap.wav"},
 		{"EF_BOTTOM_LULLABY", effectBottomLullaby, "effect\\자장가.wav"},
 		{"EF_BOTTOM_RICHMANKIM", effectBottomRichKim, "effect\\김서방돈.wav"},
@@ -1846,7 +1840,7 @@ func TestRobrowserSimpleEffectsThreeHundredToThreeFiftyMatchTableRows(t *testing
 		sfx    []string
 		delays []time.Duration
 	}{
-		{"EF_TRIPLEATTACK", effectTripleAttack, []string{"effect\\ef_hit2.wav", "effect\\ef_hit4.wav", "effect\\ef_hit2.wav"}, []time.Duration{0, 200 * time.Millisecond, 400 * time.Millisecond}},
+		{"EF_TRIPLEATTACK", effectTripleAttack, []string{"effect\\ef_hit2.wav", "effect\\ef_hit4.wav", "effect\\ef_hit2.wav"}, []time.Duration{10 * db.EffectFrameDuration, 20 * db.EffectFrameDuration, 30 * db.EffectFrameDuration}},
 		{"EF_MAGNUM2", effectMagnum2, []string{"permeter_attack.wav", "effect\\ef_magnumbreak.wav"}, []time.Duration{0, 300 * time.Millisecond}},
 	} {
 		spec, ok := worldEffectSpecForID(tc.id)

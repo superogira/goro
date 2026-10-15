@@ -1334,6 +1334,14 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		m.applySkillUnitUpdate(skillUnit)
 		return nil, false
 	}
+	if spheres, ok, err := network.ParseSpiritSphereCount(pkt); err != nil {
+		glog.Errorf("parse spirit spheres 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		if applySpiritSphereCount(ctx, spheres) {
+			m.syncActorSpiritEffects(ctx, spheres.ActorID)
+		}
+		return nil, false
+	}
 	if effect, ok, err := network.ParseSpecialEffectNotify(pkt); err != nil {
 		glog.Errorf("parse special effect 0x%04X: %v", pkt.ID, err)
 	} else if ok {

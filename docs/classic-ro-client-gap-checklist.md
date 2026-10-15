@@ -72,7 +72,7 @@ This means the legacy mail system, not a newer RODEX-only implementation. See
 - [x] Implement the Sage Auto Spell choice list and send selection packet `0x01CE`.
 - [x] Turn the Star Gladiator place/Feel request into the original confirmation flow instead of only logging it, then send `0x0254`.
 - [x] Implement the original `/doridori` client behavior and packet `0x01E7`.
-- [ ] Verify whether the 2008 Novice Explosion Spirits request (`0x01ED`) needs a distinct client action, then implement it if applicable.
+- [x] Recognize the original Super Novice public-chat prayer and send `0x01ED`; the server checks EXP and grants Fury.
 - [x] Implement Token of Siegfried self-revival through the 2008 auto-revive request (`0x0292`).
 - [ ] Add end-to-end tests ensuring these skills cannot silently stall while waiting for a client response.
 
@@ -245,9 +245,9 @@ OldRO data contains the required assets/tables.
 
 - [ ] Validate skill/global cooldown packets for `20080910` before adding cooldown gating or shortcut overlays.
 - [ ] Validate whether the status-icon clock-wedge display is appropriate for 2008; Goro already has tooltips and a duration bar.
-- [ ] Validate party-booking packets `0x0802` and `0x0806`; they appear newer and should not be pulled into the 2008 backlog by default.
+- [x] Exclude party-booking packets `0x0802` and `0x0806`: Hercules and roBrowser date them to 2009-12-22; rAthena's older-profile inclusion is caused by a `2009122` version-guard typo.
 - [ ] Validate killer ranking `0x0237` independently.
-- [ ] Keep later cash-shop, memorial-dungeon, auction, and newer RODEX behavior outside the 2008 parity scope unless explicitly requested.
+- [ ] Keep newer RODEX and later standalone cash-shop behavior outside the 2008 scope. Legacy NPC cash-point shops are confirmed in eAthena's February 2008 history and the 2008 Sakexe. The same binary contains memorial-dungeon information-window handlers, although eAthena implemented instancing in June 2009. Legacy auctions also predate the target. Track those optional systems in [the updated packet audit](packet-coverage-20080910.md), without assuming when particular server content was released.
 - [ ] Do not treat classic-ro-client's JSON companion AI configuration window as a direct parity requirement; Goro intentionally supports Gravity-style `AI.lua`/`AI_M.lua` instead.
 
 ## Verified existing Goro behavior

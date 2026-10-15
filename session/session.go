@@ -54,6 +54,7 @@ type Session struct {
 	Statuses             Statuses
 	Friends              Friends
 	Whisper              WhisperSettings
+	SuperNovicePrayer    SuperNovicePrayer
 	Party                Party
 	Movement             Movement
 	Homunculus           Companion
@@ -95,6 +96,7 @@ func (s *Session) SelectCharacter(character Character) {
 	s.Quests = Quests{}
 	s.Statuses = Statuses{}
 	s.Friends = Friends{}
+	s.SuperNovicePrayer = SuperNovicePrayer{}
 	s.Party = Party{}
 	s.Movement = Movement{}
 	s.Homunculus = Companion{}

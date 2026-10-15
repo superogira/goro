@@ -12,6 +12,8 @@ const (
 	PacketZCNotifyEffect  uint16 = 0x019B
 	PacketZCNotifyEffect2 uint16 = 0x01F3
 	PacketZCMVP           uint16 = 0x010C
+	PacketZCSpirits       uint16 = 0x01D0
+	PacketZCSpirits2      uint16 = 0x01E1
 
 	SpecialEffectBaseLevelUp            = 0
 	SpecialEffectJobLevelUp             = 1
@@ -32,6 +34,24 @@ type SpecialEffectNotify struct {
 
 type MVPNotify struct {
 	AID uint32
+}
+
+type SpiritSphereCount struct {
+	ActorID uint32
+	Count   uint16
+}
+
+func ParseSpiritSphereCount(packet Packet) (SpiritSphereCount, bool, error) {
+	if packet.ID != PacketZCSpirits && packet.ID != PacketZCSpirits2 {
+		return SpiritSphereCount{}, false, nil
+	}
+	if len(packet.Data) < 8 {
+		return SpiritSphereCount{}, false, fmt.Errorf("ZC_SPIRITS 0x%04X too short: %d", packet.ID, len(packet.Data))
+	}
+	return SpiritSphereCount{
+		ActorID: binary.LittleEndian.Uint32(packet.Data[2:6]),
+		Count:   binary.LittleEndian.Uint16(packet.Data[6:8]),
+	}, true, nil
 }
 
 func BuildLessEffectPacket(enabled bool) []byte {

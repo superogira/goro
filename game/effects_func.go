@@ -22,6 +22,7 @@ const (
 	effectFuncPropertyGround
 	effectFuncLandProtectorGround
 	effectFuncSpiritSphere
+	effectFuncGumgang
 	effectFuncFlatColorTile
 	effectFuncGroundTexture
 	effectFuncBodyColor
@@ -56,6 +57,8 @@ func (m *WorldMode) drawFuncEffect(screen *render.Frame, ctx client.Context, pro
 		m.drawLandProtectorGroundEffect(screen, ctx, component, effect, worldX, worldY, worldZ, now)
 	case effectFuncSpiritSphere:
 		m.drawSpiritSphereEffect(screen, ctx, projection, component, effect, worldX, worldY, worldZ, now)
+	case effectFuncGumgang:
+		m.drawGumgangEffect(screen, ctx, projection, component, effect, worldX, worldY, worldZ, now)
 	case effectFuncFlatColorTile:
 		m.drawFlatColorTileEffect(screen, component, worldX, worldY, worldZ)
 	case effectFuncGroundTexture:
@@ -596,7 +599,16 @@ func (m *WorldMode) drawSpiritSphereEffect(screen *render.Frame, ctx client.Cont
 	if texture == nil {
 		return
 	}
-	count := maxInt(component.duplicate, 5)
+	count := maxInt(component.duplicate, 1)
+	if effect.persistent {
+		actor, ok, _ := actorForCombatID(ctx, effect.actorID)
+		if !ok {
+			return
+		}
+		// Monks have up to five; Gunslingers have ten. Bound malformed packets
+		// without changing the authoritative count kept on the actor.
+		count = min(int(actor.SpiritSpheres), 10)
+	}
 	elapsedFrames := math.Max(0, now.Sub(effect.starts).Seconds()*60)
 	alpha := clampFloat(elapsedFrames*0.005, 0, 1)
 	for i := 0; i < count; i++ {

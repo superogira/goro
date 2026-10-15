@@ -1,8 +1,11 @@
 package game
 
 import (
+	"time"
+
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/network"
 )
 
 type actorEffectStateEffect struct {
@@ -20,11 +23,10 @@ func (m *WorldMode) applyActorEffectStateEffects(ctx client.Context, actorID uin
 		return
 	}
 	for _, stateEffect := range actorEffectStateEffects {
-		if oldState&stateEffect.bit != 0 {
-			m.removeWorldEffect(stateEffect.effectID, actorID)
-		}
 		if newState&stateEffect.bit != 0 {
-			m.addWorldEffect(ctx, stateEffect.effectID, actorID)
+			m.addWorldEffectIfMissing(ctx, stateEffect.effectID, actorID)
+		} else if oldState&stateEffect.bit != 0 {
+			m.removeWorldEffect(stateEffect.effectID, actorID)
 		}
 	}
 }
@@ -36,15 +38,81 @@ func (m *WorldMode) syncCurrentActorEffectStateEffects(ctx client.Context) {
 	if ctx.World.Player.HasState {
 		m.applyActorEffectStateEffects(ctx, ctx.World.Player.ID, 0, ctx.World.Player.EffectState)
 	}
+	m.syncActorSpiritEffects(ctx, ctx.World.Player.ID)
 	for _, actor := range ctx.World.Actors {
 		if actor.HasState {
 			m.applyActorEffectStateEffects(ctx, actor.ID, 0, actor.EffectState)
 		}
+		m.syncActorSpiritEffects(ctx, actor.ID)
 	}
 }
 
 func (m *WorldMode) removeActorEffectStateEffects(actorID uint32) {
 	for _, stateEffect := range actorEffectStateEffects {
 		m.removeWorldEffect(stateEffect.effectID, actorID)
+	}
+	m.removeWorldEffect(effectGumgang, actorID)
+	m.removeWorldEffect(effectSteelBody, actorID)
+	m.removeWorldEffect(effectChookgi, actorID)
+	m.removeWorldEffect(effectChookgi2, actorID)
+	m.removeWorldEffect(effectChookgi3, actorID)
+}
+
+// Sphere counts are authoritative server state, not a side effect of casting
+// Call Spirits: spheres can also be spent, absorbed, or expire.
+func applySpiritSphereCount(ctx client.Context, update network.SpiritSphereCount) bool {
+	actor, ok, local := actorForCombatID(ctx, update.ActorID)
+	if !ok {
+		return false
+	}
+	actor.SpiritSpheres = update.Count
+	actor.HasSpiritSpheres = true
+	if local {
+		ctx.World.Player.SpiritSpheres = update.Count
+		ctx.World.Player.HasSpiritSpheres = true
+	} else {
+		ctx.World.Actors[actor.ID] = actor
+	}
+	return true
+}
+
+func (m *WorldMode) syncActorSpiritEffects(ctx client.Context, actorID uint32) {
+	if isLocalActor(ctx, actorID) {
+		actorID = localSkillTarget(ctx)
+	}
+	actor, ok, _ := actorForCombatID(ctx, actorID)
+	if !ok {
+		return
+	}
+	visible := !actorHasStealth(actor)
+	m.setActorStateEffect(ctx, actorID, effectGumgang, visible && actor.Opt3State&db.Opt3Explosionspirits != 0)
+	m.setActorStateEffect(ctx, actorID, effectSteelBody, visible && actor.Opt3State&db.Opt3Steelbody != 0)
+	sphereEffect := effectChookgi
+	switch actor.Job {
+	case db.JobMonkB:
+		sphereEffect = effectChookgi2
+	case db.JobGunslinger, db.JobGunslingerB:
+		sphereEffect = effectChookgi3
+	}
+	for _, id := range [...]int{effectChookgi, effectChookgi2, effectChookgi3} {
+		m.setActorStateEffect(ctx, actorID, id, visible && actor.SpiritSpheres > 0 && id == sphereEffect)
+	}
+}
+
+// A state effect loops until the server clears it. Ground skill units still use
+// persistent=true with a deadline; a zero deadline means explicitly removed.
+func (m *WorldMode) setActorStateEffect(ctx client.Context, actorID uint32, effectID int, active bool) {
+	if !active {
+		m.removeWorldEffect(effectID, actorID)
+		return
+	}
+	m.addWorldEffectIfMissing(ctx, effectID, actorID)
+	now := time.Now()
+	for i := range m.worldEffects {
+		effect := &m.worldEffects[i]
+		if effect.effectID == effectID && effect.actorID == actorID && !effect.expired(now) {
+			effect.persistent = true
+			effect.expires = time.Time{}
+		}
 	}
 }

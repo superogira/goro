@@ -45,6 +45,7 @@ func TestSelectCharacterClearsCharacterScopedState(t *testing.T) {
 	s.Friends = Friends{List: []Friend{{Name: "Friend"}}}
 	s.Party = Party{Name: "Party", Members: []PartyMember{{AccountID: 1, Name: "Old"}}}
 	s.Movement = Movement{ServerSpeed: 120, HasServerSpeed: true}
+	s.SuperNovicePrayer.Record("old character's chat", time.Now())
 
 	s.SelectCharacter(Character{
 		ID:       150001,
@@ -78,6 +79,9 @@ func TestSelectCharacterClearsCharacterScopedState(t *testing.T) {
 	}
 	if s.CharID != 150001 || s.Selected.ID != 150001 || s.Selected.Name != "New" {
 		t.Fatalf("selected character not applied: char_id=%d selected=%+v", s.CharID, s.Selected)
+	}
+	if s.SuperNovicePrayer != (SuperNovicePrayer{}) {
+		t.Fatal("prayer history leaked across character selection")
 	}
 	if s.Inventory.Zeny != 42 || len(s.Inventory.Items) != 0 || s.Inventory.Weight != 0 || s.Inventory.MaxWeight != 0 {
 		t.Fatalf("inventory was not reset to selected character money: %+v", s.Inventory)

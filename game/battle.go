@@ -715,6 +715,11 @@ func (m *WorldMode) addSkillEffect(ctx client.Context, action network.ActorActio
 	}
 	for _, effectID := range spec.effectIDs {
 		if m.addWorldEffectBetweenAt(ctx, effectID, action.TargetID, action.SourceID, starts) {
+			if effectID == effectTanji {
+				// TANJI uses a square of radius 2 + 0.4 * skill level.
+				level := minInt(5, maxInt(1, int(action.SkillLevel)))
+				m.worldEffects[len(m.worldEffects)-1].size = math.Sqrt2 * (2 + 0.4*float64(level)) / 5
+			}
 			glog.Debugf("skill effect skill=%d src=%d target=%d effect=%d", action.SkillID, action.SourceID, action.TargetID, effectID)
 		}
 	}
@@ -1359,6 +1364,9 @@ func skillCastActionFamilyForActor(actor world.Actor, skillID uint16) int {
 	}
 	if !res.HasPlayerJobToken(int(actor.Job)) {
 		return spriteActionNonPCAttack
+	}
+	if skillID == db.SkillMOSteelbody || skillID == db.SkillMOExplosionspirits {
+		return spriteActionIdle
 	}
 	return spriteActionPCReadyFight
 }

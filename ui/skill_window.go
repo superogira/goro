@@ -383,7 +383,7 @@ func (w *SkillWindow) skillTableWidget(ctx Context, assets AssetProvider, action
 		rotheme.TableViewRowCount(len(skills)),
 		rotheme.TableViewRowHeight(skillRowH),
 		rotheme.TableViewHeaderHeight(skillHeaderH),
-		rotheme.TableViewEmptyText("No skills received from server yet."),
+		rotheme.TableViewEmptyText("No skills in this tab."),
 		rotheme.TableViewScrollYSignal(w.ensureScrollSignal()),
 		rotheme.TableViewSelectedRow(w.ensureGamepadRowSignal()),
 		rotheme.TableViewDispatchHoverToCells(false),
@@ -494,6 +494,9 @@ func (w *SkillWindow) skillTableCell(ctx Context, assets AssetProvider, skill se
 	case "icon":
 		return rotheme.TableViewSimpleCell{Icon: w.skillIconImage(ctx, assets, skill)}
 	case "type":
+		if display.Level == 0 && !skill.Upgradable {
+			return rotheme.TableViewSimpleCell{Hidden: true}
+		}
 		return rotheme.TableViewSimpleCell{
 			Text:  skillTypeLabel(display),
 			Color: skillTypeColor(display),
@@ -982,10 +985,8 @@ func (w *SkillWindow) buildVisibleSkills(ctx Context, job int, groups []db.Skill
 				seen[skillID] = true
 				continue
 			}
-			if !w.skillRequirementsMet(job, levels, skillID) {
-				continue
-			}
 			skill := w.lockedSkill(ctx, skillID)
+			skill.Upgradable = w.skillRequirementsMet(job, levels, skillID)
 			ordered = append(ordered, skill)
 			seen[skillID] = true
 			levels[skillID] = w.pendingFor(skillID)
@@ -1000,7 +1001,7 @@ func (w *SkillWindow) buildVisibleSkills(ctx Context, job int, groups []db.Skill
 }
 
 func (w *SkillWindow) lockedSkill(ctx Context, skillID uint16) session.Skill {
-	skill := session.Skill{ID: skillID, Upgradable: true}
+	skill := session.Skill{ID: skillID}
 	if ctx.Resources != nil {
 		if maxLevel, ok := ctx.Resources.SkillMaxLevel(int(skillID)); ok {
 			skill.MaxLevel = maxLevel

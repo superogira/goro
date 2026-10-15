@@ -34,10 +34,21 @@ type PetInfoWindow struct {
 
 func (w *PetInfoWindow) OpenInfo(ctx Context, property network.PetProperty) {
 	w.EnsureWindow(petInfoWindowW, petInfoWindowH)
+	// Status updates reuse the editor so a hunger tick cannot interrupt typing.
+	if !w.IsOpen() || property.Modified || property.Name != w.property.Name || property.Job != w.property.Job {
+		if w.nameField != nil {
+			releaseWindowFocus(ctx, w.nameField)
+		}
+		w.nameField = nil
+	}
+	if w.nameField == nil || !w.nameField.IsFocused() {
+		w.name = property.Name
+		if w.nameField != nil {
+			w.nameField.SetText(w.name)
+		}
+	}
 	w.property = property
 	w.hasInfo = true
-	w.name = property.Name
-	w.nameField = nil
 	w.Window.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
 }
@@ -54,6 +65,10 @@ func (w *PetInfoWindow) Update(ctx Context) bool {
 	consumed := w.Window.Update(ctx)
 	w.Publish(ctx)
 	return consumed
+}
+
+func (w *PetInfoWindow) KeyboardShortcutsBlocked() bool {
+	return w.IsOpen() && w.nameField != nil && w.nameField.IsFocused()
 }
 
 func (w *PetInfoWindow) widgetTree(ctx Context) widget.Widget {

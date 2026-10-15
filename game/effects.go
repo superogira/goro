@@ -741,6 +741,11 @@ type worldEffect struct {
 	hasSpriteFrame                       bool
 }
 
+// State-owned effects have no deadline; their server update removes them.
+func (effect worldEffect) expired(now time.Time) bool {
+	return !effect.expires.IsZero() && now.After(effect.expires)
+}
+
 type worldEffectSpec struct {
 	duration         time.Duration
 	cameraShake      time.Duration
@@ -978,7 +983,17 @@ func (m *WorldMode) applySkillNoDamageNotify(ctx client.Context, notify network.
 		}
 	}
 	for _, effectID := range skillEffectIDs(notify.SkillID) {
-		if m.addWorldEffectBetweenAt(ctx, effectID, notify.TargetID, notify.SourceID, now) {
+		actorID := notify.TargetID
+		// The status packet may already have installed the persistent aura.
+		if effectID == effectSteelBody {
+			if isLocalActor(ctx, actorID) {
+				actorID = localSkillTarget(ctx)
+			}
+			if m.hasActiveWorldEffect(effectID, actorID, now) {
+				continue
+			}
+		}
+		if m.addWorldEffectBetweenAt(ctx, effectID, actorID, notify.SourceID, now) {
 			glog.Debugf("skill effect skill=%d src=%d target=%d effect=%d amount=%d", notify.SkillID, notify.SourceID, notify.TargetID, effectID, notify.Amount)
 		}
 	}
@@ -1372,7 +1387,7 @@ func (m *WorldMode) addWorldEffectIfMissing(ctx client.Context, effectID int, ac
 
 func (m *WorldMode) hasActiveWorldEffect(effectID int, actorID uint32, now time.Time) bool {
 	for _, effect := range m.worldEffects {
-		if effect.effectID == effectID && effect.actorID == actorID && now.Before(effect.expires) {
+		if effect.effectID == effectID && effect.actorID == actorID && !effect.expired(now) {
 			return true
 		}
 	}
@@ -1476,7 +1491,7 @@ func (m *WorldMode) addWorldEffectAtCellLifetime(ctx client.Context, effectID in
 		moved := false
 		for _, effect := range m.worldEffects {
 			if effect.effectID == effectID && effect.actorID == actorID {
-				if starts.Before(effect.expires) {
+				if !effect.expired(starts) {
 					if !updated {
 						moved = effect.x != x || effect.y != y
 						effect.x = x
@@ -1603,7 +1618,7 @@ func (m *WorldMode) addWorldEffectAtCellDurationSizeIfMissing(ctx client.Context
 func (m *WorldMode) addWorldEffectAtCellDurationSizeRotationIfMissing(ctx client.Context, effectID int, actorID uint32, x, y int, starts time.Time, durationOverride time.Duration, sizeOverride float64, rotationRadiansPerSecond float64) bool {
 	now := time.Now()
 	for _, effect := range m.worldEffects {
-		if effect.effectID == effectID && effect.actorID == actorID && effect.x == x && effect.y == y && now.Before(effect.expires) {
+		if effect.effectID == effectID && effect.actorID == actorID && effect.x == x && effect.y == y && !effect.expired(now) {
 			return false
 		}
 	}
@@ -1613,7 +1628,7 @@ func (m *WorldMode) addWorldEffectAtCellDurationSizeRotationIfMissing(ctx client
 func (m *WorldMode) addWorldEffectBetweenAtDurationIfMissing(ctx client.Context, effectID int, actorID, targetID uint32, starts time.Time, durationOverride time.Duration) bool {
 	now := time.Now()
 	for _, effect := range m.worldEffects {
-		if effect.effectID == effectID && effect.actorID == actorID && effect.targetID == targetID && now.Before(effect.expires) {
+		if effect.effectID == effectID && effect.actorID == actorID && effect.targetID == targetID && !effect.expired(now) {
 			return false
 		}
 	}
@@ -1640,6 +1655,15 @@ func (m *WorldMode) addSkillCastEffects(ctx client.Context, skillID uint16, prop
 		}
 	}
 	if skillHidesCastAura(skillID) {
+		return
+	}
+	if skillID == db.SkillMOExtremityfist {
+		effectID := effectBeginAsura
+		if actor, ok, _ := actorForCombatID(ctx, sourceID); ok && actor.Job == db.JobMonkH {
+			effectID = effectBeginAsura11
+		}
+		// The glyph sequence has its own timing, independent of cast speed.
+		m.addWorldEffectAt(ctx, effectID, sourceID, starts)
 		return
 	}
 	effectID := skillCastAuraEffectID(property)
@@ -1834,6 +1858,7 @@ type skillActionSpec struct {
 	hasFrame bool
 	length   int
 	speed    time.Duration
+	duration time.Duration
 	play     bool
 	repeat   bool
 	delay    time.Duration
@@ -1927,6 +1952,9 @@ func (s skillActionSpec) actorAnimationForActorWithResources(manager *res.Manage
 	if !s.defined {
 		s = defaultSkillActionSpec
 	}
+	if s.duration > 0 {
+		duration = s.duration
+	}
 	if s.delay > 0 && !started.IsZero() {
 		started = started.Add(s.delay)
 	}
@@ -1994,6 +2022,9 @@ func importedSkillEffectSpec(skillID uint16) skillEffectSpec {
 }
 
 func importedSkillActionSpec(skillID uint16) (skillActionSpec, bool) {
+	if spec, ok := monkSkillActionSpec(skillID); ok {
+		return spec, true
+	}
 	if skillID == db.SkillNJTatamigaeshi {
 		spec := newSkillActionSpec(skillActorActionPickup, false, nil)
 		spec.hasFrame = true
@@ -2437,6 +2468,8 @@ func effectFuncAdapterForName(name string) effectFuncAdapter {
 		return effectFuncLandProtectorGround
 	case "SpiritSphere":
 		return effectFuncSpiritSphere
+	case "Gumgang":
+		return effectFuncGumgang
 	case "FlatColorTile":
 		return effectFuncFlatColorTile
 	case "GroundTexture", "SpiderWeb":
@@ -2466,7 +2499,7 @@ func (m *WorldMode) drawWorldEffects(screen *render.Frame, ctx client.Context, p
 	}
 	active := m.worldEffects[:0]
 	for _, effect := range m.worldEffects {
-		if now.After(effect.expires) {
+		if effect.expired(now) {
 			continue
 		}
 		spec, ok := worldEffectSpecForID(effect.effectID)

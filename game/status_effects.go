@@ -18,7 +18,9 @@ func (m *WorldMode) applyStatusEffectChange(ctx client.Context, change network.S
 		return
 	}
 	m.applyFalconStatus(ctx, change)
-	m.applyActorOpt3StateStatus(ctx, change)
+	if actorID := applyActorOpt3StateStatus(ctx, change); actorID != 0 {
+		m.syncActorSpiritEffects(ctx, actorID)
+	}
 	m.applyTrickDeadStatus(ctx, change)
 	m.applyTaekwonStatus(ctx, change)
 	m.applyTaekwonNightStatus(ctx, change)
@@ -146,21 +148,21 @@ func taekwonStanceAction(statusID uint16) (actionFamily, frame int, ok bool) {
 	}
 }
 
-func (m *WorldMode) applyActorOpt3StateStatus(ctx client.Context, change network.StatusEffectChange) {
+func applyActorOpt3StateStatus(ctx client.Context, change network.StatusEffectChange) uint32 {
 	bit, ok := actorOpt3StateBitForStatus(change.StatusID)
 	if !ok || ctx.World == nil {
-		return
+		return 0
 	}
 	id := change.ActorID
 	if id == 0 {
 		id = localSkillTarget(ctx)
 	}
 	if id == 0 {
-		return
+		return 0
 	}
 	actor, ok, local := actorForCombatID(ctx, id)
 	if !ok {
-		return
+		return 0
 	}
 	if change.Active {
 		actor.Opt3State |= bit
@@ -171,9 +173,10 @@ func (m *WorldMode) applyActorOpt3StateStatus(ctx client.Context, change network
 	if local {
 		ctx.World.Player.Opt3State = actor.Opt3State
 		ctx.World.Player.HasState = true
-		return
+	} else {
+		upsertActor(ctx, actor)
 	}
-	upsertActor(ctx, actor)
+	return id
 }
 
 func actorOpt3StateBitForStatus(statusID uint16) (uint32, bool) {

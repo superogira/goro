@@ -3815,6 +3815,7 @@ const (
 	SkillEffectBottomFortuneGround    = 11031
 	SkillEffectBottomServiceGround    = 11032
 	SkillEffectGunslingerCoinSound    = 11033
+	SkillEffectSteelBodyRing          = 11034
 )
 
 var SkillEffects = map[uint16]SkillEffectSpec{
@@ -4000,16 +4001,16 @@ var SkillEffects = map[uint16]SkillEffectSpec{
 	SkillCRSpearquicken:             {EffectIDs: []int{effectSpearQuicken}},
 	SkillMOCallspirits:              {},
 	SkillMOAbsorbspirits:            {SuccessEffectIDsSelf: []int{effectAbsorbSpirits}},
-	SkillMOTripleattack:             {EffectIDs: []int{effectTripleAttack}},
+	SkillMOTripleattack:             {EffectTiming: SkillEffectAtActionStart, EffectIDs: []int{effectTripleAttack}},
 	SkillMOBodyrelocation:           {},
 	SkillMOInvestigate:              {EffectIDs: []int{effectChimto}},
 	SkillMOFingeroffensive:          {EffectIDs: []int{effectTanji}, HitEffectIDs: []int{1}},
-	SkillMOSteelbody:                {EffectIDs: []int{effectSteelBody, effectQuake}},
+	SkillMOSteelbody:                {EffectIDs: []int{effectSteelBody, SkillEffectSteelBodyRing, effectQuake}},
 	SkillMOBladestop:                {},
-	SkillMOExplosionspirits:         {EffectIDsOnCaster: []int{effectGumgang2, effectQuake}, BeginCastEffectIDs: []int{12}},
-	SkillMOExtremityfist:            {EffectIDs: []int{effectBeginAsura, effectQuake}, HitEffectIDs: []int{effectTeiHit1X}, BeginCastEffectIDs: []int{12}},
-	SkillMOChaincombo:               {EffectIDs: []int{effectTeiHit1, effectChainCombo}, EffectIDsOnCaster: []int{effectGumgang3}},
-	SkillMOCombofinish:              {EffectIDs: []int{330, effectQuake}},
+	SkillMOExplosionspirits:         {EffectIDsOnCaster: []int{effectGumgang2, effectQuake}, HideCastAura: true},
+	SkillMOExtremityfist:            {EffectIDs: []int{effectQuake}, HitEffectIDs: []int{effectTeiHit1X}},
+	SkillMOChaincombo:               {EffectIDs: []int{effectTeiHit1, effectChainCombo}, EffectIDsOnCaster: []int{effectGumgang3}, HitEffectIDs: []int{effectSonicBlowHit}},
+	SkillMOCombofinish:              {EffectIDs: []int{330, effectQuake}, EffectIDsOnCaster: []int{effectGumgang3}, HitEffectIDs: []int{1}},
 	SkillSACastcancel:               {},
 	SkillSAMagicrod:                 {SuccessEffectIDs: []int{effectMagicRod}},
 	SkillSASpellbreaker:             {SuccessEffectIDs: []int{effectSpellBreaker}},
@@ -4402,6 +4403,7 @@ var SkillActions = map[uint16]SkillActionKind{
 	SkillNVTrickdead:          SkillActionNone,
 	SkillTFBacksliding:        SkillActionNone,
 	SkillSTChasewalk:          SkillActionIdle,
+	SkillMOCallspirits:        SkillActionIdle,
 	SkillChSoulcollect:        SkillActionIdle,
 	SkillSMBash:               SkillActionAttack,
 	SkillSMMagnum:             SkillActionAttack,

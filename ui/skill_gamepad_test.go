@@ -62,7 +62,7 @@ func TestSkillGamepadActivateStagesAndFooterPresses(t *testing.T) {
 	window.Toggle(Context{Session: s, ScreenW: 1280, ScreenH: 720})
 	ctx := Context{Session: s, ScreenW: 1280, ScreenH: 720}
 
-	window.GamepadNavigate(ctx, 0, 1)
+	selectBashRow(t, window, ctx)
 	window.GamepadActivate(ctx)
 	if got := window.pendingFor(db.SkillSMBash); got != 1 {
 		t.Fatalf("staged bash levels = %d, want 1", got)
@@ -82,7 +82,7 @@ func TestSkillGamepadInfoOpensDetailWindow(t *testing.T) {
 	window.Toggle(Context{Session: s, ScreenW: 1280, ScreenH: 720})
 	ctx := Context{Session: s, ScreenW: 1280, ScreenH: 720}
 
-	window.GamepadNavigate(ctx, 0, 1)
+	selectBashRow(t, window, ctx)
 	window.GamepadInfo(ctx)
 	if !window.detail.IsOpen() {
 		t.Fatal("expected the skill detail window to open")
@@ -205,4 +205,19 @@ func TestSkillDetailScrollsOnlyWhenTextOverflows(t *testing.T) {
 	if !detail.GamepadScroll(-1) {
 		t.Fatal("up from the bottom should scroll")
 	}
+}
+
+// selectBashRow places the handheld row cursor on Bash. The vertical list
+// shows the full class tree in order (novice rows first), so Bash's row
+// index depends on the tree layout, not the session order.
+func selectBashRow(t *testing.T, window *SkillWindow, ctx Context) {
+	t.Helper()
+	window.ensureSkillView(ctx)
+	for row, skill := range window.activeSkills() {
+		if skill.ID == db.SkillSMBash {
+			window.gamepadRow = row
+			return
+		}
+	}
+	t.Fatal("bash not present in the visible skill list")
 }

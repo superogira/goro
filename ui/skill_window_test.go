@@ -143,12 +143,12 @@ func TestSkillWindowShowsPendingUnlockedSkillBeforeConfirm(t *testing.T) {
 	}
 	window := &SkillWindow{}
 
-	if containsSkill(window.visibleSkills(Context{Session: s}), db.SkillSMMagnum) {
-		t.Fatal("magnum break should not be visible before bash reaches level 5")
+	if containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillSMMagnum) {
+		t.Fatal("magnum break should not be unlocked before bash reaches level 5")
 	}
 	window.stageSkill(db.SkillSMBash)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillSMMagnum) {
-		t.Fatal("magnum break should be visible after staged bash level satisfies prerequisites")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillSMMagnum) {
+		t.Fatal("magnum break should be unlocked after staged bash level satisfies prerequisites")
 	}
 }
 
@@ -164,12 +164,12 @@ func TestSkillWindowShowsSuperNoviceThunderstorm(t *testing.T) {
 	}
 	window := &SkillWindow{}
 
-	if containsSkill(window.visibleSkills(Context{Session: s}), db.SkillMGThunderstorm) {
-		t.Fatal("thunderstorm should not be visible before lightning bolt reaches level 4")
+	if containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillMGThunderstorm) {
+		t.Fatal("thunderstorm should not be unlocked before lightning bolt reaches level 4")
 	}
 	window.stageSkill(db.SkillMGLightningbolt)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillMGThunderstorm) {
-		t.Fatal("super novice should see thunderstorm after staged lightning bolt level satisfies prerequisites")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillMGThunderstorm) {
+		t.Fatal("super novice should unlock thunderstorm after staged lightning bolt level satisfies prerequisites")
 	}
 }
 
@@ -201,16 +201,16 @@ func TestSkillWindowShowsWizardUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillWZIcewall,
 		db.SkillWZEarthspike,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("wizard tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillWZStormgust) {
-		t.Fatal("storm gust should not be visible before jupitel thunder reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillWZStormgust) {
+		t.Fatal("storm gust should not be unlocked before jupitel thunder reaches level 3")
 	}
 	window.stageSkill(db.SkillWZJupitel)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillWZStormgust) {
-		t.Fatal("storm gust should be visible after staged jupitel thunder level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillWZStormgust) {
+		t.Fatal("storm gust should be unlocked after staged jupitel thunder level satisfies robr prerequisite")
 	}
 }
 
@@ -239,16 +239,16 @@ func TestSkillWindowShowsHighWizardUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillHWNapalmvulcan,
 		db.SkillHWGanbantein,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("high wizard tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillHWGravitation) {
-		t.Fatal("gravitation should not be visible before magic power reaches level 10")
+	if containsUnlockedSkill(skills, db.SkillHWGravitation) {
+		t.Fatal("gravitation should not be unlocked before magic power reaches level 10")
 	}
 	window.stageSkill(db.SkillHWMagicpower)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillHWGravitation) {
-		t.Fatal("gravitation should be visible after staged magic power level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillHWGravitation) {
+		t.Fatal("gravitation should be unlocked after staged magic power level satisfies robr prerequisite")
 	}
 }
 
@@ -287,31 +287,31 @@ func TestSkillWindowShowsSageUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillSAViolentgale,
 		db.SkillSAVolcano,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("sage tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillWZEarthspike) {
-		t.Fatal("earth spike should not be visible for Sage before seismic weapon reaches level 1")
+	if containsUnlockedSkill(skills, db.SkillWZEarthspike) {
+		t.Fatal("earth spike should not be unlocked for Sage before seismic weapon reaches level 1")
 	}
 	window.stageSkill(db.SkillSASeismicweapon)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillWZEarthspike) {
-		t.Fatalf("earth spike should be visible after staged seismic weapon satisfies robr Sage prerequisite: %v", skills)
+	if !containsUnlockedSkill(skills, db.SkillWZEarthspike) {
+		t.Fatalf("earth spike should be unlocked after staged seismic weapon satisfies robr Sage prerequisite: %v", skills)
 	}
-	if containsSkill(skills, db.SkillWZHeavendrive) {
-		t.Fatal("heaven's drive should not be visible for Sage before earth spike reaches level 1")
+	if containsUnlockedSkill(skills, db.SkillWZHeavendrive) {
+		t.Fatal("heaven's drive should not be unlocked for Sage before earth spike reaches level 1")
 	}
 	window.stageSkill(db.SkillWZEarthspike)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillWZHeavendrive) {
-		t.Fatal("heaven's drive should be visible after staged earth spike satisfies robr Sage prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillWZHeavendrive) {
+		t.Fatal("heaven's drive should be unlocked after staged earth spike satisfies robr Sage prerequisite")
 	}
-	if containsSkill(skills, db.SkillSALandprotector) {
-		t.Fatal("land protector should not be visible before volcano reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillSALandprotector) {
+		t.Fatal("land protector should not be unlocked before volcano reaches level 3")
 	}
 	window.stageSkill(db.SkillSAVolcano)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillSALandprotector) {
-		t.Fatal("land protector should be visible after staged volcano level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillSALandprotector) {
+		t.Fatal("land protector should be unlocked after staged volcano level satisfies robr prerequisite")
 	}
 }
 
@@ -347,16 +347,16 @@ func TestSkillWindowShowsProfessorUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillPFMemorize,
 		db.SkillPFSoulburn,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("professor tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillPFMindbreaker) {
-		t.Fatal("mind breaker should not be visible before soul burn reaches level 2")
+	if containsUnlockedSkill(skills, db.SkillPFMindbreaker) {
+		t.Fatal("mind breaker should not be unlocked before soul burn reaches level 2")
 	}
 	window.stageSkill(db.SkillPFSoulburn)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillPFMindbreaker) {
-		t.Fatal("mind breaker should be visible after staged soul burn level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillPFMindbreaker) {
+		t.Fatal("mind breaker should be unlocked after staged soul burn level satisfies robr prerequisite")
 	}
 }
 
@@ -383,16 +383,16 @@ func TestSkillWindowShowsKnightUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillKNPierce,
 		db.SkillKNCavaliermastery,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("knight tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillKNSpearboomerang) {
-		t.Fatal("spear boomerang should not be visible before pierce reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillKNSpearboomerang) {
+		t.Fatal("spear boomerang should not be unlocked before pierce reaches level 3")
 	}
 	window.stageSkill(db.SkillKNPierce)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillKNSpearboomerang) {
-		t.Fatal("spear boomerang should be visible after staged pierce level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillKNSpearboomerang) {
+		t.Fatal("spear boomerang should be unlocked after staged pierce level satisfies robr prerequisite")
 	}
 }
 
@@ -427,16 +427,16 @@ func TestSkillWindowShowsLordKnightUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillLKSpiralpierce,
 		db.SkillLKTensionrelax,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("lord knight tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillLKJointbeat) {
-		t.Fatal("joint beat should not be visible before head crush reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillLKJointbeat) {
+		t.Fatal("joint beat should not be unlocked before head crush reaches level 3")
 	}
 	window.stageSkill(db.SkillLKHeadcrush)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillLKJointbeat) {
-		t.Fatal("joint beat should be visible after staged head crush level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillLKJointbeat) {
+		t.Fatal("joint beat should be unlocked after staged head crush level satisfies robr prerequisite")
 	}
 }
 
@@ -468,24 +468,24 @@ func TestSkillWindowShowsCrusaderUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCRProvidence,
 		db.SkillCRSpearquicken,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("crusader tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillCRReflectshield) {
-		t.Fatal("reflect shield should not be visible before shield boomerang reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillCRReflectshield) {
+		t.Fatal("reflect shield should not be unlocked before shield boomerang reaches level 3")
 	}
-	if containsSkill(skills, db.SkillCRHolycross) {
-		t.Fatal("holy cross should not be visible before faith reaches level 7")
+	if containsUnlockedSkill(skills, db.SkillCRHolycross) {
+		t.Fatal("holy cross should not be unlocked before faith reaches level 7")
 	}
 	window.stageSkill(db.SkillCRShieldboomerang)
 	window.stageSkill(db.SkillCRTrust)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillCRReflectshield) {
-		t.Fatal("reflect shield should be visible after staged shield boomerang level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillCRReflectshield) {
+		t.Fatal("reflect shield should be unlocked after staged shield boomerang level satisfies robr prerequisite")
 	}
-	if !containsSkill(skills, db.SkillCRHolycross) {
-		t.Fatal("holy cross should be visible after staged faith level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillCRHolycross) {
+		t.Fatal("holy cross should be unlocked after staged faith level satisfies robr prerequisite")
 	}
 }
 
@@ -512,16 +512,16 @@ func TestSkillWindowShowsPaladinUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillPaShieldchain,
 		db.SkillPaGospel,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("paladin tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillPaSacrifice) {
-		t.Fatal("martyr's reckoning should not be visible before devotion reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillPaSacrifice) {
+		t.Fatal("martyr's reckoning should not be unlocked before devotion reaches level 3")
 	}
 	window.stageSkill(db.SkillCRDevotion)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillPaSacrifice) {
-		t.Fatal("martyr's reckoning should be visible after staged devotion level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillPaSacrifice) {
+		t.Fatal("martyr's reckoning should be unlocked after staged devotion level satisfies robr prerequisite")
 	}
 }
 
@@ -535,12 +535,12 @@ func TestSkillWindowRequiresFaithFiveForMartyrsReckoning(t *testing.T) {
 		}},
 	}
 	window := &SkillWindow{}
-	if containsSkill(window.visibleSkills(Context{Session: s}), db.SkillPaSacrifice) {
-		t.Fatal("martyr's reckoning should not be visible before Faith reaches level 5")
+	if containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillPaSacrifice) {
+		t.Fatal("martyr's reckoning should not be unlocked before Faith reaches level 5")
 	}
 	s.Skills.List[1].Level = 5
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillPaSacrifice) {
-		t.Fatal("martyr's reckoning should be visible when Endure, Faith, and Devotion requirements are met")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillPaSacrifice) {
+		t.Fatal("martyr's reckoning should be unlocked when Endure, Faith, and Devotion requirements are met")
 	}
 }
 
@@ -569,16 +569,16 @@ func TestSkillWindowShowsPriestUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillPRGloria,
 		db.SkillALLResurrection,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("priest tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillMGSafetywall) {
-		t.Fatal("priest safety wall should not be visible before aspersio reaches level 4")
+	if containsUnlockedSkill(skills, db.SkillMGSafetywall) {
+		t.Fatal("priest safety wall should not be unlocked before aspersio reaches level 4")
 	}
 	window.stageSkill(db.SkillPRAspersio)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillMGSafetywall) {
-		t.Fatal("priest safety wall should be visible after staged aspersio satisfies robr priest prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillMGSafetywall) {
+		t.Fatal("priest safety wall should be unlocked after staged aspersio satisfies robr priest prerequisite")
 	}
 }
 
@@ -607,16 +607,16 @@ func TestSkillWindowShowsHighPriestUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillHPBasilica,
 		db.SkillHPManarecharge,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("high priest tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillHPMeditatio) {
-		t.Fatal("meditatio should not be visible before aspersio reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillHPMeditatio) {
+		t.Fatal("meditatio should not be unlocked before aspersio reaches level 3")
 	}
 	window.stageSkill(db.SkillPRAspersio)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillHPMeditatio) {
-		t.Fatal("meditatio should be visible after staged aspersio level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillHPMeditatio) {
+		t.Fatal("meditatio should be unlocked after staged aspersio level satisfies robr prerequisite")
 	}
 }
 
@@ -646,23 +646,23 @@ func TestSkillWindowShowsMonkUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillMOBladestop,
 		db.SkillMOCombofinish,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("monk tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillMOAbsorbspirits) {
-		t.Fatal("absorb spirits should not be visible before call spirits reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillMOAbsorbspirits) {
+		t.Fatal("absorb spirits should not be unlocked before call spirits reaches level 5")
 	}
-	if containsSkill(skills, db.SkillMOInvestigate) {
-		t.Fatal("investigate should not be visible before call spirits reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillMOInvestigate) {
+		t.Fatal("investigate should not be unlocked before call spirits reaches level 5")
 	}
 	window.stageSkill(db.SkillMOCallspirits)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillMOAbsorbspirits) {
-		t.Fatal("absorb spirits should be visible after staged call spirits level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillMOAbsorbspirits) {
+		t.Fatal("absorb spirits should be unlocked after staged call spirits level satisfies robr prerequisite")
 	}
-	if !containsSkill(skills, db.SkillMOInvestigate) {
-		t.Fatal("investigate should be visible after staged call spirits level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillMOInvestigate) {
+		t.Fatal("investigate should be unlocked after staged call spirits level satisfies robr prerequisite")
 	}
 }
 
@@ -688,7 +688,7 @@ func TestSkillWindowShowsGunslingerUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillGSCracker,
 		db.SkillGSChainaction,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("Gunslinger tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
@@ -699,8 +699,8 @@ func TestSkillWindowShowsGunslingerUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillGSDust,
 		db.SkillGSSpreadattack,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("skill %d should not be visible before its prerequisite reaches the robr level", skillID)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("skill %d should not be unlocked before its prerequisite reaches the robr level", skillID)
 		}
 	}
 	window.stageSkill(db.SkillGSGlittering)
@@ -713,7 +713,7 @@ func TestSkillWindowShowsGunslingerUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillGSDust,
 		db.SkillGSSpreadattack,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("staged prerequisite did not expose Gunslinger skill %d: %v", skillID, skills)
 		}
 	}
@@ -740,16 +740,16 @@ func TestSkillWindowShowsNinjaUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillNJHyousensou,
 		db.SkillNJHuujin,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("Ninja tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillNJKunai) {
-		t.Fatal("kunai should not be visible before throw shuriken reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillNJKunai) {
+		t.Fatal("kunai should not be unlocked before throw shuriken reaches level 5")
 	}
 	window.stageSkill(db.SkillNJSyuriken)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillNJKunai) {
-		t.Fatal("kunai should be visible after staged throw shuriken level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillNJKunai) {
+		t.Fatal("kunai should be unlocked after staged throw shuriken level satisfies robr prerequisite")
 	}
 }
 
@@ -774,24 +774,24 @@ func TestSkillWindowShowsChampionUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillChPalmstrike,
 		db.SkillChTigerfist,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("champion tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillChSoulcollect) {
-		t.Fatal("zen should not be visible before fury reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillChSoulcollect) {
+		t.Fatal("zen should not be unlocked before fury reaches level 5")
 	}
-	if containsSkill(skills, db.SkillChChaincrush) {
-		t.Fatal("chain crush combo should not be visible before tiger fist reaches level 2")
+	if containsUnlockedSkill(skills, db.SkillChChaincrush) {
+		t.Fatal("chain crush combo should not be unlocked before tiger fist reaches level 2")
 	}
 	window.stageSkill(db.SkillMOExplosionspirits)
 	window.stageSkill(db.SkillChTigerfist)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillChSoulcollect) {
-		t.Fatal("zen should be visible after staged fury level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillChSoulcollect) {
+		t.Fatal("zen should be unlocked after staged fury level satisfies robr prerequisite")
 	}
-	if !containsSkill(skills, db.SkillChChaincrush) {
-		t.Fatal("chain crush combo should be visible after staged tiger fist level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillChChaincrush) {
+		t.Fatal("chain crush combo should be unlocked after staged tiger fist level satisfies robr prerequisite")
 	}
 }
 
@@ -824,16 +824,16 @@ func TestSkillWindowShowsHunterUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillHTDetecting,
 		db.SkillHTTalkiebox,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("hunter tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillHTBlastmine) {
-		t.Fatal("blast mine should not be visible before freezing trap reaches level 1")
+	if containsUnlockedSkill(skills, db.SkillHTBlastmine) {
+		t.Fatal("blast mine should not be unlocked before freezing trap reaches level 1")
 	}
 	window.stageSkill(db.SkillHTFreezingtrap)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillHTBlastmine) {
-		t.Fatal("blast mine should be visible after staged freezing trap level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillHTBlastmine) {
+		t.Fatal("blast mine should be unlocked after staged freezing trap level satisfies robr prerequisite")
 	}
 }
 
@@ -860,16 +860,16 @@ func TestSkillWindowShowsSniperUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillSNSight,
 		db.SkillSNWindwalk,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("sniper tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillSNFalconassault) {
-		t.Fatal("falcon assault should not be visible before steel crow reaches level 3")
+	if containsUnlockedSkill(skills, db.SkillSNFalconassault) {
+		t.Fatal("falcon assault should not be unlocked before steel crow reaches level 3")
 	}
 	window.stageSkill(db.SkillHTSteelcrow)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillSNFalconassault) {
-		t.Fatal("falcon assault should be visible after staged steel crow level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillSNFalconassault) {
+		t.Fatal("falcon assault should be unlocked after staged steel crow level satisfies robr prerequisite")
 	}
 }
 
@@ -889,7 +889,7 @@ func TestSkillWindowShowsBardUnlocksFromRobrowserTree(t *testing.T) {
 	}
 	window := &SkillWindow{}
 	skills := window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillBaFrostjoke) {
+	if !containsUnlockedSkill(skills, db.SkillBaFrostjoke) {
 		t.Fatalf("bard tree did not expose frost joke from encore: %v", skills)
 	}
 	for _, skillID := range []uint16{
@@ -899,8 +899,8 @@ func TestSkillWindowShowsBardUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillBaAppleidun,
 		db.SkillBDLullaby,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("bard skill %d should not be visible before staged prerequisite: %v", skillID, skills)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("bard skill %d should not be unlocked before staged prerequisite: %v", skillID, skills)
 		}
 	}
 	window.stageSkill(db.SkillBaMusicallesson)
@@ -914,7 +914,7 @@ func TestSkillWindowShowsBardUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillBaAppleidun,
 		db.SkillBDLullaby,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("bard staged prerequisites did not expose skill %d: %v", skillID, skills)
 		}
 	}
@@ -936,7 +936,7 @@ func TestSkillWindowShowsDancerUnlocksFromRobrowserTree(t *testing.T) {
 	}
 	window := &SkillWindow{}
 	skills := window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillDCScream) {
+	if !containsUnlockedSkill(skills, db.SkillDCScream) {
 		t.Fatalf("dancer tree did not expose scream from encore: %v", skills)
 	}
 	for _, skillID := range []uint16{
@@ -946,8 +946,8 @@ func TestSkillWindowShowsDancerUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillDCServiceforyou,
 		db.SkillBDLullaby,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("dancer skill %d should not be visible before staged prerequisite: %v", skillID, skills)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("dancer skill %d should not be unlocked before staged prerequisite: %v", skillID, skills)
 		}
 	}
 	window.stageSkill(db.SkillDCDancinglesson)
@@ -961,7 +961,7 @@ func TestSkillWindowShowsDancerUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillDCServiceforyou,
 		db.SkillBDLullaby,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("dancer staged prerequisites did not expose skill %d: %v", skillID, skills)
 		}
 	}
@@ -989,7 +989,7 @@ func TestSkillWindowShowsClownUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCGMoonlit,
 		db.SkillCGMarionette,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("clown tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
@@ -999,8 +999,8 @@ func TestSkillWindowShowsClownUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCGLongingfreedom,
 		db.SkillCGSpecialsinger,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("clown skill %d should not be visible before staged prerequisite: %v", skillID, skills)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("clown skill %d should not be unlocked before staged prerequisite: %v", skillID, skills)
 		}
 	}
 	window.stageSkill(db.SkillBaMusicallesson)
@@ -1013,7 +1013,7 @@ func TestSkillWindowShowsClownUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCGLongingfreedom,
 		db.SkillCGSpecialsinger,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("clown staged prerequisites did not expose skill %d: %v", skillID, skills)
 		}
 	}
@@ -1041,7 +1041,7 @@ func TestSkillWindowShowsGypsyUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCGMoonlit,
 		db.SkillCGMarionette,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("gypsy tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
@@ -1051,8 +1051,8 @@ func TestSkillWindowShowsGypsyUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCGLongingfreedom,
 		db.SkillCGSpecialsinger,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("gypsy skill %d should not be visible before staged prerequisite: %v", skillID, skills)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("gypsy skill %d should not be unlocked before staged prerequisite: %v", skillID, skills)
 		}
 	}
 	window.stageSkill(db.SkillDCDancinglesson)
@@ -1065,7 +1065,7 @@ func TestSkillWindowShowsGypsyUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCGLongingfreedom,
 		db.SkillCGSpecialsinger,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("gypsy staged prerequisites did not expose skill %d: %v", skillID, skills)
 		}
 	}
@@ -1098,24 +1098,24 @@ func TestSkillWindowShowsAssassinUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillASSonicblow,
 		db.SkillASVenomdust,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("assassin tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillASGrimtooth) {
-		t.Fatal("grimtooth should not be visible before sonic blow reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillASGrimtooth) {
+		t.Fatal("grimtooth should not be unlocked before sonic blow reaches level 5")
 	}
-	if containsSkill(skills, db.SkillASSplasher) {
-		t.Fatal("venom splasher should not be visible before poison react reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillASSplasher) {
+		t.Fatal("venom splasher should not be unlocked before poison react reaches level 5")
 	}
 	window.stageSkill(db.SkillASSonicblow)
 	window.stageSkill(db.SkillASPoisonreact)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillASGrimtooth) {
-		t.Fatal("grimtooth should be visible after staged sonic blow level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillASGrimtooth) {
+		t.Fatal("grimtooth should be unlocked after staged sonic blow level satisfies robr prerequisite")
 	}
-	if !containsSkill(skills, db.SkillASSplasher) {
-		t.Fatal("venom splasher should be visible after staged poison react level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillASSplasher) {
+		t.Fatal("venom splasher should be unlocked after staged poison react level satisfies robr prerequisite")
 	}
 }
 
@@ -1143,24 +1143,24 @@ func TestSkillWindowShowsAssassinCrossUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillASCCdp,
 		db.SkillASCBreaker,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("assassin cross tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillASCEdp) {
-		t.Fatal("enchant deadly poison should not be visible before create deadly poison reaches level 1")
+	if containsUnlockedSkill(skills, db.SkillASCEdp) {
+		t.Fatal("enchant deadly poison should not be unlocked before create deadly poison reaches level 1")
 	}
-	if containsSkill(skills, db.SkillASCMeteorassault) {
-		t.Fatal("meteor assault should not be visible before soul destroyer reaches level 1")
+	if containsUnlockedSkill(skills, db.SkillASCMeteorassault) {
+		t.Fatal("meteor assault should not be unlocked before soul destroyer reaches level 1")
 	}
 	window.stageSkill(db.SkillASCCdp)
 	window.stageSkill(db.SkillASCBreaker)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillASCEdp) {
-		t.Fatal("enchant deadly poison should be visible after staged create deadly poison satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillASCEdp) {
+		t.Fatal("enchant deadly poison should be unlocked after staged create deadly poison satisfies robr prerequisite")
 	}
-	if !containsSkill(skills, db.SkillASCMeteorassault) {
-		t.Fatal("meteor assault should be visible after staged soul destroyer satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillASCMeteorassault) {
+		t.Fatal("meteor assault should be unlocked after staged soul destroyer satisfies robr prerequisite")
 	}
 }
 
@@ -1187,24 +1187,24 @@ func TestSkillWindowShowsRogueUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillRGStealcoin,
 		db.SkillRGStriphelm,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("rogue tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillACDouble) {
-		t.Fatal("double strafe should not be visible before vulture's eye reaches level 10")
+	if containsUnlockedSkill(skills, db.SkillACDouble) {
+		t.Fatal("double strafe should not be unlocked before vulture's eye reaches level 10")
 	}
-	if containsSkill(skills, db.SkillRGBackstap) {
-		t.Fatal("back stab should not be visible before mug reaches level 4")
+	if containsUnlockedSkill(skills, db.SkillRGBackstap) {
+		t.Fatal("back stab should not be unlocked before mug reaches level 4")
 	}
 	window.stageSkill(db.SkillACVulture)
 	window.stageSkill(db.SkillRGStealcoin)
 	skills = window.visibleSkills(Context{Session: s})
-	if !containsSkill(skills, db.SkillACDouble) {
-		t.Fatal("double strafe should be visible after staged vulture's eye level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillACDouble) {
+		t.Fatal("double strafe should be unlocked after staged vulture's eye level satisfies robr prerequisite")
 	}
-	if !containsSkill(skills, db.SkillRGBackstap) {
-		t.Fatal("back stab should be visible after staged mug level satisfies robr prerequisite")
+	if !containsUnlockedSkill(skills, db.SkillRGBackstap) {
+		t.Fatal("back stab should be unlocked after staged mug level satisfies robr prerequisite")
 	}
 }
 
@@ -1227,16 +1227,16 @@ func TestSkillWindowShowsStalkerUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillSTChasewalk,
 		db.SkillSTPreserve,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("stalker tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillSTFullstrip) {
-		t.Fatal("full divestment should not be visible before divest weapon reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillSTFullstrip) {
+		t.Fatal("full divestment should not be unlocked before divest weapon reaches level 5")
 	}
 	window.stageSkill(db.SkillRGStripweapon)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillSTFullstrip) {
-		t.Fatal("full divestment should be visible after staged divest weapon level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillSTFullstrip) {
+		t.Fatal("full divestment should be unlocked after staged divest weapon level satisfies robr prerequisite")
 	}
 }
 
@@ -1272,16 +1272,16 @@ func TestSkillWindowShowsBlacksmithUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillBSRepairweapon,
 		db.SkillBSAdrenaline,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("blacksmith tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillBSAxe) {
-		t.Fatal("smith axe should not be visible before smith sword reaches level 2")
+	if containsUnlockedSkill(skills, db.SkillBSAxe) {
+		t.Fatal("smith axe should not be unlocked before smith sword reaches level 2")
 	}
 	window.stageSkill(db.SkillBSSword)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillBSAxe) {
-		t.Fatal("smith axe should be visible after staged smith sword level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillBSAxe) {
+		t.Fatal("smith axe should be unlocked after staged smith sword level satisfies robr prerequisite")
 	}
 }
 
@@ -1309,7 +1309,7 @@ func TestSkillWindowShowsWhitesmithUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillWSCartboost,
 		db.SkillWSMeltdown,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("whitesmith tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
@@ -1318,8 +1318,8 @@ func TestSkillWindowShowsWhitesmithUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillWSOverthrustmax,
 		db.SkillWSCarttermination,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("whitesmith skill %d should not be visible before staged prerequisite: %v", skillID, skills)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("whitesmith skill %d should not be unlocked before staged prerequisite: %v", skillID, skills)
 		}
 	}
 	window.stageSkill(db.SkillBSWeaponresearch)
@@ -1331,7 +1331,7 @@ func TestSkillWindowShowsWhitesmithUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillWSOverthrustmax,
 		db.SkillWSCarttermination,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("whitesmith staged prerequisites did not expose skill %d: %v", skillID, skills)
 		}
 	}
@@ -1366,7 +1366,7 @@ func TestSkillWindowShowsAlchemistUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillAMCpArmor,
 		db.SkillAMRest,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("alchemist tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
@@ -1375,8 +1375,8 @@ func TestSkillWindowShowsAlchemistUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillAMCpWeapon,
 		db.SkillAMCallhomun,
 	} {
-		if containsSkill(skills, skillID) {
-			t.Fatalf("alchemist skill %d should not be visible before staged prerequisite: %v", skillID, skills)
+		if containsUnlockedSkill(skills, skillID) {
+			t.Fatalf("alchemist skill %d should not be unlocked before staged prerequisite: %v", skillID, skills)
 		}
 	}
 	window.stageSkill(db.SkillAMPharmacy)
@@ -1390,16 +1390,16 @@ func TestSkillWindowShowsAlchemistUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillAMCpWeapon,
 		db.SkillAMCallhomun,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("alchemist staged prerequisites did not expose skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillAMResurrecthomun) {
-		t.Fatal("homunculus resurrection should not be visible before call homunculus reaches level 1")
+	if containsUnlockedSkill(skills, db.SkillAMResurrecthomun) {
+		t.Fatal("homunculus resurrection should not be unlocked before call homunculus reaches level 1")
 	}
 	window.stageSkill(db.SkillAMCallhomun)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillAMResurrecthomun) {
-		t.Fatal("homunculus resurrection should be visible after staged call homunculus level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillAMResurrecthomun) {
+		t.Fatal("homunculus resurrection should be unlocked after staged call homunculus level satisfies robr prerequisite")
 	}
 }
 
@@ -1425,16 +1425,16 @@ func TestSkillWindowShowsCreatorUnlocksFromRobrowserTree(t *testing.T) {
 		db.SkillCRSlimpitcher,
 		db.SkillCRFullprotection,
 	} {
-		if !containsSkill(skills, skillID) {
+		if !containsUnlockedSkill(skills, skillID) {
 			t.Fatalf("creator tree did not expose unlocked skill %d: %v", skillID, skills)
 		}
 	}
-	if containsSkill(skills, db.SkillCRAciddemonstration) {
-		t.Fatal("acid demonstration should not be visible before acid terror reaches level 5")
+	if containsUnlockedSkill(skills, db.SkillCRAciddemonstration) {
+		t.Fatal("acid demonstration should not be unlocked before acid terror reaches level 5")
 	}
 	window.stageSkill(db.SkillAMAcidterror)
-	if !containsSkill(window.visibleSkills(Context{Session: s}), db.SkillCRAciddemonstration) {
-		t.Fatal("acid demonstration should be visible after staged acid terror level satisfies robr prerequisite")
+	if !containsUnlockedSkill(window.visibleSkills(Context{Session: s}), db.SkillCRAciddemonstration) {
+		t.Fatal("acid demonstration should be unlocked after staged acid terror level satisfies robr prerequisite")
 	}
 }
 
@@ -1594,14 +1594,14 @@ func TestSkillWindowSkillAtMouseUsesTableViewBody(t *testing.T) {
 	}
 
 	skill, ok := window.skillAtMouse(ctx, tableX+8, window.y+ROWindowTitleHeight+skillHeaderH+1)
-	if !ok || skill.ID != db.SkillSMRecovery {
-		t.Fatalf("skill at top row = %+v, %v; want id %d", skill, ok, db.SkillSMRecovery)
+	if !ok || skill.ID != db.SkillNVBasic {
+		t.Fatalf("skill at top row = %+v, %v; want id %d", skill, ok, db.SkillNVBasic)
 	}
 
 	window.ensureScrollSignal().Set(skillRowH)
 	skill, ok = window.skillAtMouse(ctx, tableX+8, window.y+ROWindowTitleHeight+skillHeaderH+1)
-	if !ok || skill.ID != db.SkillSMBash {
-		t.Fatalf("skill at scrolled top row = %+v, %v; want id %d", skill, ok, db.SkillSMBash)
+	if !ok || skill.ID != db.SkillNVFirstaid {
+		t.Fatalf("skill at scrolled top row = %+v, %v; want id %d", skill, ok, db.SkillNVFirstaid)
 	}
 }
 
@@ -1715,6 +1715,49 @@ func TestSkillWindowTablePlusStagesSkill(t *testing.T) {
 	}
 	if !window.dirty {
 		t.Fatal("plus press should mark the window dirty")
+	}
+}
+
+func TestSkillWindowMonkListOnlyUpgradesAvailableSkills(t *testing.T) {
+	s := &session.Session{
+		Selected: session.Character{Job: db.JobMonk},
+		Skills: session.Skills{Points: 3, List: []session.Skill{
+			{ID: db.SkillALDp, Level: 10},
+			{ID: db.SkillALDemonbane, Level: 9, Upgradable: true},
+		}},
+	}
+	ctx := Context{Session: s}
+	window := &SkillWindow{tab: skillTabSecond}
+	for _, unlocked := range []bool{false, true} {
+		if unlocked {
+			window.stageSkill(db.SkillALDemonbane)
+		}
+		window.ensureSkillView(ctx)
+		skills := window.activeSkills()
+		row := skillIndex(skills, db.SkillMOIronhand)
+		if row < 0 {
+			t.Fatal("Iron Fists is missing from the Monk list")
+		}
+		cell := window.skillTableCell(ctx, nil, skills[row], rotheme.TableViewCellContext{
+			Column: rotheme.TableViewColumn{Key: "levelup"},
+		})
+		if cell.HasIconButton != unlocked {
+			t.Fatalf("level-up button visible=%t, want %t", cell.HasIconButton, unlocked)
+		}
+		if !unlocked {
+			typeCell := window.skillTableCell(ctx, nil, skills[row], rotheme.TableViewCellContext{
+				Column: rotheme.TableViewColumn{Key: "type"},
+			})
+			if !typeCell.Hidden {
+				t.Fatal("locked skill without server type information should not be labeled passive")
+			}
+		}
+		point := skillTableLevelUpButtonBounds(row).Center()
+		window.handleSkillTableRowEvent(nil, ctx, nil, skills, row,
+			event.NewMouseEvent(event.MousePress, event.ButtonLeft, event.ButtonStateLeft, point, point, 0))
+		if got := window.pendingFor(db.SkillMOIronhand); (got == 1) != unlocked {
+			t.Fatalf("pending Iron Fists = %d, unlocked=%t", got, unlocked)
+		}
 	}
 }
 
@@ -1907,6 +1950,11 @@ func (r *skillWindowTestRenderer) EquipmentPreviewImageForCharacter(Context, ses
 func (r *skillWindowTestRenderer) UseShortcutSkill(_ Context, skill session.Skill) error {
 	r.used = skill
 	return nil
+}
+
+func containsUnlockedSkill(skills []session.Skill, skillID uint16) bool {
+	index := skillIndex(skills, skillID)
+	return index >= 0 && (skills[index].Level > 0 || skills[index].Upgradable)
 }
 
 func containsSkill(skills []session.Skill, skillID uint16) bool {

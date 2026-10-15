@@ -373,7 +373,7 @@ func (w *skillGridWidget) visibleRows(canvas widget.Canvas) (int, int) {
 
 func (w *SkillWindow) skillGridEntries(ctx Context, assets AssetProvider) []skillGridEntry {
 	w.ensureSkillView(ctx)
-	skills := w.gridSkills(ctx)
+	skills := w.activeSkills()
 	positions := skillGridPositions(ctx.Resources, selectedJob(ctx.Session), w.tab, skills)
 	entries := make([]skillGridEntry, 0, len(skills))
 	for _, skill := range skills {
@@ -387,42 +387,6 @@ func (w *SkillWindow) skillGridEntries(ctx Context, assets AssetProvider) []skil
 		})
 	}
 	return entries
-}
-
-func (w *SkillWindow) gridSkills(ctx Context) []session.Skill {
-	if w.tab == skillTabEtc {
-		return append([]session.Skill(nil), w.activeSkills()...)
-	}
-	job := selectedJob(ctx.Session)
-	groups := db.SkillTreeSkillGroups(job)
-	classLevel := w.tab + 1
-	var skillIDs []uint16
-	for _, group := range groups {
-		if group.ClassLevel == classLevel {
-			skillIDs = group.SkillIDs
-			break
-		}
-	}
-	byID := make(map[uint16]session.Skill, len(w.allSkills))
-	for _, skill := range w.allSkills {
-		byID[skill.ID] = skill
-	}
-	seen := make(map[uint16]bool, len(skillIDs))
-	skills := make([]session.Skill, 0, len(skillIDs))
-	for _, skillID := range skillIDs {
-		if seen[skillID] {
-			continue
-		}
-		seen[skillID] = true
-		if skill, ok := byID[skillID]; ok {
-			skills = append(skills, skill)
-			continue
-		}
-		skill := w.lockedSkill(ctx, skillID)
-		skill.Upgradable = false
-		skills = append(skills, skill)
-	}
-	return skills
 }
 
 func skillGridPositions(manager *res.Manager, job, tab int, skills []session.Skill) map[uint16]int {

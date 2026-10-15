@@ -134,6 +134,8 @@ type Actor struct {
 	HealthState      uint16
 	EffectState      uint32
 	Opt3State        uint32
+	SpiritSpheres    uint16
+	HasSpiritSpheres bool
 	HasState         bool
 	Level            int
 	HasLevel         bool
@@ -192,6 +194,10 @@ func (w *World) UpsertActor(actor Actor) {
 		return
 	}
 	if existing, ok := w.Actors[actor.ID]; ok {
+		if !actor.HasSpiritSpheres {
+			actor.SpiritSpheres = existing.SpiritSpheres
+			actor.HasSpiritSpheres = existing.HasSpiritSpheres
+		}
 		if actor.Name == "" {
 			actor.Name = existing.Name
 		}

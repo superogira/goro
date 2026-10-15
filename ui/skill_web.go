@@ -128,7 +128,7 @@ func (w *SkillWindow) buildSkillWebRows(ctx Context) []skillWebRow {
 }
 
 func (w *SkillWindow) buildSkillWebCells(ctx Context) []skillWebCell {
-	skills := w.gridSkills(ctx)
+	skills := w.visibleSkills(ctx)
 	job := selectedJob(ctx.Session)
 	positions := skillGridPositions(ctx.Resources, job, w.tab, skills)
 	cells := make([]skillWebCell, 0, len(skills))

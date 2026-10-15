@@ -678,6 +678,7 @@ const (
 	effectGreedSound             = SkillEffectGreedSound
 	effectGospelGround           = SkillEffectGospelGround
 	effectShieldProjectile       = SkillEffectShieldProjectile
+	effectSteelBodyRing          = SkillEffectSteelBodyRing
 	effectFogWallGround          = SkillEffectFogWallGround
 	effectHermodeMusic           = SkillEffectHermodeMusic
 	effectBottomDissonanceGround = SkillEffectBottomDissonanceGround
@@ -1101,24 +1102,40 @@ func level99BubbleEffectSpec() EffectSpec {
 }
 
 func gumgangEffectSpec() EffectSpec {
-	components := make([]EffectComponent, 0, 5)
-	for i := 1; i <= 5; i++ {
-		components = append(components, EffectComponent{
-			Kind:           EffectComponent3D,
-			TextureFile:    "effect/super" + strconv.Itoa(i) + ".bmp",
-			Duration:       2 * time.Second,
-			Delay:          time.Duration(i-1) * 400 * time.Millisecond,
-			AlphaMax:       1,
-			FadeOut:        true,
-			AttachedEntity: true,
-			SizeStart:      effectTableSize(100),
-			SizeEnd:        effectTableSize(100),
-			BlendAdditive:  true,
-		})
-	}
 	return EffectSpec{
-		Duration:   3600 * time.Millisecond,
-		Components: components,
+		Duration: 99999 * EffectFrameDuration,
+		Components: []EffectComponent{{
+			Kind:           EffectComponentFUNC,
+			FuncName:       "Gumgang",
+			TextureFiles:   []string{"effect/super1.bmp", "effect/super2.bmp", "effect/super3.bmp", "effect/super4.bmp", "effect/super5.bmp"},
+			Color:          color.RGBA{R: 100, G: 100, B: 255, A: 255},
+			AttachedEntity: true,
+		}},
+	}
+}
+
+func steelBodyEffectSpec() EffectSpec {
+	spec := gumgangEffectSpec()
+	// A packet effect is finite; the Steel Body status keeps its aura alive.
+	spec.Duration = 2 * time.Second
+	spec.Components[0].Duplicate = 4
+	spec.SFX = []string{"effect\\mon_금강불괴.wav"}
+	return spec
+}
+
+func chimtoEffectSpec() EffectSpec {
+	return EffectSpec{
+		Duration: 16 * EffectFrameDuration,
+		SFX:      []string{"effect\\mon_침투경.wav"},
+		Components: []EffectComponent{{
+			Kind:        EffectComponent3D,
+			SpriteFile:  "침투경_", // misc/chimto in the original source's resource aliases
+			SpriteDelay: 2 * EffectFrameDuration,
+			Duration:    16 * EffectFrameDuration,
+			AlphaMax:    200.0 / 255,
+			SizeStart:   effectTableSize(250),
+			SizeEnd:     effectTableSize(250),
+		}},
 	}
 }
 
@@ -1896,7 +1913,7 @@ func asuraGlyphComponent(index int, posX float64, delay, duration time.Duration,
 func tripleAttackEffectSpec() EffectSpec {
 	return delayedSoundEffectSpec(
 		[]string{"effect\\ef_hit2.wav", "effect\\ef_hit4.wav", "effect\\ef_hit2.wav"},
-		[]time.Duration{0, 200 * time.Millisecond, 400 * time.Millisecond},
+		[]time.Duration{10 * EffectFrameDuration, 20 * EffectFrameDuration, 30 * EffectFrameDuration},
 	)
 }
 
@@ -4659,7 +4676,7 @@ var EffectSpecs = map[int]EffectSpec{
 	},
 	effectRuwach: {
 		Duration: 12200 * time.Millisecond,
-		SFX:      []string{"effect\\ef_ruwach.wav"},
+		SFX:      []string{"effect\\ef_sight.wav"},
 		Components: []EffectComponent{
 			{
 				Kind:            EffectComponent3D,
@@ -5176,7 +5193,8 @@ var EffectSpecs = map[int]EffectSpec{
 	effectDevotion:      strEffectSpecAttached("devotion", "", false),
 	effectReflectShield: defenderCylinderEffectSpec("ring_yellow"),
 	effectAbsorbSpirits: absorbSpiritsEffectSpec(),
-	effectSteelBody:     soundOnlyEffectSpec("effect\\mon_금강불괴.wav"),
+	effectSteelBody:     steelBodyEffectSpec(),
+	effectSteelBodyRing: gumgangRingEffectSpec(1500*time.Millisecond, 0.5, 2, 5, ""),
 	effectFlameLauncher: strEffectSpecAttached("enc_fire", "_enemy_hit_wind1.wav", false),
 	effectFrostWeapon:   strEffectSpecAttached("enc_ice", "_enemy_hit_wind1.wav", false),
 	effectLightningLoad: strEffectSpecAttached("enc_wind", "effect\\_enemy_hit_wind1.wav", false),
@@ -5186,7 +5204,7 @@ var EffectSpecs = map[int]EffectSpec{
 	effectGumgang3:      gumgangRingEffectSpec(1000*time.Millisecond, 0.3, 3, 6, ""),
 	effectTanji:         tanjiEffectSpec(),
 	effectTeiHit1X:      teiHitEffectSpec("effect/lens1.tga", "effect\\mon_아수라 패황권.wav", 24, 100*time.Millisecond, color.RGBA{}),
-	effectChimto:        soundOnlyEffectSpec("effect\\mon_침투경.wav"),
+	effectChimto:        chimtoEffectSpec(),
 	effectStealCoin:     strEffectSpecAttached("steal_coin", "", false),
 	effectStripWeapon:   strEffectSpecAttached("strip_weapon", "effect\\t_벗김.wav", false),
 	effectStripShield:   strEffectSpecAttached("strip_shield", "effect\\t_벗김.wav", false),

@@ -230,6 +230,9 @@ func effectComponentAngleDegrees(component worldEffectComponent, effect worldEff
 }
 
 func effect3DSize(component worldEffectComponent, effect worldEffect, salt int, progress float64, duplicateIndex int) (float64, float64) {
+	if effect.size > 0 {
+		return effect.size, effect.size
+	}
 	size := effectBillboardSize(progress, component)
 	sizeX := size
 	sizeY := size

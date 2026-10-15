@@ -132,6 +132,47 @@ func TestParseActorMoveEntry2(t *testing.T) {
 	}
 }
 
+func TestParseActorEntryOpt3State(t *testing.T) {
+	for _, tc := range []struct {
+		id                    uint16
+		length, offset, width int
+	}{
+		{0x0078, 55, 43, 2},
+		{0x0079, 53, 42, 2},
+		{0x007A, 58, 42, 2},
+		{0x007B, 60, 46, 2},
+		{0x01D8, 54, 42, 2},
+		{0x01D9, 53, 42, 2},
+		{0x01DA, 60, 46, 2},
+		{0x02ED, 59, 44, 4},
+		{0x02EE, 60, 44, 4},
+		{0x022C, 65, 49, 4},
+		{0x02EC, 67, 49, 4},
+		{0x07F7, 69, 51, 4},
+		{0x0856, 71, 53, 4},
+		{0x007C, 42, 0, 0},
+		{0x0086, 16, 0, 0},
+	} {
+		for _, value := range []uint32{0, 0x80000018} {
+			data := make([]byte, tc.length)
+			want := value
+			switch tc.width {
+			case 2:
+				want = uint32(uint16(value))
+				binary.LittleEndian.PutUint16(data[tc.offset:], uint16(want))
+			case 4:
+				binary.LittleEndian.PutUint32(data[tc.offset:], want)
+			default:
+				want = 0
+			}
+			entry, ok, err := ParseActorEntry(Packet{ID: tc.id, Data: data})
+			if err != nil || !ok || entry.HasOpt3State != (tc.width != 0) || entry.Opt3State != want {
+				t.Fatalf("packet %#04x: opt3=%#x present=%t, want %#x present=%t; ok=%t err=%v", tc.id, entry.Opt3State, entry.HasOpt3State, want, tc.width != 0, ok, err)
+			}
+		}
+	}
+}
+
 func TestParseActorStandEntry2008(t *testing.T) {
 	data := make([]byte, 60)
 	binary.LittleEndian.PutUint16(data[0:2], 0x02EE)

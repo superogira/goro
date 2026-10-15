@@ -167,7 +167,7 @@ func (m *WorldMode) handleChatRoomAction(ctx client.Context, action gameui.ChatR
 		m.ui.console.AddErrorMessage("Chat room send failed: not connected.")
 		return
 	}
-	if err := ctx.Network.SendGlobalChat(name, message); err != nil {
+	if err := client.SendGlobalChat(ctx, message); err != nil {
 		m.ui.chatRoom.AddError(ctx, "send failed: "+err.Error())
 		m.ui.console.AddErrorMessage("Chat room send failed.")
 		glog.Warnf("chat room send failed: %v", err)

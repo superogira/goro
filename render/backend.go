@@ -987,7 +987,7 @@ func (r *runner) draw(ctx *gogpu.Context) error {
 	// single frame); spamming ERRO per frame costs real time on those very
 	// machines and floods the console. Debug level by default, visible as
 	// info (rate-limited to 1/s) when diagnostics are on (?stats=1).
-	if totalDur > 16*time.Millisecond {
+	if totalDur > time.Second/60 {
 		if r.renderCfg.Stats && time.Since(r.lastSlowFrameLog) >= time.Second {
 			r.lastSlowFrameLog = time.Now()
 			glog.Infof(
@@ -1148,7 +1148,7 @@ func (r *runner) recordUIProfile(drawDur, totalDur time.Duration) {
 		stats.lastLog = now
 	}
 	stats.frames++
-	if totalDur > 16*time.Millisecond {
+	if totalDur > time.Second/60 {
 		stats.slowFrames++
 	}
 	if r.lastUIFrameDur+r.lastUIDrawDur > 16*time.Millisecond {

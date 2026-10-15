@@ -118,6 +118,10 @@ func (w *HomunculusInfoWindow) Rebind(ctx Context) {
 	w.Publish(ctx)
 }
 
+func (w *HomunculusInfoWindow) KeyboardShortcutsBlocked() bool {
+	return w.IsOpen() && w.nameField != nil && w.nameField.IsFocused()
+}
+
 func (w *HomunculusInfoWindow) PopAction() HomunculusInfoAction {
 	action := w.action
 	w.action = HomunculusInfoAction{}

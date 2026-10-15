@@ -547,6 +547,13 @@ func (m *LoginMode) applyLoginParameterChange(ctx client.Context, pkt network.Pa
 }
 
 func (m *LoginMode) applyLoginActorBootstrapPacket(ctx client.Context, pkt network.Packet) bool {
+	if spheres, ok, err := network.ParseSpiritSphereCount(pkt); err != nil {
+		m.packets = append(m.packets, "parse spirit spheres: "+err.Error())
+		return true
+	} else if ok {
+		applySpiritSphereCount(ctx, spheres)
+		return true
+	}
 	if change, ok, err := network.ParseNPCSpriteChange(pkt); err != nil {
 		m.packets = append(m.packets, "parse NPC sprite change: "+err.Error())
 		return true
@@ -580,6 +587,7 @@ func (m *LoginMode) applyLoginStatusEffectPacket(ctx client.Context, pkt network
 	if !ok {
 		return false
 	}
+	applyActorOpt3StateStatus(ctx, change)
 	if applyLocalStatusEffectChange(ctx.Session, change, time.Now()) {
 		glog.Debugf("login status effect id=%d actor=%d active=%t duration_ms=%d", change.StatusID, change.ActorID, change.Active, change.Duration.Milliseconds())
 	}

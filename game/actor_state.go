@@ -21,6 +21,7 @@ func (m *WorldMode) applyActorStateChange(ctx client.Context, change network.Act
 		return
 	}
 	m.applyActorEffectStateEffects(ctx, change.ID, oldState, change.EffectState)
+	m.syncActorSpiritEffects(ctx, change.ID)
 	if (oldState^change.EffectState)&db.EffectStateHide != 0 {
 		m.addWorldEffect(ctx, effectSummonSlave, change.ID)
 		actor, _, _ := actorForCombatID(ctx, change.ID)
@@ -89,43 +90,67 @@ func (m *WorldMode) applyActorBladeStop(ctx client.Context, blade network.ActorB
 	if blade.SourceID == 0 || blade.TargetID == 0 || ctx.World == nil {
 		return
 	}
-	m.applyActorBladeStopSide(ctx, blade.SourceID, blade.TargetID, blade.Active)
-	m.applyActorBladeStopSide(ctx, blade.TargetID, blade.SourceID, blade.Active)
+	m.applyActorBladeStopSide(ctx, blade.SourceID, blade.TargetID, blade.Active, true)
+	m.applyActorBladeStopSide(ctx, blade.TargetID, blade.SourceID, blade.Active, false)
 	glog.Debugf("actor blade stop src=%d target=%d active=%t", blade.SourceID, blade.TargetID, blade.Active)
 }
 
-func (m *WorldMode) applyActorBladeStopSide(ctx client.Context, actorID, lookID uint32, active bool) {
+func (m *WorldMode) applyActorBladeStopSide(ctx client.Context, actorID, lookID uint32, active, caster bool) {
 	actor, ok, local := actorForCombatID(ctx, actorID)
 	if !ok {
 		return
 	}
+	now := time.Now()
+	anim := actorAnimation{actionFamily: spriteActionIdle, started: now, play: true, hasPlay: true}
+	if active {
+		// Freeze the victim's current frame, before stopping movement or turning.
+		state := m.nonPCSpriteState(actor, now)
+		if actor.Sitting {
+			state.actionFamily = spriteActionSit
+		}
+		started := now
+		if res.HasPlayerJobToken(actorVisualJob(actor)) || actorIsMercenary(actor) {
+			state.loopIdle = false
+			state.headTurn, state.headDir = true, actor.HeadDir
+			if view := m.humanoidSpriteViewForActor(ctx, actor); view != nil {
+				started = view.started
+			}
+		} else if view := m.nonPCSpriteView(ctx, actor); view != nil {
+			started = view.started
+		}
+		anim.actionFamily = state.actionFamily
+		anim.fixedMotion = state.fixedMotion
+		renderActor := actor
+		renderActor.Dir = spriteDirectionFromWorldDirForCamera(actor.Dir, cameraYawForMap(ctx))
+		if action, ok := m.actorResolvedAction(ctx, renderActor, state.actionFamily); ok {
+			anim.fixedMotion = bodyMotionForState(action, state, started, now)
+		}
+		if caster && res.HasPlayerJobToken(actorVisualJob(actor)) {
+			anim.actionFamily = spriteActionPCSkill
+			anim.fixedMotion = 4
+		}
+		anim.play = false
+		anim.hasFixedMotion = true
+		anim.holdFinal = true
+		actor.Opt3State |= db.Opt3Bladestop
+	} else {
+		actor.Opt3State &^= db.Opt3Bladestop
+	}
 	target, targetOK, _ := actorForCombatID(ctx, lookID)
 	if targetOK {
 		actor.Dir = directionFromDelta(actor.X, actor.Y, target.X, target.Y, actor.Dir)
-		if local {
-			ctx.World.Player.Dir = actor.Dir
-			ctx.World.Dir = actor.Dir
-		} else {
-			upsertActor(ctx, actor)
-		}
 	}
-	action := spriteActionIdle
+	if local {
+		ctx.World.Player.Opt3State = actor.Opt3State
+		ctx.World.Player.Dir = actor.Dir
+		ctx.World.Dir = actor.Dir
+	} else {
+		ctx.World.Actors[actor.ID] = actor
+	}
 	if active {
-		action = readyFightActionFamily(actor)
+		m.stopActorMovementAt(ctx, actorID, now)
 	}
-	anim := actorAnimation{
-		actionFamily: action,
-		started:      time.Now(),
-		play:         true,
-		hasPlay:      true,
-		loop:         active,
-	}
-	if local && ctx.Session != nil {
-		m.setActorAction(ctx, ctx.Session.AccountID, anim)
-		m.setActorAction(ctx, ctx.Session.CharID, anim)
-		return
-	}
-	m.setActorAction(ctx, actorID, anim)
+	m.setCombatActorAction(ctx, actorID, anim)
 }
 
 func setActorRenderState(actor *worldstate.Actor, bodyState, healthState uint16, effectState uint32) {
@@ -206,6 +231,9 @@ func actorOpt3StateTint(opt3State uint32) (float64, float64, float64, float64) {
 	if opt3State&db.Opt3Soullink != 0 {
 		r, g, b, a = 0.35, 0.35, 0.9, 0.9
 	}
+	if opt3State&db.Opt3Bladestop != 0 {
+		r, g, b = 64.0/255, 64.0/255, 64.0/255
+	}
 	return r, g, b, a
 }
 
@@ -230,7 +258,7 @@ func (m *WorldMode) playerRenderTint(ctx client.Context, actor worldstate.Actor,
 func (m *WorldMode) actorRenderBlend(actorID uint32, now time.Time) render.Blend {
 	if actorID != 0 {
 		for _, effect := range m.worldEffects {
-			if effect.actorID == actorID && effect.effectID == effectMagicCrasher && !now.After(effect.expires) && magicCrasherFlashActive(now.Sub(effect.starts)) {
+			if effect.actorID == actorID && effect.effectID == effectMagicCrasher && !effect.expired(now) && magicCrasherFlashActive(now.Sub(effect.starts)) {
 				return render.BlendLighter // BL_LIGHT_BODY selects RF_EFFECT in the original client.
 			}
 		}
@@ -260,7 +288,7 @@ func (m *WorldMode) actorBodyColorTint(actorID uint32, tint color.RGBA, now time
 	}
 	base := tint
 	for _, effect := range m.worldEffects {
-		if effect.actorID != actorID || now.Before(effect.starts) || now.After(effect.expires) {
+		if effect.actorID != actorID || now.Before(effect.starts) || effect.expired(now) {
 			continue
 		}
 		switch effect.effectID {
@@ -387,7 +415,7 @@ func (m *WorldMode) actorBodySizeMultiplierFrom(actorID uint32, now time.Time, b
 	multiplier := baseMultiplier
 	var latest time.Time
 	for _, effect := range m.worldEffects {
-		if effect.actorID != actorID || now.Before(effect.starts) || now.After(effect.expires) {
+		if effect.actorID != actorID || now.Before(effect.starts) || effect.expired(now) {
 			continue
 		}
 		targetSize, transition, ok := actorBodySizeTarget(effect.effectID)
@@ -427,13 +455,6 @@ func actorBodySizeTarget(effectID int) (targetSize float64, transition bool, ok 
 func freezeActionFamily(actor worldstate.Actor) int {
 	if res.HasPlayerJobToken(int(actor.Job)) {
 		return spriteActionPCFreeze2
-	}
-	return spriteActionIdle
-}
-
-func readyFightActionFamily(actor worldstate.Actor) int {
-	if res.HasPlayerJobToken(int(actor.Job)) {
-		return spriteActionPCReadyFight
 	}
 	return spriteActionIdle
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"testing"
@@ -252,7 +253,7 @@ func TestSkillWindowGridIncludesUnavailableTreeSkills(t *testing.T) {
 	window := &SkillWindow{tab: skillTabSecond, gridMode: true}
 	ctx := Context{Session: s}
 	window.ensureSkillView(ctx)
-	skills := window.gridSkills(ctx)
+	skills := window.activeSkills()
 
 	if !containsSkill(skills, db.SkillAMLearningpotion) || !containsSkill(skills, db.SkillAMPharmacy) {
 		t.Fatalf("grid skills omit the complete Alchemist tree: %+v", skills)
@@ -260,6 +261,58 @@ func TestSkillWindowGridIncludesUnavailableTreeSkills(t *testing.T) {
 	pharmacy := skills[skillIndex(skills, db.SkillAMPharmacy)]
 	if pharmacy.Level != 0 || pharmacy.Upgradable {
 		t.Fatalf("unavailable Pharmacy = %+v, want visible but locked", pharmacy)
+	}
+}
+
+func TestSkillWindowFullTreeSurvivesViewChanges(t *testing.T) {
+	for _, job := range []int16{db.JobAcolyte, db.JobMonk, db.JobMonkH, db.JobWizard} {
+		t.Run(fmt.Sprint(job), func(t *testing.T) {
+			ctx := Context{
+				Session: &session.Session{Selected: session.Character{Job: job}, Skills: session.Skills{Points: 10}},
+				ScreenW: 800, ScreenH: 600,
+			}
+			window := &SkillWindow{}
+			window.OpenWindow(ctx)
+			for _, group := range db.SkillTreeSkillGroups(int(job)) {
+				window.skillTabColumn(ctx, nil, nil).Children()[group.ClassLevel-1].(*tabWidget).cfg.onClick()
+				for range 3 { // List, grid, then list again.
+					skills := window.activeSkills()
+					if len(skills) != len(group.SkillIDs) {
+						t.Fatalf("job %d tab %d grid=%t has %d skills, want %d", job, group.ClassLevel, window.gridMode, len(skills), len(group.SkillIDs))
+					}
+					for i, id := range group.SkillIDs {
+						skill := skills[i]
+						if skill.ID != id || skill.Level != 0 || window.canStageSkill(ctx.Session, skill) {
+							t.Fatalf("skill %d = %+v, want visible and locked", id, skill)
+						}
+					}
+					if window.gridMode {
+						for _, entry := range window.grid.cfg.entries {
+							if entry.canStage || entry.skill != skills[skillIndex(skills, entry.skill.ID)] {
+								t.Fatalf("grid skill differs from list: %+v", entry)
+							}
+						}
+					} else {
+						window.ensureScrollSignal().Set(0)
+						canvas := &uitest.MockCanvas{}
+						window.content.Layout(widget.NewContext(), geometry.Tight(geometry.Sz(skillWindowWidth, skillWindowHeight)))
+						window.content.Draw(widget.NewContext(), canvas)
+						if !slices.ContainsFunc(canvas.StyledTexts, func(call uitest.DrawStyledTextCall) bool {
+							return call.Text == skillDisplayName(nil, skills[0])
+						}) {
+							t.Fatal("list did not draw its first locked skill")
+						}
+						window.ensureScrollSignal().Set(10000)
+						window.ClampScroll(ctx.Session)
+						if want := float32(maxInt(0, len(skills)*skillRowH-skillTableBodyH)); window.scrollY.Get() != want {
+							t.Fatalf("list scroll limit = %v, want %v", window.scrollY.Get(), want)
+						}
+					}
+					window.toggleGridMode(ctx, nil, nil)
+				}
+				window.toggleGridMode(ctx, nil, nil)
+			}
+		})
 	}
 }
 

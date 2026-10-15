@@ -729,13 +729,22 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 		return true
 	}
 	// The settings window rows: d-pad up/down walks the entries, left/right
-	// adjusts the selected value, A toggles booleans (or steps the value up).
+	// adjusts the selected value, A toggles booleans (or steps the value up),
+	// L1/R1 cycle the Display/Sound/Gameplay tabs.
 	if m.ui.settingsWindow.IsOpen() {
 		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF13) {
 			if now.Sub(m.gamepadActionAt) >= gamepadActionFloor {
 				m.gamepadActionAt = now
 				m.ui.settingsWindow.GamepadActivate(ctx)
 			}
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF20) {
+			m.ui.settingsWindow.GamepadTab(ctx, -1)
+			return true
+		}
+		if ctx.Input.KeyCodeJustPressed(gpucontext.KeyF21) {
+			m.ui.settingsWindow.GamepadTab(ctx, 1)
 			return true
 		}
 		dx := 0

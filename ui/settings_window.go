@@ -28,7 +28,10 @@ type SettingsWindow struct {
 	Window
 	webOpen    bool
 	webSyncKey string
-	// gamepadSelected is the handheld row selection over the settings rows.
+	tab        settingsTab
+	// gamepadSelected is the handheld row selection over the active tab's
+	// gamepadSelected is the handheld row selection over the active tab's
+	// settings rows.
 	gamepadSelected int
 }
 
@@ -134,11 +137,35 @@ func (w *SettingsWindow) widgetTree(ctx client.Context) widget.Widget {
 // selection, left/right adjusts the value, A toggles booleans. The same
 // setters and persistence the upstream mouse widgets used back every row.
 func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
-	rows := w.settingsRows()
-	children := make([]widget.Widget, 0, len(rows)+3)
-	section := func(label string) {
-		children = append(children, rotheme.Label(label))
+	rows := w.settingsRowsForTab()
+	children := make([]widget.Widget, 0, len(rows)+4)
+
+	// Tab bar: L1/R1 cycle tabs on the handheld; a pointer can click too.
+	tabs := make([]widget.Widget, 0, 4)
+	for _, def := range []struct {
+		tab   settingsTab
+		label string
+	}{
+		{settingsTabDisplay, "Display"},
+		{settingsTabSound, "Sound"},
+		{settingsTabGameplay, "Gameplay"},
+	} {
+		tabs = append(tabs, newTabWidget(tabWidgetConfig{
+			label:  def.label,
+			active: w.tab == def.tab,
+			width:  84,
+			height: 24,
+			onClick: func() {
+				if w.tab != def.tab {
+					w.tab = def.tab
+					w.gamepadSelected = 0
+					w.refresh(w.ctx)
+				}
+			},
+		}))
 	}
+	tabs = append(tabs, primitives.Expanded(primitives.Box()))
+	children = append(children, primitives.HBox(tabs...).Gap(-1))
 
 	rowWidget := func(index int, row settingsRow) widget.Widget {
 		selected := index == w.gamepadSelected
@@ -150,7 +177,7 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 			primitives.Box(
 				rotheme.Text(row.label).
 					Color(itemInfoWidgetColor(inventoryTextColor)),
-			).Width(130),
+			).Width(160),
 			primitives.Expanded(
 				rotheme.Text(row.value(ctx)).
 					Color(itemInfoWidgetColor(inventoryTextColor)),
@@ -159,18 +186,8 @@ func (w *SettingsWindow) contentTree(ctx client.Context) widget.Widget {
 			Height(22).
 			Background(background)
 	}
-
-	section("Display")
-	for i := 0; i < 4; i++ {
-		children = append(children, rowWidget(i, rows[i]))
-	}
-	section("Sound")
-	for i := 4; i < 6; i++ {
-		children = append(children, rowWidget(i, rows[i]))
-	}
-	section("Gameplay")
-	for i := 6; i < len(rows); i++ {
-		children = append(children, rowWidget(i, rows[i]))
+	for i, row := range rows {
+		children = append(children, rowWidget(i, row))
 	}
 	return primitives.Box(children...).
 		Padding(14).

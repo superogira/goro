@@ -36,6 +36,12 @@ func (w *SettingsWindow) webSync(ctx client.Context) {
 	obj.Set("snapTargets", settingsSnapTargets(ctx))
 	obj.Set("snapItems", settingsSnapItems(ctx))
 	obj.Set("snapRadius", settingsSnapRadius(ctx))
+	obj.Set("anisotropy", settingsAnisotropy(ctx))
+	obj.Set("upscaling", settingsTextureUpscaling(ctx))
+	obj.Set("smoothSprites", settingsSmoothSprites(ctx))
+	obj.Set("msaa", settingsMSAA(ctx))
+	obj.Set("bloom", settingsBloom(ctx))
+	obj.Set("ssao", settingsSSAO(ctx))
 	fn.Invoke(obj)
 }
 
@@ -105,6 +111,30 @@ func (w *SettingsWindow) handleSettingsWebAction(ctx client.Context, action stri
 	case strings.HasPrefix(action, "set:itemsnap:"):
 		if ctx.Session != nil {
 			ctx.Session.SnapItems = action[len("set:itemsnap:"):] == "1"
+		}
+	case strings.HasPrefix(action, "set:anisotropy:"):
+		if v, err := strconv.Atoi(strings.TrimPrefix(action, "set:anisotropy:")); err == nil && ctx.Runtime != nil {
+			ctx.Runtime.SetAnisotropy(v)
+		}
+	case strings.HasPrefix(action, "set:upscaling:"):
+		if ctx.Runtime != nil {
+			ctx.Runtime.SetTextureUpscaling(action[len("set:upscaling:"):] == "1")
+		}
+	case strings.HasPrefix(action, "set:smooth:"):
+		if ctx.Runtime != nil {
+			ctx.Runtime.SetSmoothSprites(action[len("set:smooth:"):] == "1")
+		}
+	case strings.HasPrefix(action, "set:msaa:"):
+		if ctx.Runtime != nil {
+			ctx.Runtime.SetMSAA(action[len("set:msaa:"):] == "1")
+		}
+	case strings.HasPrefix(action, "set:bloom:"):
+		if ctx.Runtime != nil {
+			ctx.Runtime.SetBloom(action[len("set:bloom:"):] == "1")
+		}
+	case strings.HasPrefix(action, "set:ssao:"):
+		if ctx.Runtime != nil {
+			ctx.Runtime.SetSSAO(action[len("set:ssao:"):] == "1")
 		}
 	default:
 		resync = false

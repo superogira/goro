@@ -1,6 +1,7 @@
 package config
 
 import (
+	"runtime"
 	"bufio"
 	"flag"
 	"fmt"
@@ -171,11 +172,16 @@ func LoadConfig(args []string) (Config, error) {
 	applyServerINI(&cfg)
 	applyStoredUserINI(&cfg)
 	applyWebLoginQuery(&cfg)
-	path, err := filepath.Abs(cfg.ConfigPath)
-	if err != nil {
-		return Config{}, err
+	// filepath.Abs needs Getwd, which js does not implement; the wasm
+	// build keeps the relative name (no local config file exists there —
+	// settings persist in localStorage).
+	if runtime.GOOS != "js" {
+		path, err := filepath.Abs(cfg.ConfigPath)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ConfigPath = path
 	}
-	cfg.ConfigPath = path
 	cfg.DataDir = resolveDataDir(cfg.DataDir)
 	return cfg, nil
 }
@@ -421,6 +427,13 @@ func defaultConfig() Config {
 }
 
 func applyINIFile(cfg *Config, path string, explicit bool) error {
+	if runtime.GOOS == "js" && !explicit {
+		// The wasm build has no local filesystem: os.Open fails with
+		// "not implemented on js", which is not IsNotExist, so the
+		// implicit-file tolerance below would turn every boot fatal. Web
+		// settings persist in localStorage; ini files never apply here.
+		return nil
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) && !explicit {

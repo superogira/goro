@@ -10,7 +10,6 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/ebitengine/oto/v3"
 	mp3codec "github.com/godexture/codec-mp3"

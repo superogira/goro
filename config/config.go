@@ -619,9 +619,9 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Audio.BGM)
 	case "audio.noaudio":
 		return setBool(value, &cfg.Audio.Disabled)
-	case "audio.bgmvolume":
+	case "audio.bgmvolume", "audio.bgm_volume":
 		return setFloat(value, &cfg.Audio.BGMVolume)
-	case "audio.sfxvolume":
+	case "audio.sfxvolume", "audio.sfx_volume":
 		return setFloat(value, &cfg.Audio.SFXVolume)
 	case "audio.loginbgmpool": // ini keys are normalized: underscores stripped
 		cfg.Audio.LoginBGMPool = strings.TrimSpace(value)
@@ -635,23 +635,23 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		cfg.Render.PowerPreference = value
 	case "render.gpusoftware":
 		return setBool(value, &cfg.Render.ForceSoftware)
-	case "render.anisotropy":
+	case "render.anisotropy", "render.anisotrophy":
 		return setInt(value, &cfg.Render.Anisotropy)
-	case "render.textureupscaling":
+	case "render.textureupscaling", "render.texture_upscaling":
 		return setBool(value, &cfg.Render.TextureUpscaling)
 	case "render.ssao":
 		return setBool(value, &cfg.Render.SSAO)
 	case "render.bloom":
 		return setBool(value, &cfg.Render.Bloom)
-	case "render.msaa":
+	case "render.msaa", "render.msaa4x":
 		return setBool(value, &cfg.Render.MSAA)
-	case "render.smoothsprites":
+	case "render.smoothsprites", "render.smooth_sprites":
 		return setBool(value, &cfg.Render.SmoothSprites)
 	case "render.vsync":
 		return setBool(value, &cfg.Render.VSync)
 	case "render.fps":
 		return setBool(value, &cfg.Render.FPS)
-	case "render.resolutionscale":
+	case "render.resolutionscale", "render.resolution_scale":
 		return setFloat(value, &cfg.Render.ResolutionScale)
 	case "render.noui":
 		return setBool(value, &cfg.Render.NoUI)
@@ -673,9 +673,9 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Network.Trace)
 	case "fog.enabled":
 		return setBool(value, &cfg.Fog.Enabled)
-	case "gameplay.noshift":
+	case "gameplay.noshift", "gameplay.no_shift":
 		return setBool(value, &cfg.Gameplay.NoShift)
-	case "gameplay.noctrl":
+	case "gameplay.noctrl", "gameplay.no_ctrl":
 		return setBool(value, &cfg.Gameplay.NoCtrl)
 	case "gameplay.lesseffects", "gameplay.lesseffect", "gameplay.mineffect", "gameplay.less_effects", "gameplay.less_effect":
 		return setBool(value, &cfg.Gameplay.LessEffects)

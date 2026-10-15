@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/kivutar/goro/res"
@@ -269,41 +268,8 @@ func readSFXFile(manager *res.Manager, path string) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("sfx not found: %s", path)
 }
 
-func normalizeSFXPath(path string) string {
-	path = strings.TrimSpace(path)
-	path = strings.Trim(path, "\"")
-	path = strings.ReplaceAll(path, "/", "\\")
-	path = strings.TrimPrefix(path, ".\\")
-	path = strings.TrimPrefix(path, "data\\")
-	if path == "" {
-		return ""
-	}
-	if filepath.Ext(path) == "" {
-		path += ".wav"
-	}
-	return path
-}
+// normalizeSFXPath lives in sfx_paths.go (untagged) so every
+// build shares one implementation.
 
-func sfxPathCandidates(path string) []string {
-	normalized := normalizeSFXPath(path)
-	if normalized == "" {
-		return nil
-	}
-	slash := strings.ReplaceAll(normalized, "\\", "/")
-	candidates := []string{normalized, slash}
-	lower := strings.ToLower(normalized)
-	if strings.HasPrefix(lower, "wav\\") {
-		candidates = append(candidates,
-			"data\\"+normalized,
-			"data/"+slash,
-		)
-	} else {
-		candidates = append(candidates,
-			"wav\\"+normalized,
-			"wav/"+slash,
-			"data\\wav\\"+normalized,
-			"data/wav/"+slash,
-		)
-	}
-	return uniqueStrings(candidates)
-}
+// sfxPathCandidates lives in sfx_paths.go (untagged, tuned to lead
+// with the data/wav prefix for the web pack and GRF layout).

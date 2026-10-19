@@ -2,6 +2,7 @@ package res
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/kivutar/goro/db"
@@ -83,11 +84,22 @@ func (m *Manager) SkillTreePositions(job int) (map[int]int, bool) {
 		return nil, false
 	}
 	m.loadSkillTreePositions()
-	positions, ok := m.skillTreePositions[job]
-	if !ok || len(positions) == 0 {
-		return nil, false
+	if positions := m.skillTreePositions[job]; len(positions) > 0 {
+		return positions, true
 	}
-	return positions, true
+	keys := []string{strconv.Itoa(job), strings.ToUpper(db.JobDisplayName(job))}
+	switch job {
+	case db.JobStar:
+		keys = append(keys, "STAR", "TAEKWON MASTER")
+	case db.JobLinker:
+		keys = append(keys, "LINKER")
+	}
+	for _, key := range keys {
+		if positions := m.skillTreeTextPositions[key]; len(positions) > 0 {
+			return positions, true
+		}
+	}
+	return nil, false
 }
 
 func (m *Manager) loadSkillResourceNames() {
@@ -172,6 +184,9 @@ func (m *Manager) loadSkillTreePositions() {
 	m.skillTreePositionsLoaded = true
 	m.skillTreePositions = make(map[int]map[int]int)
 	m.loadSkillResourceNames()
+	if _, data, ok := m.ReadFirst(skillDataTableCandidates("skilltreeview.txt")); ok {
+		m.skillTreeTextPositions = parseSkillTreeTextPositions(data, m.skillNameToID())
+	}
 
 	globals := make(map[string]luaValue)
 	_, jobData, ok := m.ReadFirst(jobIdentityLuaCandidates)
@@ -200,6 +215,41 @@ func (m *Manager) loadSkillTreePositions() {
 		return
 	}
 	m.skillTreePositions = parseSkillTreePositions(globals["SKILL_TREEVIEW_FOR_JOB"])
+}
+
+// Text clients use JOB { SKILL#position#prerequisite positions#max level@ ... }.
+// Job keys are names in 2008 and numeric IDs in later text tables.
+func parseSkillTreeTextPositions(data []byte, nameToID map[string]int) map[string]map[int]int {
+	lines := strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n")
+	for i, line := range lines {
+		lines[i], _, _ = strings.Cut(line, "//")
+	}
+	out := make(map[string]map[int]int)
+	for _, block := range strings.Split(strings.Join(lines, "\n"), "}") {
+		job, body, ok := strings.Cut(block, "{")
+		job = strings.ToUpper(strings.TrimSpace(job))
+		if !ok || job == "" {
+			continue
+		}
+		entries := strings.Split(body, "@")
+		for _, entry := range entries[:len(entries)-1] {
+			name, fields, ok := strings.Cut(strings.TrimSpace(entry), "#")
+			if !ok {
+				continue
+			}
+			id := nameToID[strings.ToLower(strings.TrimSpace(name))]
+			positionText, _, _ := strings.Cut(fields, "#")
+			position, err := strconv.Atoi(strings.TrimSpace(positionText))
+			if id <= 0 || err != nil || position < 0 {
+				continue
+			}
+			if out[job] == nil {
+				out[job] = make(map[int]int)
+			}
+			out[job][id] = position
+		}
+	}
+	return out
 }
 
 func parseSkillTreePositions(table luaValue) map[int]map[int]int {

@@ -333,3 +333,8 @@ func readSFXFile(manager *res.Manager, path string) ([]byte, string, error) {
 	}
 	return nil, "", fmt.Errorf("sfx not found: %s", path)
 }
+
+// normalizeSFXPath lives in sfx_paths.go (untagged) so every
+// build shares one implementation.
+// sfxPathCandidates lives in sfx_paths.go (untagged, tuned to lead
+// with the data/wav prefix for the web pack and GRF layout).

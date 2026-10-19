@@ -29,3 +29,16 @@ func itemInfoWebDescHTML(text string) string {
 	}
 	return b.String()
 }
+
+func isHexRunes(runes []rune) bool {
+	if len(runes) != 6 {
+		return false
+	}
+	for _, r := range runes {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
+}

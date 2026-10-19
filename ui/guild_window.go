@@ -1207,7 +1207,7 @@ func (w *GuildWindow) showSkillTooltip(ctx Context, skill session.Skill, mx, my 
 		return
 	}
 	const tooltipW = 292
-	w.tooltip.ShowBox(ctx, skillTooltipText(ctx, skill), mx+16+tooltipW/2, my+18, my-6, tooltipW, 24)
+	w.tooltip.ShowColoredBox(ctx, skillTooltipText(ctx, skill), mx+16+tooltipW/2, my+18, tooltipW, 0)
 }
 
 func (w *GuildWindow) hideTooltip() {

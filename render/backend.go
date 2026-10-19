@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gogpu/gg"
 	"github.com/gogpu/gg/integration/ggcanvas"
@@ -1886,11 +1887,13 @@ func uiTextBoxPosition(screen *Frame, box UITextBoxCommand, cached cachedOverlay
 		screenW, screenH := screen.Bounds().Dx(), screen.Bounds().Dy()
 		x := box.X - float64(cached.width)/2
 		y := box.Y
-		if y+float64(cached.height)+8 > float64(screenH) && box.AltY > 0 {
-			y = box.AltY - float64(cached.height)
+		if box.AltY > 0 {
+			if y+float64(cached.height)+8 > float64(screenH) {
+				y = box.AltY - float64(cached.height)
+			}
+			y = clampOverlayFloat64(y, 8, maxOverlayFloat64(8, float64(screenH-cached.height-8)))
 		}
 		x = clampOverlayFloat64(x, 8, maxOverlayFloat64(8, float64(screenW-cached.width-8)))
-		y = clampOverlayFloat64(y, 8, maxOverlayFloat64(8, float64(screenH-cached.height-8)))
 		return x, y
 	default:
 		return box.X, box.Y
@@ -2114,23 +2117,17 @@ func (r *runner) cachedTextBoxImage(provider gpucontext.DeviceProvider, box UITe
 	if text == "" {
 		return cachedOverlayImage{}, nil
 	}
-	maxWidth := float32(box.MaxWidth)
-	if maxWidth <= 0 {
-		maxWidth = 0
+	style := box.style
+	if style.size <= 0 {
+		style = consoleOverlayTextBoxStyle()
 	}
-	maxLines := box.MaxLines
-	if maxLines <= 0 {
-		maxLines = 1
-	}
-	style := consoleOverlayTextBoxStyle()
-	style.maxLines = maxLines
-	if maxWidth > 0 {
+	if box.MaxWidth > 0 {
 		style.minWidth = 28
-		style.maxWidth = maxWidth
+		style.maxWidth = float32(box.MaxWidth)
 		style.wrap = true
 	}
-	if box.style.size > 0 {
-		style = box.style
+	if box.MaxLines > 0 {
+		style.maxLines = box.MaxLines
 	}
 	key := fmt.Sprintf("box|%.3f|%+v|%s", deviceScale, style, text)
 	return r.cachedOverlayTextBoxImage(provider, key, text, deviceScale, style)
@@ -2149,6 +2146,9 @@ type overlayTextBoxStyle struct {
 	align      widget.TextAlign
 	background widget.Color
 	foreground widget.Color
+	border     widget.Color
+	radius     float32
+	colorCodes bool
 }
 
 func consoleOverlayTextBoxStyle() overlayTextBoxStyle {
@@ -2195,7 +2195,12 @@ func (r *runner) cachedOverlayTextBoxImage(provider gpucontext.DeviceProvider, k
 		lines = []string{text}
 	}
 	if style.maxLines > 0 && len(lines) > style.maxLines {
-		lines = append(lines[:style.maxLines-1], ellipsizeOverlayText(measure, strings.Join(lines[style.maxLines-1:], " "), style.size, style.bold, style.maxWidth-style.padX*2))
+		if err := measure.Draw(func(cc *gg.Context) {
+			canvas := uirender.NewCanvas(cc, 1, 1)
+			lines = append(lines[:style.maxLines-1], ellipsizeOverlayText(canvas, strings.Join(lines[style.maxLines-1:], " "), style))
+		}); err != nil {
+			return cachedOverlayImage{}, fmt.Errorf("truncate text box overlay: %w", err)
+		}
 	}
 	var width, height int
 	if err := measure.Draw(func(cc *gg.Context) {
@@ -2215,10 +2220,18 @@ func (r *runner) cachedOverlayTextBoxImage(provider gpucontext.DeviceProvider, k
 			textMode.SetTextMode(widget.TextModeVector)
 			defer textMode.SetTextMode(widget.TextModeAuto)
 		}
-		uiCanvas.DrawRect(geometry.NewRect(0, 0, float32(width), float32(height)), style.background)
+		backgroundBounds := geometry.NewRect(0, 0, float32(width), float32(height))
+		radius := style.radius
+		if style.border.A > 0 {
+			uiCanvas.DrawRoundRect(backgroundBounds, style.border, radius)
+			backgroundBounds = backgroundBounds.Inset(geometry.UniformInsets(1))
+			radius = max(0, radius-1)
+		}
+		uiCanvas.DrawRoundRect(backgroundBounds, style.background, radius)
+		textColor := style.foreground
 		for i, line := range lines {
 			y := style.padY + float32(i)*style.lineH
-			rotheme.DrawText(uiCanvas, line, geometry.NewRect(style.padX, y, float32(width)-style.padX*2, style.lineH), style.size, style.foreground, style.bold, style.align)
+			textColor = drawOverlayTextLine(uiCanvas, line, geometry.NewRect(style.padX, y, float32(width)-style.padX*2, style.lineH), style, textColor)
 		}
 	}); err != nil {
 		return cachedOverlayImage{}, fmt.Errorf("draw text box overlay: %w", err)
@@ -2238,7 +2251,7 @@ func (r *runner) cachedOverlayTextBoxImage(provider gpucontext.DeviceProvider, k
 func overlayTextBoxSize(canvas widget.Canvas, lines []string, style overlayTextBoxStyle) (width, height int) {
 	var textWidth float32
 	for _, line := range lines {
-		textWidth = max(textWidth, rotheme.MeasureText(canvas, line, style.size, style.bold))
+		textWidth = max(textWidth, style.measureText(canvas, line))
 	}
 	width = int(math.Ceil(float64(max(style.minWidth, textWidth+style.padX*2))))
 	if style.maxWidth > 0 {
@@ -2272,7 +2285,7 @@ func overlayTextBoxLines(canvas widget.Canvas, text string, style overlayTextBox
 			continue
 		}
 		if style.wrap {
-			wrapped := wrapOverlayText(canvas, paragraph, style.size, style.bold, style.maxWidth-style.padX*2)
+			wrapped := wrapOverlayText(canvas, paragraph, style)
 			if len(wrapped) == 0 {
 				lines = append(lines, paragraph)
 			} else {
@@ -2330,7 +2343,55 @@ func (r *runner) ensureOverlayCanvas(provider gpucontext.DeviceProvider, width, 
 	return r.uiOverlayCanvas, nil
 }
 
-func wrapOverlayText(canvas widget.Canvas, text string, size float32, bold bool, maxWidth float32) []string {
+func (s overlayTextBoxStyle) measureText(canvas widget.Canvas, text string) float32 {
+	if s.colorCodes {
+		text = rotheme.StripColorCodes(text)
+	}
+	return rotheme.MeasureText(canvas, text, s.size, s.bold)
+}
+
+func (s overlayTextBoxStyle) textTokens(text string) []string {
+	var tokens []string
+	for len(text) > 0 {
+		_, size := utf8.DecodeRuneInString(text)
+		if _, ok := rotheme.ParseColorCode(text); s.colorCodes && ok {
+			size = 7
+		}
+		tokens = append(tokens, text[:size])
+		text = text[size:]
+	}
+	return tokens
+}
+
+func drawOverlayTextLine(canvas widget.Canvas, text string, bounds geometry.Rect, style overlayTextBoxStyle, current widget.Color) widget.Color {
+	if !style.colorCodes {
+		rotheme.DrawText(canvas, text, bounds, style.size, style.foreground, style.bold, style.align)
+		return current
+	}
+	var run strings.Builder
+	flush := func() {
+		value := run.String()
+		rotheme.DrawText(canvas, value, bounds, style.size, current, style.bold, widget.TextAlignLeft)
+		bounds.Min.X += rotheme.MeasureText(canvas, value, style.size, style.bold)
+		run.Reset()
+	}
+	for _, token := range style.textTokens(text) {
+		if c, ok := rotheme.ParseColorCode(token); ok {
+			flush()
+			current = widget.RGBA8(c.R, c.G, c.B, c.A)
+			if c.R == 0 && c.G == 0 && c.B == 0 {
+				current = style.foreground
+			}
+		} else {
+			run.WriteString(token)
+		}
+	}
+	flush()
+	return current
+}
+
+func wrapOverlayText(canvas widget.Canvas, text string, style overlayTextBoxStyle) []string {
+	maxWidth := style.maxWidth - style.padX*2
 	words := strings.Fields(text)
 	if len(words) == 0 {
 		return nil
@@ -2342,20 +2403,20 @@ func wrapOverlayText(canvas widget.Canvas, text string, size float32, bold bool,
 		if line != "" {
 			candidate = line + " " + word
 		}
-		if rotheme.MeasureText(canvas, candidate, size, bold) <= maxWidth {
+		if style.measureText(canvas, candidate) <= maxWidth {
 			line = candidate
 			continue
 		}
-		if line != "" {
+		if style.measureText(canvas, line) > 0 {
 			lines = append(lines, line)
+			line = ""
 		}
-		line = ""
 		// An unbroken word (for example a URL) must also fit inside the box.
-		for _, r := range word {
-			candidate = line + string(r)
-			if line != "" && rotheme.MeasureText(canvas, candidate, size, bold) > maxWidth {
+		for _, token := range style.textTokens(word) {
+			candidate = line + token
+			if style.measureText(canvas, line) > 0 && style.measureText(canvas, candidate) > maxWidth {
 				lines = append(lines, line)
-				line = string(r)
+				line = token
 			} else {
 				line = candidate
 			}
@@ -2367,30 +2428,22 @@ func wrapOverlayText(canvas widget.Canvas, text string, size float32, bold bool,
 	return lines
 }
 
-func ellipsizeOverlayText(canvas *ggcanvas.Canvas, text string, size float32, bold bool, maxWidth float32) string {
+func ellipsizeOverlayText(canvas widget.Canvas, text string, style overlayTextBoxStyle) string {
+	maxWidth := style.maxWidth - style.padX*2
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
+	if text == "" || style.measureText(canvas, text) <= maxWidth {
+		return text
 	}
-	result := text
-	_ = canvas.Draw(func(cc *gg.Context) {
-		uiCanvas := uirender.NewCanvas(cc, 1, 1)
-		if rotheme.MeasureText(uiCanvas, result, size, bold) <= maxWidth {
-			return
+	const suffix = "..."
+	tokens := style.textTokens(text)
+	for len(tokens) > 0 {
+		candidate := strings.TrimSpace(strings.Join(tokens, "")) + suffix
+		if style.measureText(canvas, candidate) <= maxWidth {
+			return candidate
 		}
-		const suffix = "..."
-		runes := []rune(result)
-		for len(runes) > 0 {
-			candidate := strings.TrimSpace(string(runes)) + suffix
-			if rotheme.MeasureText(uiCanvas, candidate, size, bold) <= maxWidth {
-				result = candidate
-				return
-			}
-			runes = runes[:len(runes)-1]
-		}
-		result = suffix
-	})
-	return result
+		tokens = tokens[:len(tokens)-1]
+	}
+	return suffix
 }
 
 func rgbaKey(c color.RGBA) uint32 {

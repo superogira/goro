@@ -431,36 +431,27 @@ func luaOptionalString(state *glua.LState, index int) string {
 }
 
 func (m *Manager) readItemPairTable(fileName string) map[int]string {
-	for _, candidate := range itemTableCandidates(fileName) {
-		data, err := m.ReadFile(candidate)
-		if err != nil {
-			continue
-		}
-		return parseItemPairTable(data)
+	_, data, ok := m.ReadFirst(itemTableCandidates(fileName))
+	if !ok {
+		return nil
 	}
-	return nil
+	return parseItemPairTable(data)
 }
 
 func (m *Manager) readItemDescriptionTable(fileName string) map[int][]string {
-	for _, candidate := range itemTableCandidates(fileName) {
-		data, err := m.ReadFile(candidate)
-		if err != nil {
-			continue
-		}
-		return parseItemDescriptionTable(data)
+	_, data, ok := m.ReadFirst(itemTableCandidates(fileName))
+	if !ok {
+		return nil
 	}
-	return nil
+	return parseItemDescriptionTable(data)
 }
 
 func (m *Manager) readItemIDSetTable(fileName string) map[int]struct{} {
-	for _, candidate := range itemTableCandidates(fileName) {
-		data, err := m.ReadFile(candidate)
-		if err != nil {
-			continue
-		}
-		return parseItemIDSetTable(data)
+	_, data, ok := m.ReadFirst(itemTableCandidates(fileName))
+	if !ok {
+		return nil
 	}
-	return nil
+	return parseItemIDSetTable(data)
 }
 
 func itemTableCandidates(fileName string) []string {

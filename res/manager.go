@@ -68,6 +68,7 @@ type Manager struct {
 	skillDescriptions        map[int][]string
 	skillMetadataLoaded      bool
 	skillTreePositions       map[int]map[int]int
+	skillTreeTextPositions   map[string]map[int]int
 	skillTreePositionsLoaded bool
 	songTalks                map[SongTalkKind][]string
 	songTalksLoaded          map[SongTalkKind]bool

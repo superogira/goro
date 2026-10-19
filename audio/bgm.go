@@ -3,6 +3,7 @@
 package audio
 
 import (
+	"sync"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/ebitengine/oto/v3"
 	mp3codec "github.com/godexture/codec-mp3"

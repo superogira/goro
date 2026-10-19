@@ -1,10 +1,69 @@
 package res
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestItemTablesPreferLooseDataOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		file, archived, loose, wantArchived, wantLoose string
+		read                                           func(*Manager) string
+	}{
+		{
+			file:     "idnum2itemdisplaynametable.txt",
+			archived: "909#Archive_Jellopy#\n", loose: "909#Jellopy#\n",
+			wantArchived: "Archive Jellopy", wantLoose: "Jellopy",
+			read: func(m *Manager) string { name, _ := m.ItemDisplayName(909, true); return name },
+		},
+		{
+			file:     "idnum2itemdesctable.txt",
+			archived: "909#\nArchive description.\n#\n", loose: "909#\nEnglish description.\n#\n",
+			wantArchived: "Archive description.", wantLoose: "English description.",
+			read: func(m *Manager) string { lines, _ := m.ItemDescription(909, true); return strings.Join(lines, "\n") },
+		},
+		{
+			file:     "cardpostfixnametable.txt",
+			archived: "4001#\n", loose: "4002#\n",
+			wantArchived: "true/false", wantLoose: "false/true",
+			read: func(m *Manager) string {
+				return strconv.FormatBool(m.ItemCardPostfix(4001)) + "/" + strconv.FormatBool(m.ItemCardPostfix(4002))
+			},
+		},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			root := t.TempDir()
+			if err := writeTestGRF(filepath.Join(root, "data.grf"), `data\`+tc.file, []byte(tc.archived)); err != nil {
+				t.Fatal(err)
+			}
+			for _, loose := range []bool{false, true} {
+				want := tc.wantArchived
+				if loose {
+					if err := os.Mkdir(filepath.Join(root, "data"), 0755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(root, "data", tc.file), []byte(tc.loose), 0600); err != nil {
+						t.Fatal(err)
+					}
+					want = tc.wantLoose
+				}
+				manager, err := NewManager(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, archive := range manager.Archives {
+					t.Cleanup(func() { _ = archive.Close() })
+				}
+				if got := tc.read(manager); got != want {
+					t.Fatalf("loose=%v: got %q, want %q", loose, got, want)
+				}
+			}
+		})
+	}
+}
 
 func TestParseItemPairTable(t *testing.T) {
 	got := parseItemPairTable([]byte("// comment\n909#Jellopy#\r\n# comment\n0#ignored#\n1002#Poring_Card#extra\n"))

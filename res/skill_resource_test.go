@@ -1,6 +1,12 @@
 package res
 
-import "testing"
+import (
+	"maps"
+	"testing"
+	"testing/fstest"
+
+	"github.com/kivutar/goro/db"
+)
 
 func TestParseSkillNameTable(t *testing.T) {
 	nameToID := map[string]int{"sm_bash": 5}
@@ -83,5 +89,71 @@ func TestParseSkillTreePositionsInvertsClientTable(t *testing.T) {
 	}
 	if _, ok := positions[0]; ok {
 		t.Fatal("invalid job key produced a position table")
+	}
+}
+
+func TestSkillTreePositionsFromTextWithoutLua(t *testing.T) {
+	for _, jobKey := range []string{"MONK", "15"} {
+		t.Run(jobKey, func(t *testing.T) {
+			manager, err := NewManagerFS(fstest.MapFS{
+				"data/SkillTreeView.txt": {Data: []byte(jobKey + `
+{
+MO_IRONHAND#0#10@
+MO_EXPLOSIONSPIRITS#14#7#5@
+MO_EXTREMITYFIST#22#14#15#5@
+MO_BODYRELOCATION#30#16#22#24#1@
+}`)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[int]int{
+				int(db.SkillMOIronhand): 0, int(db.SkillMOExplosionspirits): 14,
+				int(db.SkillMOExtremityfist): 22, int(db.SkillMOBodyrelocation): 30,
+			}
+			got, ok := manager.SkillTreePositions(db.JobMonk)
+			if !ok || !maps.Equal(got, want) {
+				t.Fatalf("Monk positions = %v, %v; want %v", got, ok, want)
+			}
+		})
+	}
+}
+
+func TestSkillTreeTextPositionValidation(t *testing.T) {
+	data := []byte("\ufeff// header\r\nmonk\r\n{\r\n" + `
+MO_IRONHAND#0#10@ // a real position of zero
+MO_EXPLOSIONSPIRITS#14#7#5@
+UNKNOWN#4#1@
+MO_CALLSPIRITS#bad#5@
+MO_DODGE#-1#10@
+MO_BODYRELOCATION#30#1
+}`)
+	got := parseSkillTreeTextPositions(data, map[string]int{
+		"mo_ironhand": 259, "mo_explosionspirits": 270,
+		"mo_callspirits": 261, "mo_dodge": 265, "mo_bodyrelocation": 264,
+	})
+	if len(got) != 1 || !maps.Equal(got["MONK"], map[int]int{259: 0, 270: 14}) {
+		t.Fatalf("positions include malformed entries: %v", got)
+	}
+}
+
+func TestSkillTreeLayoutSourceSelection(t *testing.T) {
+	manager := &Manager{
+		skillTreePositionsLoaded: true,
+		skillTreePositions:       map[int]map[int]int{db.JobMonk: {259: 2}},
+		skillTreeTextPositions: map[string]map[int]int{
+			"MONK": {259: 0}, "4": {28: 2}, "ACOLYTE": {28: 3},
+			"STAR": {421: 0}, "LINKER": {445: 0},
+		},
+	}
+	for _, tc := range []struct{ job, skill, position int }{
+		{db.JobMonk, 259, 2}, {db.JobAcolyte, 28, 2},
+		{db.JobStar, 421, 0}, {db.JobLinker, 445, 0},
+	} {
+		positions, ok := manager.SkillTreePositions(tc.job)
+		position, found := positions[tc.skill]
+		if !ok || !found || position != tc.position {
+			t.Fatalf("job %d positions = %v, %v; want skill %d at %d", tc.job, positions, ok, tc.skill, tc.position)
+		}
 	}
 }

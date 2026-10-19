@@ -127,11 +127,6 @@ func (w *skillGridWidget) drawCell(canvas widget.Canvas, cell geometry.Rect, ent
 	if entry.icon != nil {
 		iconBounds := geometry.NewRect(slot.Min.X+2, slot.Min.Y+2, skillIconSize, skillIconSize)
 		canvas.DrawImage(entry.icon, iconBounds.Min)
-		if entry.display.Level <= 0 && !entry.canStage {
-			shade := rotheme.Default.Colors.WindowBody
-			shade.A = 0.5
-			canvas.DrawRect(iconBounds, shade)
-		}
 	}
 
 	w.drawLevel(canvas, cell, entry, textColor, hovered)

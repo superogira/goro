@@ -1,16 +1,16 @@
 package render
 
 import (
+	_ "embed"
+	"fmt"
 	gg "github.com/gogpu/gg"
 	uirender "github.com/gogpu/ui/render"
-	"github.com/kivutar/goro/ui/rotheme"
 	"github.com/gogpu/ui/widget"
-	"fmt"
+	"github.com/kivutar/goro/ui/rotheme"
 	"image"
 	"image/color"
 	"math"
 	"sync"
-	_ "embed"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -126,9 +126,18 @@ func DrawUISpeechBubble(dst *Frame, text string, centerX, bottomY, maxWidth floa
 	})
 }
 
-func DrawUITooltipBox(dst *Frame, text string, centerX, belowY, aboveY, maxWidth float64, maxLines int) {
+func DrawUITooltipBox(dst *Frame, text string, centerX, belowY, aboveY, maxWidth float64, maxLines int, colorCodes bool) {
 	if dst == nil || text == "" {
 		return
+	}
+	style := consoleOverlayTextBoxStyle()
+	style.maxLines = maxLines
+	style.colorCodes = colorCodes
+	if colorCodes {
+		style.background = widget.RGBA8(255, 255, 255, 255)
+		style.foreground = widget.RGBA8(0, 0, 0, 255)
+		style.border = widget.RGBA8(180, 180, 180, 255)
+		style.radius = 3
 	}
 	dst.uiTextBoxes = append(dst.uiTextBoxes, UITextBoxCommand{
 		Text:     text,
@@ -138,6 +147,7 @@ func DrawUITooltipBox(dst *Frame, text string, centerX, belowY, aboveY, maxWidth
 		Anchor:   UITextBoxAnchorTooltipCenter,
 		MaxWidth: maxWidth,
 		MaxLines: maxLines,
+		style:    style,
 	})
 }
 

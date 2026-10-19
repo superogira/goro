@@ -4,6 +4,7 @@ import (
 	"image"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/gogpu/ui/core/button"
@@ -1918,6 +1919,34 @@ func TestSkillTooltipUsesSharedOverlayState(t *testing.T) {
 	window.hideTooltip()
 	if window.tooltip.Open() {
 		t.Fatal("tooltip should be closed")
+	}
+}
+
+func TestSkillTooltipPreservesDescriptionColors(t *testing.T) {
+	desc := "Type:^33cc00 Active^000000\nCatalyst:^ee0000 1 Red Gemstone^000000\nEffect:^777777 A long description with enough words to wrap onto another line.^000000"
+	manager, err := res.NewManagerFS(fstest.MapFS{
+		"data/skilldesctable.txt": {Data: []byte("MG_STONECURSE#\nStone Curse\n" + desc + "\n#\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := &SkillWindow{}
+	window.showTooltip(Context{Resources: manager}, session.Skill{ID: db.SkillMGStonecurse}, 100, 120)
+	if !window.tooltip.colorCodes || !window.tooltip.Open() {
+		t.Fatal("skill tooltip did not enable text colors")
+	}
+	want := strings.Join(append([]string{"Stone Curse", "Lv 0", ""}, wrapItemInfoLines(strings.Split(desc, "\n"), 38)...), "\n")
+	if got := window.tooltip.Text(); got != want {
+		t.Fatalf("tooltip text = %q, want %q", got, want)
+	}
+	colored := wrapItemInfoLines(strings.Split(desc, "\n"), 38)
+	plain := wrapItemInfoLines(strings.Split(rotheme.StripColorCodes(desc), "\n"), 38)
+	if rotheme.StripColorCodes(strings.Join(colored, "\n")) != strings.Join(plain, "\n") {
+		t.Fatal("description color codes changed the text wrapping")
+	}
+	window.tooltip.Show(Context{}, "Plain tooltip", 100, 120, 80)
+	if window.tooltip.colorCodes {
+		t.Fatal("plain tooltip retained the previous skill's color mode")
 	}
 }
 

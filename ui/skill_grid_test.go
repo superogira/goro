@@ -5,12 +5,14 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 	"github.com/kivutar/goro/ui/rotheme"
 )
@@ -239,6 +241,42 @@ func TestSkillGridFallbackPositionsAreDense(t *testing.T) {
 	for i, skill := range skills {
 		if got := positions[skill.ID]; got != i {
 			t.Fatalf("skill %d position = %d, want %d", skill.ID, got, i)
+		}
+	}
+}
+
+func TestSkillGridTextLayoutKeepsLearnedAndLockedSkillsInPlace(t *testing.T) {
+	manager, err := res.NewManagerFS(fstest.MapFS{
+		"data/skilltreeview.txt": {Data: []byte(`NOVICE
+{
+NV_BASIC#0#9@
+NV_FIRSTAID#7#1@
+NV_TRICKDEAD#14#1@
+}
+ACOLYTE
+{
+AL_HEAL#2#10@
+AL_BLESSING#11#5#10@
+}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []int{0, 1} {
+		skills := []session.Skill{
+			{ID: db.SkillALBlessing, Level: level},
+			{ID: db.SkillNVBasic, Level: 9},
+			{ID: db.SkillALHeal, Level: 3},
+			{ID: db.SkillNVFirstaid, Level: 1},
+			{ID: db.SkillNVTrickdead, Level: level},
+		}
+		want := map[uint16]int{
+			db.SkillNVBasic: 0, db.SkillNVFirstaid: 7, db.SkillNVTrickdead: 14,
+			db.SkillALHeal: 2, db.SkillALBlessing: 11,
+		}
+		got := skillGridPositions(manager, db.JobMonk, skillTabFirst, skills)
+		if !maps.Equal(got, want) {
+			t.Fatalf("level %d: positions = %v, want %v", level, got, want)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"strings"
 	"time"
 
@@ -65,6 +66,11 @@ var skillTabs = [...]struct {
 	{label: "Etc", tab: skillTabEtc},
 }
 
+type skillIconImages struct {
+	normal image.Image
+	gray   image.Image
+}
+
 type SkillWindow struct {
 	Window
 	tab            int
@@ -88,7 +94,7 @@ type SkillWindow struct {
 	pending        map[uint16]int
 	pendingOrder   []uint16
 	dirty          bool
-	icons          map[uint16]image.Image
+	icons          map[uint16]skillIconImages
 	iconMiss       map[uint16]struct{}
 	lastIconAssets bool
 	assets         AssetProvider
@@ -622,7 +628,7 @@ func (w *SkillWindow) showTooltip(ctx Context, skill session.Skill, mx, my int) 
 	}
 	const tooltipW = 292
 	text := skillTooltipText(ctx, skill)
-	w.tooltip.ShowBox(ctx, text, mx+16+tooltipW/2, my+18, my-6, tooltipW, 24)
+	w.tooltip.ShowColoredBox(ctx, text, mx+16+tooltipW/2, my+18, tooltipW, 0)
 }
 
 func (w *SkillWindow) updateTooltipHover(ctx Context) {
@@ -669,27 +675,43 @@ func (w *SkillWindow) skillIconImage(ctx Context, assets AssetProvider, skill se
 	if assets == nil || skill.ID == 0 {
 		return nil
 	}
-	if w.icons != nil {
-		if img := w.icons[skill.ID]; img != nil {
-			return img
-		}
-	}
 	if _, ok := w.iconMiss[skill.ID]; ok {
 		return nil
 	}
-	img := assets.SkillIconImage(ctx.Resources, skill, skillIconSize)
-	if img == nil {
-		if w.iconMiss == nil {
-			w.iconMiss = make(map[uint16]struct{})
+	icons := w.icons[skill.ID]
+	if icons.normal == nil {
+		img := assets.SkillIconImage(ctx.Resources, skill, skillIconSize)
+		if img == nil {
+			if w.iconMiss == nil {
+				w.iconMiss = make(map[uint16]struct{})
+			}
+			w.iconMiss[skill.ID] = struct{}{}
+			return nil
 		}
-		w.iconMiss[skill.ID] = struct{}{}
-		return nil
+		if w.icons == nil {
+			w.icons = make(map[uint16]skillIconImages)
+		}
+		icons = skillIconImages{normal: img, gray: grayscaleSkillIcon(img)}
+		w.icons[skill.ID] = icons
 	}
-	if w.icons == nil {
-		w.icons = make(map[uint16]image.Image)
+	if w.skillWithPending(skill).Level <= 0 {
+		return icons.gray
 	}
-	w.icons[skill.ID] = img
-	return img
+	return icons.normal
+}
+
+func grayscaleSkillIcon(img image.Image) image.Image {
+	bounds := img.Bounds()
+	out := image.NewRGBA(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			pixel := img.At(x, y)
+			gray := color.GrayModel.Convert(pixel).(color.Gray).Y
+			_, _, _, alpha := pixel.RGBA()
+			out.SetRGBA(x, y, color.RGBA{R: gray, G: gray, B: gray, A: uint8(alpha >> 8)})
+		}
+	}
+	return out
 }
 
 func (w *SkillWindow) clearPending() {
@@ -1101,7 +1123,7 @@ func skillTooltipLines(ctx Context, skill session.Skill) []string {
 			hasDescription = true
 			lines = append(lines, "")
 			for _, line := range desc {
-				clean := strings.TrimSpace(stripItemInfoColorCodes(strings.ReplaceAll(line, "_", " ")))
+				clean := strings.TrimSpace(strings.ReplaceAll(line, "_", " "))
 				if clean == "" {
 					lines = append(lines, "")
 					continue

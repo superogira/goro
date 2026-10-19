@@ -536,7 +536,7 @@ func (w *HomunculusSkillWindow) showTooltip(ctx Context, skill session.Skill, mx
 	}
 	const tooltipW = 292
 	text := skillTooltipText(ctx, skill)
-	w.tooltip.ShowBox(ctx, text, mx+16+tooltipW/2, my+18, my-6, tooltipW, 24)
+	w.tooltip.ShowColoredBox(ctx, text, mx+16+tooltipW/2, my+18, tooltipW, 0)
 }
 
 func (w *HomunculusSkillWindow) updateTooltipHover(ctx Context) {

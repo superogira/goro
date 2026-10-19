@@ -470,42 +470,18 @@ func parseItemInfoTextLine(text string) itemInfoTextLine {
 		current = current[:0]
 	}
 	for i := 0; i < len(runes); i++ {
-		if runes[i] == '^' && i+6 < len(runes) && isHexRunes(runes[i+1:i+7]) {
-			flush()
-			currentColor = parseItemInfoColor(runes[i+1 : i+7])
-			i += 6
-			continue
+		if runes[i] == '^' && i+6 < len(runes) {
+			if parsed, ok := rotheme.ParseColorCode(string(runes[i : i+7])); ok {
+				flush()
+				currentColor = parsed
+				i += 6
+				continue
+			}
 		}
 		current = append(current, runes[i])
 	}
 	flush()
 	return line
-}
-
-func parseItemInfoColor(runes []rune) color.RGBA {
-	value, err := strconv.ParseUint(string(runes), 16, 32)
-	if err != nil {
-		return inventoryTextColor
-	}
-	return color.RGBA{
-		R: uint8(value >> 16),
-		G: uint8(value >> 8),
-		B: uint8(value),
-		A: 255,
-	}
-}
-
-func isHexRunes(runes []rune) bool {
-	if len(runes) != 6 {
-		return false
-	}
-	for _, r := range runes {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 func wrapItemInfoTextLines(lines []itemInfoTextLine, maxRunes int) []itemInfoTextLine {
@@ -608,16 +584,7 @@ func itemInfoLinePlainText(line itemInfoTextLine) string {
 }
 
 func stripItemInfoColorCodes(text string) string {
-	runes := []rune(text)
-	out := make([]rune, 0, len(runes))
-	for i := 0; i < len(runes); i++ {
-		if runes[i] == '^' && i+6 < len(runes) && isHexRunes(runes[i+1:i+7]) {
-			i += 6
-			continue
-		}
-		out = append(out, runes[i])
-	}
-	return string(out)
+	return rotheme.StripColorCodes(text)
 }
 
 func wrapItemInfoLines(lines []string, maxRunes int) []string {
@@ -644,7 +611,7 @@ func wrapItemInfoLine(line string, maxRunes int) []string {
 			current = word
 			continue
 		}
-		if runeLen(current)+1+runeLen(word) <= maxRunes {
+		if runeLen(stripItemInfoColorCodes(current))+1+runeLen(stripItemInfoColorCodes(word)) <= maxRunes {
 			current += " " + word
 			continue
 		}

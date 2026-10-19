@@ -7,13 +7,14 @@ import (
 )
 
 type tooltipState struct {
-	text     string
-	centerX  int
-	belowY   int
-	aboveY   int
-	maxWidth float64
-	maxLines int
-	open     bool
+	text       string
+	centerX    int
+	belowY     int
+	aboveY     int
+	maxWidth   float64
+	maxLines   int
+	colorCodes bool
+	open       bool
 }
 
 // TooltipsSuppressed reports whether transient hover UI should stay hidden.
@@ -43,7 +44,13 @@ func (t *tooltipState) ShowBox(ctx Context, text string, centerX, belowY, aboveY
 	t.aboveY = aboveY
 	t.maxWidth = maxWidth
 	t.maxLines = maxLines
+	t.colorCodes = false
 	t.open = true
+}
+
+func (t *tooltipState) ShowColoredBox(ctx Context, text string, centerX, belowY int, maxWidth float64, maxLines int) {
+	t.ShowBox(ctx, text, centerX, belowY, 0, maxWidth, maxLines)
+	t.colorCodes = true
 }
 
 func (t *tooltipState) Hide() {
@@ -58,7 +65,7 @@ func (t *tooltipState) Draw(ctx Context, screen *render.Frame) {
 	if t == nil || !t.open || TooltipsSuppressed(ctx) {
 		return
 	}
-	render.DrawUITooltipBox(screen, t.text, float64(t.centerX), float64(t.belowY), float64(t.aboveY), t.maxWidth, t.maxLines)
+	render.DrawUITooltipBox(screen, t.text, float64(t.centerX), float64(t.belowY), float64(t.aboveY), t.maxWidth, t.maxLines, t.colorCodes)
 }
 
 func (t *tooltipState) Open() bool {

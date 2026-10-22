@@ -8,6 +8,9 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/internal/testutil"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -18,7 +21,7 @@ func groundSkillTestContext(t *testing.T) (client.Context, *WorldMode, net.Conn)
 	t.Helper()
 	networkClient, serverConn := newBotTestConnection(t, 20080910)
 	world := worldstate.New()
-	world.GAT = flatWalkableGAT(64, 64)
+	world.GAT = testutil.FlatWalkableGAT(64, 64)
 	world.Player = worldstate.Actor{ID: 200, X: 20, Y: 20}
 	return client.Context{
 		World: world, Network: networkClient,
@@ -44,9 +47,9 @@ func TestGroundSkillWalksBeforeCasting(t *testing.T) {
 				if err := mode.skills().Use(ctx, skill, "test"); err != nil {
 					t.Fatal(err)
 				}
-				projection := newSceneProjectionForTarget(ctx.ScreenW, ctx.ScreenH, cellCenter(20), cellCenter(20), 0)
-				point := projection.Project(cellCenter(float64(tc.x)), cellCenter(float64(tc.y)), 0)
-				ctx.Input.SetMousePosition(int(math.Round(float64(point.x))), int(math.Round(float64(point.y))))
+				projection := testutil.Projection(ctx.ScreenW, ctx.ScreenH, scene.CellCenter(20), scene.CellCenter(20), 0)
+				point := projection.Project(scene.CellCenter(float64(tc.x)), scene.CellCenter(float64(tc.y)), 0)
+				ctx.Input.SetMousePosition(int(math.Round(float64(point.X))), int(math.Round(float64(point.Y))))
 				mode.skills().HandleClick(ctx, projection, time.Now())
 			} else if err := mode.skills().UseGround(ctx, skill, tc.x, tc.y, "", "test"); err != nil {
 				t.Fatal(err)
@@ -76,7 +79,7 @@ func TestGroundSkillWalksBeforeCasting(t *testing.T) {
 			if mode.pendingSkill.skill.ID != 0 {
 				t.Fatal("ground skill remained pending after casting")
 			}
-			if len(mode.worldEffects) != 0 || len(mode.scheduledSounds) != 0 {
+			if len(mode.effects().Active) != 0 || len(mode.scheduledSounds) != 0 {
 				t.Fatal("ground skill played effects before server confirmation")
 			}
 		})
@@ -162,7 +165,7 @@ func TestGroundSkillRetryKeepsDeadlineAndText(t *testing.T) {
 func TestGroundSkillUsesCompanionPositionAndMovePacket(t *testing.T) {
 	ctx, mode, serverConn := groundSkillTestContext(t)
 	ctx.Session.Mercenary = session.Companion{ID: 400, Active: true}
-	mercenary := worldstate.Actor{ID: 400, X: 10, Y: 10, ObjectType: actorObjectTypeMercenary, HasObjectType: true}
+	mercenary := worldstate.Actor{ID: 400, X: 10, Y: 10, ObjectType: scene.ActorObjectTypeMercenary, HasObjectType: true}
 	ctx.World.UpsertActor(mercenary)
 	skill := session.Skill{ID: db.SkillMaLandmine, Level: 1, Type: skillTargetPlace, Range: 3}
 	if err := mode.skills().UseGround(ctx, skill, 14, 14, "", "test"); err != nil {
@@ -206,12 +209,12 @@ func TestMapChangeCancelsSkillTextPrompt(t *testing.T) {
 			})
 
 			// Complete the normal fade/handoff, including reuse of the same map.
-			mode.mapFade.started = time.Now().Add(-mapFadeOutDuration)
+			mode.mapFade.Started = time.Now().Add(-maps.FadeOutDuration)
 			if next, err := mode.Update(ctx); err != nil || next != nil {
 				t.Fatalf("fade-out handoff = %T, err=%v", next, err)
 			}
-			for range mapFadeHandoffFrames {
-				mode.recordCoveredMapFrame()
+			for range maps.FadeHandoffFrames {
+				mode.mapFade.RecordCoveredFrame()
 			}
 			next, err := mode.Update(ctx)
 			if err != nil {
@@ -242,7 +245,7 @@ func TestMapChangeCancelsSkillTextPrompt(t *testing.T) {
 
 func TestUnreachableGroundTargetReplacesPreviousCast(t *testing.T) {
 	ctx, mode, serverConn := groundSkillTestContext(t)
-	ctx.World.GAT = flatWalkableGAT(12, 5)
+	ctx.World.GAT = testutil.FlatWalkableGAT(12, 5)
 	ctx.World.Player.X, ctx.World.Player.Y = 10, 2
 	skill := session.Skill{ID: db.SkillMGFirewall, Level: 1, Type: skillTargetPlace, Range: 3}
 	if err := mode.skills().UseGround(ctx, skill, 0, 2, "", "test"); err != nil {

@@ -54,3 +54,38 @@ func (r *gpuRenderer) drawWorldBatch(pass *wgpu.RenderPassEncoder, batch drawBat
 	pass.DrawIndexed(gputypes.DrawIndexedArgs{IndexCount: batch.indexCount, InstanceCount: 1, FirstIndex: batch.firstIndex})
 	return nil
 }
+
+func (r *gpuRenderer) drawWorldAlpha(pass *wgpu.RenderPassEncoder, world worldFrame, meshes []WorldMeshCommand, vertices, indices *wgpu.Buffer, afterBillboards bool) (bool, error) {
+	state := renderPassState{}
+	lateGeometry := false
+	if vertices != nil && indices != nil {
+		state.setVertexBuffer(pass, vertices)
+		state.setIndexBuffer(pass, indices)
+		for _, batch := range world.batches {
+			if batch.indexCount == 0 || batch.key.options.DepthWrite {
+				continue
+			}
+			lateGeometry = lateGeometry || batch.key.options.AfterBillboards
+			if batch.key.options.AfterBillboards != afterBillboards {
+				continue
+			}
+			if err := r.drawWorldBatch(pass, batch, &state, nil); err != nil {
+				return false, err
+			}
+		}
+	}
+	for _, command := range meshes {
+		mesh := command.Mesh
+		if mesh == nil || mesh.options.DepthWrite {
+			continue
+		}
+		lateGeometry = lateGeometry || mesh.options.AfterBillboards
+		if mesh.options.AfterBillboards != afterBillboards {
+			continue
+		}
+		if err := r.drawWorldMesh(pass, mesh, &state); err != nil {
+			return false, err
+		}
+	}
+	return lateGeometry, nil
+}

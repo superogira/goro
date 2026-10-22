@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	worldstate "github.com/kivutar/goro/world"
 )
 
@@ -12,38 +14,38 @@ func TestActorShadowSuppressionUsesActorActions(t *testing.T) {
 	player := worldstate.Actor{ID: 200, Job: db.JobAcolyte}
 	bat := worldstate.Actor{ID: 300, Job: 1005}
 	homunculus := worldstate.Actor{ID: 400, Job: 6001}
-	archer := worldstate.Actor{ID: 500, Job: 6017, ObjectType: actorObjectTypeMercenary, HasObjectType: true}
-	lancer := worldstate.Actor{ID: 600, Job: 6027, ObjectType: actorObjectTypeMercenary, HasObjectType: true}
-	fencer := worldstate.Actor{ID: 700, Job: 6037, ObjectType: actorObjectTypeMercenary, HasObjectType: true}
+	archer := worldstate.Actor{ID: 500, Job: 6017, ObjectType: scene.ActorObjectTypeMercenary, HasObjectType: true}
+	lancer := worldstate.Actor{ID: 600, Job: 6027, ObjectType: scene.ActorObjectTypeMercenary, HasObjectType: true}
+	fencer := worldstate.Actor{ID: 700, Job: 6037, ObjectType: scene.ActorObjectTypeMercenary, HasObjectType: true}
 	for _, tc := range []struct {
 		name       string
 		actor      worldstate.Actor
 		action     int
 		suppressed bool
 	}{
-		{"player idle", player, spriteActionIdle, false},
-		{"player attack 1", player, spriteActionPCAttack1, false},
-		{"player attack 2", player, spriteActionPCAttack2, false},
-		{"player attack 3", player, spriteActionPCAttack3, false},
-		{"player combat ready", player, spriteActionPCReadyFight, false},
-		{"player sitting", player, spriteActionSit, true},
-		{"player dead", player, spriteActionPCDeath, true},
-		{"bat idle", bat, spriteActionIdle, false},
-		{"bat attacking", bat, spriteActionNonPCAttack, false},
-		{"bat hurt", bat, spriteActionNonPCHurt, false},
-		{"bat dead", bat, spriteActionNonPCDeath, true},
-		{"monster special", bat, spriteActionNonPCSpecial, false},
-		{"homunculus attacking", homunculus, spriteActionNonPCAttack, false},
-		{"homunculus dead", homunculus, spriteActionNonPCDeath, true},
-		{"archer attacking", archer, spriteActionPCAttack2, false},
-		{"archer sitting", archer, spriteActionSit, true},
-		{"archer dead", archer, spriteActionNonPCDeath, true},
+		{"player idle", player, scene.SpriteActionIdle, false},
+		{"player attack 1", player, sprites.ActionPCAttack1, false},
+		{"player attack 2", player, sprites.ActionPCAttack2, false},
+		{"player attack 3", player, sprites.ActionPCAttack3, false},
+		{"player combat ready", player, sprites.ActionPCReadyFight, false},
+		{"player sitting", player, scene.SpriteActionSit, true},
+		{"player dead", player, sprites.ActionPCDeath, true},
+		{"bat idle", bat, scene.SpriteActionIdle, false},
+		{"bat attacking", bat, sprites.ActionNonPCAttack, false},
+		{"bat hurt", bat, sprites.ActionNonPCHurt, false},
+		{"bat dead", bat, sprites.ActionNonPCDeath, true},
+		{"monster special", bat, sprites.ActionNonPCSpecial, false},
+		{"homunculus attacking", homunculus, sprites.ActionNonPCAttack, false},
+		{"homunculus dead", homunculus, sprites.ActionNonPCDeath, true},
+		{"archer attacking", archer, sprites.ActionPCAttack2, false},
+		{"archer sitting", archer, scene.SpriteActionSit, true},
+		{"archer dead", archer, sprites.ActionNonPCDeath, true},
 		// Archer mercenaries use action 8 for freeze, not player death.
 		{"archer frozen", archer, 8, false},
-		{"lancer attacking", lancer, spriteActionPCAttack3, false},
-		{"lancer dead", lancer, spriteActionPCDeath, true},
-		{"fencer attacking", fencer, spriteActionPCAttack2, false},
-		{"fencer dead", fencer, spriteActionPCDeath, true},
+		{"lancer attacking", lancer, sprites.ActionPCAttack3, false},
+		{"lancer dead", lancer, sprites.ActionPCDeath, true},
+		{"fencer attacking", fencer, sprites.ActionPCAttack2, false},
+		{"fencer dead", fencer, sprites.ActionPCDeath, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
@@ -62,7 +64,7 @@ func TestActorShadowRemainsAfterMaceSwing(t *testing.T) {
 	player := worldstate.Actor{ID: 200, Job: db.JobAcolyte, Weapon: db.WeaponMace}
 	mode := &WorldMode{actorAnims: map[uint32]actorAnimation{
 		player.ID: {
-			actionFamily: attackActionFamilyForActor(player),
+			actionFamily: attackActionFamilyForActorWithResources(nil, player),
 			started:      now,
 			duration:     time.Second,
 			next:         readyFightAnimation(now.Add(time.Second)),

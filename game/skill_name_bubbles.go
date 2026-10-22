@@ -6,6 +6,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	worldstate "github.com/kivutar/goro/world"
 )
@@ -42,7 +43,7 @@ func (m *WorldMode) applySkillNameBubble(ctx client.Context, sourceID uint32, sk
 	if skillID == 0 || skillNameBubbleExcluded(skillID) {
 		return
 	}
-	source, ok, local := actorForCombatID(ctx, sourceID)
+	source, ok, local := scene.ActorForCombatID(ctx, sourceID)
 	if !ok || !actorSupportsSkillNameBubble(source, local) {
 		return
 	}
@@ -62,7 +63,7 @@ func actorSupportsSkillNameBubble(actor worldstate.Actor, local bool) bool {
 		return false
 	}
 	switch actor.ObjectType {
-	case actorObjectTypeDisguised, actorObjectTypePet, actorObjectTypeHomunculus, actorObjectTypeMercenary, actorObjectTypeElemental:
+	case scene.ActorObjectTypeDisguised, scene.ActorObjectTypePet, scene.ActorObjectTypeHomunculus, scene.ActorObjectTypeMercenary, scene.ActorObjectTypeElemental:
 		return true
 	default:
 		return false

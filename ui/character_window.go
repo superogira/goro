@@ -566,10 +566,6 @@ func displayWeight(raw int) int {
 	return raw / 10
 }
 
-func DisplayWeight(raw int) int {
-	return displayWeight(raw)
-}
-
 func ratioInt(current, maxValue int) float64 {
 	if maxValue <= 0 {
 		return 0
@@ -614,10 +610,6 @@ func formatEXPPercent(current, next int64) string {
 	return fmt.Sprintf("%.1f%%", math.Floor(percent*10)/10)
 }
 
-func FormatEXPPercent(current, next int64) string {
-	return formatEXPPercent(current, next)
-}
-
 func formatHUDNumber(value int64) string {
 	sign := ""
 	if value < 0 {
@@ -639,8 +631,4 @@ func formatHUDNumber(value int64) string {
 		b.WriteString(text[i : i+3])
 	}
 	return sign + b.String()
-}
-
-func FormatHUDNumber(value int64) string {
-	return formatHUDNumber(value)
 }

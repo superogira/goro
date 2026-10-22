@@ -2,11 +2,14 @@ package game
 
 import (
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/internal/testutil"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
 	worldstate "github.com/kivutar/goro/world"
@@ -19,7 +22,7 @@ func TestOverlappingGroundItemsKeepDrawOrder(t *testing.T) {
 	for i, id := range []uint32{201, 101, 301} {
 		world.Items[id] = worldstate.FloorItem{ID: id, ItemID: uint16(501 + i), X: 10, Y: 20, SubX: 6, SubY: 6}
 	}
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
 	items := (&WorldMode{}).collectSceneItemEntries(render.NewFrame(800, 600), client.Context{World: world}, projection, time.Now())
 	if len(items) != 3 {
 		t.Fatalf("item entries = %d, want 3", len(items))
@@ -47,8 +50,8 @@ func TestOverlappingGroundItemsKeepDrawOrder(t *testing.T) {
 }
 
 func TestSceneDrawOrderKeepsDepthBeforeEntityID(t *testing.T) {
-	actors := []sceneActorDrawEntry{{
-		actor: worldstate.Actor{ID: 20}, depth: 100, shadowDepth: 102, castShadow: true,
+	actors := []scene.ActorDrawEntry{{
+		Actor: worldstate.Actor{ID: 20}, Depth: 100, ShadowDepth: 102, CastShadow: true,
 	}}
 	items := []sceneItemDrawEntry{
 		{item: worldstate.FloorItem{ID: 30}, depth: 100, shadowDepth: 102},
@@ -81,7 +84,7 @@ func TestFallingGroundItemKeepsShadowOnTerrain(t *testing.T) {
 		Falling:   true,
 		DroppedAt: now,
 	}
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
 	mode := &WorldMode{}
 	entries := mode.collectSceneItemEntries(render.NewFrame(800, 600), client.Context{World: world}, projection, now)
 	if len(entries) != 1 {
@@ -91,7 +94,7 @@ func TestFallingGroundItemKeepsShadowOnTerrain(t *testing.T) {
 	if entry.worldZ <= entry.groundZ {
 		t.Fatalf("falling item z = %.2f, ground z = %.2f", entry.worldZ, entry.groundZ)
 	}
-	wantDepth := projection.Depth(entry.worldX, entry.worldY, entry.groundZ+actorShadowTerrainLift)
+	wantDepth := projection.Depth(entry.worldX, entry.worldY, entry.groundZ+scene.ActorShadowTerrainLift)
 	if math.Abs(entry.shadowDepth-wantDepth) > 1e-9 {
 		t.Fatalf("shadow depth = %.9f, want terrain depth %.9f", entry.shadowDepth, wantDepth)
 	}
@@ -100,7 +103,7 @@ func TestFallingGroundItemKeepsShadowOnTerrain(t *testing.T) {
 func TestGroundItemSortsAfterItsShadow(t *testing.T) {
 	world := worldstate.New()
 	world.Items[1] = worldstate.FloorItem{ID: 1, ItemID: 501, X: 10, Y: 20}
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
 	entries := (&WorldMode{}).collectSceneItemEntries(
 		render.NewFrame(800, 600),
 		client.Context{World: world},
@@ -119,17 +122,17 @@ func TestDrawGroundItemShadowUsesSharedOriginalShadowSprite(t *testing.T) {
 	if groundItemShadowScale != 0.25 {
 		t.Fatalf("floor-item shadow scale = %.2f, want roBrowser's 0.25", groundItemShadowScale)
 	}
-	shadowView := &spriteView{
-		spr: &res.SPR{
+	shadowView := &scene.SpriteView{
+		Spr: &res.SPR{
 			RGBAIndex: 0,
 			Frames: []res.SPRFrame{{
 				Type:   res.SPRFrameRGBA,
 				Width:  16,
 				Height: 8,
-				Data:   solidRGBAFrame(16, 8),
+				Data:   testutil.SolidRGBAFrame(16, 8),
 			}},
 		},
-		act: &res.ACT{Actions: []res.ACTAction{{
+		Act: &res.ACT{Actions: []res.ACTAction{{
 			Animations: []res.ACTAnimation{{Layers: []res.ACTLayer{{
 				Index:   0,
 				SPRType: res.SPRFrameRGBA,
@@ -138,33 +141,45 @@ func TestDrawGroundItemShadowUsesSharedOriginalShadowSprite(t *testing.T) {
 				Color:   [4]float32{1, 1, 1, 1},
 			}}}},
 		}}},
-		images:     make(map[spriteFrameKey]*render.Image),
-		billboards: make(map[singleSpriteBillboardKey]*spriteBillboard),
+		Images:     make(map[scene.SpriteFrameKey]*render.Image),
+		Billboards: make(map[scene.SpriteBillboardKey]*scene.Billboard),
 	}
 	mode := &WorldMode{shadowView: shadowView}
 	entry := sceneItemDrawEntry{
-		worldX:      cellCenter(10),
-		worldY:      cellCenter(20),
+		worldX:      scene.CellCenter(10),
+		worldY:      scene.CellCenter(20),
 		groundZ:     0,
 		shadowScale: groundItemShadowScale,
 		shadow:      1,
 	}
-	projection := newSceneProjectionForTarget(800, 600, entry.worldX, entry.worldY, 0)
-	if !mode.drawGroundItemShadowEntry3D(render.NewFrame(800, 600), projection, entry) {
+	projection := testutil.Projection(800, 600, entry.worldX, entry.worldY, 0)
+	frame := render.NewFrame(800, 600)
+	if !mode.drawGroundItemShadowEntry3D(frame, projection, entry) {
 		t.Fatal("floor-item shadow was not drawn")
+	}
+	entry.billboard = &scene.Billboard{Image: render.NewImage(16, 16), AnchorX: 8, AnchorY: 16}
+	entry.scale = 1
+	mode.drawGroundItemEntry3D(frame, projection, entry)
+	commands := reflect.ValueOf(frame).Elem().FieldByName("worldBillboards")
+	if commands.Len() != 2 {
+		t.Fatal("expected the shadow followed by the item sprite")
+	}
+	if commands.Index(0).FieldByName("Options").FieldByName("DepthWrite").Bool() ||
+		!commands.Index(1).FieldByName("Options").FieldByName("DepthWrite").Bool() {
+		t.Fatal("the item must occlude translucent geometry; its shadow must not")
 	}
 }
 
 func TestGroundItemShadowIsOffsetDownWithoutMutatingSharedBillboard(t *testing.T) {
-	base := &spriteBillboard{anchorX: 20, anchorY: 30}
+	base := &scene.Billboard{AnchorX: 20, AnchorY: 30}
 	got := groundItemShadowBillboard(base)
 	if got == base {
 		t.Fatal("item shadow offset should copy the shared billboard")
 	}
-	if got.anchorX != 20 || got.anchorY != 30-groundItemShadowOffsetY {
-		t.Fatalf("item shadow anchor = %.1f, %.1f", got.anchorX, got.anchorY)
+	if got.AnchorX != 20 || got.AnchorY != 30-groundItemShadowOffsetY {
+		t.Fatalf("item shadow anchor = %.1f, %.1f", got.AnchorX, got.AnchorY)
 	}
-	if base.anchorX != 20 || base.anchorY != 30 {
-		t.Fatalf("shared shadow billboard was mutated: %.1f, %.1f", base.anchorX, base.anchorY)
+	if base.AnchorX != 20 || base.AnchorY != 30 {
+		t.Fatalf("shared shadow billboard was mutated: %.1f, %.1f", base.AnchorX, base.AnchorY)
 	}
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
@@ -76,7 +77,7 @@ func TestActorActionNotifyShowsSkillNameBubble(t *testing.T) {
 	mode := NewWorldMode()
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20, Job: 1}
-	world.Actors[1100] = worldstate.Actor{ID: 1100, X: 11, Y: 20, ObjectType: actorObjectTypeMob, HasObjectType: true}
+	world.Actors[1100] = worldstate.Actor{ID: 1100, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	ctx := client.Context{
 		Session: &session.Session{
 			AccountID: 2000000,
@@ -107,7 +108,7 @@ func TestSkillNameBubbleSkipsMobsAndExcludedSkills(t *testing.T) {
 	mode := NewWorldMode()
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.Actors[300] = worldstate.Actor{ID: 300, X: 11, Y: 20, ObjectType: actorObjectTypeMob, HasObjectType: true}
+	world.Actors[300] = worldstate.Actor{ID: 300, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	ctx := client.Context{Session: &session.Session{AccountID: 2000000, CharID: 150000}, World: world}
 
 	mode.applySkillNameBubble(ctx, 300, db.SkillSMBash, time.Now())

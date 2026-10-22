@@ -2,11 +2,14 @@ package game
 
 import (
 	"fmt"
-	"math/rand/v2"
+	rand "math/rand/v2"
 	"strings"
 	"time"
 
 	"github.com/kivutar/goro/client"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
@@ -123,14 +126,14 @@ func (m *WorldMode) cancelPetCaptureFromInput(ctx client.Context) bool {
 	return true
 }
 
-func (m *WorldMode) handlePetCaptureClick(ctx client.Context, projection sceneProjection, now time.Time) bool {
+func (m *WorldMode) handlePetCaptureClick(ctx client.Context, projection scene.Projection, now time.Time) bool {
 	if !m.pendingPetCapture.active || ctx.Input == nil || !ctx.Input.MouseJustPressed(input.MouseButtonLeft) {
 		return false
 	}
 	skill := petCaptureTargetSkill()
 	actor, ok := clickedSkillTarget(ctx, projection, skill, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths)
 	if !ok {
-		if x, y, groundOK := clickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); groundOK {
+		if x, y, groundOK := maps.ClickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); groundOK {
 			glog.Debugf("pet capture canceled by ground click mouse=%d,%d target=%d,%d", ctx.Input.MouseX, ctx.Input.MouseY, x, y)
 			m.cancelPetCapture("ground-click")
 			return true
@@ -435,17 +438,17 @@ func (m *WorldMode) startPetPerformance(ctx client.Context, id uint32, data uint
 	if !ok {
 		return
 	}
-	action := spriteActionNonPCPerf1
+	action := sprites.ActionNonPCPerf1
 	switch data {
 	case 2:
-		action = spriteActionNonPCPerf2
+		action = sprites.ActionNonPCPerf2
 	case 3:
-		action = spriteActionNonPCPerf3
+		action = sprites.ActionNonPCPerf3
 	case 4:
-		action = spriteActionNonPCSpecial
+		action = sprites.ActionNonPCSpecial
 	}
 	now := time.Now()
-	duration := m.actorActionDuration(ctx, actor, action, defaultAttackAnimationDuration)
+	duration := m.actorActionDuration(ctx, actor, action, scene.DefaultAttackAnimationDuration)
 	m.startActorAnimation(ctx, id, action, now, duration)
 }
 
@@ -505,7 +508,7 @@ func (m *WorldMode) sendPetCommand(ctx client.Context, command uint8) {
 	}
 }
 
-func clickedPetTarget(ctx client.Context, projection sceneProjection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time, petID uint32) (worldstate.Actor, bool) {
+func clickedPetTarget(ctx client.Context, projection scene.Projection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time, petID uint32) (worldstate.Actor, bool) {
 	if petID == 0 {
 		return worldstate.Actor{}, false
 	}

@@ -278,6 +278,78 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 	)
 }
 
+// FieldFocus reports which credential field currently holds focus.
+func (w *LoginWindow) FieldFocus() (userFocused, passwordFocused bool) {
+	return w.fieldFocus()
+}
+
+// AdvanceFocus moves the keyboard focus between the username and password
+// fields (the L1/Tab handheld shortcut).
+func (w *LoginWindow) AdvanceFocus() {
+	if w == nil {
+		return
+	}
+	_, passwordFocused := w.fieldFocus()
+	if passwordFocused {
+		if w.user != nil {
+			w.user.SetFocused(true)
+		}
+		if w.password != nil {
+			w.password.SetFocused(false)
+		}
+	} else {
+		if w.user != nil {
+			w.user.SetFocused(false)
+		}
+		if w.password != nil {
+			w.password.SetFocused(true)
+		}
+	}
+	w.rebuild()
+}
+
+// ToggleKeep flips the Keep-ID checkbox (the R2 handheld shortcut — there
+// is no pointer on the device). The checkbox's OnToggle keeps KeepID in
+// sync.
+func (w *LoginWindow) ToggleKeep() {
+	if w == nil {
+		return
+	}
+	w.KeepID = !w.KeepID
+	w.rebuild()
+}
+
+// TypeIntoFocusedField appends or removes a character from the focused
+// text field (the on-screen keyboard's typing path — it bypasses the
+// widget event dispatch entirely).
+func (w *LoginWindow) TypeIntoFocusedField(ch string, action string) {
+	if w == nil {
+		return
+	}
+	_, passwordFocused := w.fieldFocus()
+	target := w.user
+	if passwordFocused {
+		target = w.password
+	}
+	if target == nil {
+		return
+	}
+	switch action {
+	case "type":
+		target.SetText(target.Text() + ch)
+		w.rebuild()
+	case "bksp":
+		text := target.Text()
+		if runes := []rune(text); len(runes) > 0 {
+			target.SetText(string(runes[:len(runes)-1]))
+		}
+		w.rebuild()
+	case "submit":
+		// Sync the backing fields so the login flow sees the typed values.
+		w.Username, w.Password = w.fieldValues()
+	}
+}
+
 func (w *LoginWindow) fieldFocus() (bool, bool) {
 	// Enter on the username (or the OS keyboard's "Next" key) advances to
 	// the password instead of submitting with an empty one — soft keyboards

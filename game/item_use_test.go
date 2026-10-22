@@ -68,8 +68,8 @@ func TestNearbyItemUseDoesNotChangeOwnInventory(t *testing.T) {
 				t.Fatalf("nearby item use cleared own shortcut: %+v", slot)
 			}
 			if tc.itemID == 501 {
-				if len(mode.worldEffects) != 1 || mode.worldEffects[0].actorID != 2000001 {
-					t.Fatalf("nearby potion effect missing or attached to wrong actor: %+v", mode.worldEffects)
+				if len(mode.effects().Active) != 1 || mode.effects().Active[0].ActorID != 2000001 {
+					t.Fatalf("nearby potion effect missing or attached to wrong actor: %+v", mode.effects().Active)
 				}
 			}
 		})

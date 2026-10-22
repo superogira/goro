@@ -5,12 +5,17 @@ import (
 	"context"
 	"io"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/network"
+	"github.com/kivutar/goro/render"
+	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
 )
@@ -25,129 +30,88 @@ func TestTaekwonFamilySkillEffectsMatchRobrowser(t *testing.T) {
 	for _, skillID := range spiritLinks {
 		expectEffectIDs(t, "spirit link", skillEffectIDs(skillID), 424, 503)
 	}
-	expectEffectIDs(t, "SG_FUSION", skillEffectIDs(db.SkillSGFusion), 433, effectQuake)
-	expectEffectIDs(t, "SL_SKA", skillEffectIDs(db.SkillSLSka), effectSteelBody, effectGumgang2, effectQuake)
+	expectEffectIDs(t, "SG_FUSION", skillEffectIDs(db.SkillSGFusion))
+	expectEffectIDs(t, "SG_FUSION success", skillSuccessEffectSelfIDs(db.SkillSGFusion), effects.Quake)
+	expectEffectIDs(t, "SL_SKA", skillEffectIDs(db.SkillSLSka), effects.SteelBody, effects.Gumgang2, effects.Quake)
 }
 
-func TestTaekwonStanceSkillsSuppressDefaultAction(t *testing.T) {
-	for _, skillID := range []uint16{
-		db.SkillTKReadystorm, db.SkillTKReadydown, db.SkillTKReadyturn,
-		db.SkillTKReadycounter, db.SkillTKHighjump, db.SkillTKDodge,
-	} {
-		action := skillAction(skillID)
-		if !action.defined || action.action != skillActorActionNone {
-			t.Fatalf("skill %d action = %+v, want none", skillID, action)
-		}
-	}
-}
-
-func TestMildWindUsesLevelSpecificEffect(t *testing.T) {
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 2000000, Job: db.JobTaekwon, X: 10, Y: 20}
-	ctx := client.Context{Session: &session.Session{AccountID: 2000000, CharID: 150000}, World: world}
-	mode := &WorldMode{}
-
-	mode.applySkillNoDamageNotify(ctx, network.SkillNoDamageNotify{
-		SkillID: db.SkillTKSevenwind, Amount: 3, SourceID: 2000000, TargetID: 2000000, Result: 1,
-	})
-	if len(mode.worldEffects) != 1 || mode.worldEffects[0].effectID != effectBeginAsura3 || mode.worldEffects[0].actorID != 2000000 {
-		t.Fatalf("mild wind effects = %+v, want EF_BEGINASURA3", mode.worldEffects)
-	}
-
-	mode = &WorldMode{}
-	mode.applySkillNoDamageNotify(ctx, network.SkillNoDamageNotify{
-		SkillID: db.SkillTKSevenwind, Amount: 0, SourceID: 2000000, TargetID: 2000000, Result: 1,
-	})
-	if len(mode.worldEffects) != 0 {
-		t.Fatalf("level zero mild wind effects = %+v, want none", mode.worldEffects)
-	}
-}
-
-func TestTaekwonStatusEffectsAndStancePosesMatchRobrowser(t *testing.T) {
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 150000, Job: db.JobTaekwon, X: 10, Y: 20}
-	ctx := client.Context{Session: &session.Session{AccountID: 2000000, CharID: 150000}, World: world}
-	mode := &WorldMode{}
-
-	mode.applyStatusEffectChange(ctx, network.StatusEffectChange{StatusID: db.StatusRun, ActorID: 2000000, Active: false})
-	if len(mode.worldEffects) != 1 || mode.worldEffects[0].effectID != effectStopEffect {
-		t.Fatalf("run stop effects = %+v, want EF_STOPEFFECT", mode.worldEffects)
-	}
-	mode.applyStatusEffectChange(ctx, network.StatusEffectChange{StatusID: db.StatusTing, ActorID: 2000000, Active: true})
-	if len(mode.worldEffects) != 2 || mode.worldEffects[1].effectID != effectQuakeBody {
-		t.Fatalf("ting effects = %+v, want EF_QUAKEBODY", mode.worldEffects)
-	}
-
-	stances := []struct {
-		status uint16
-		action int
-		frame  int
-	}{
-		{db.StatusStormkickOn, spriteActionPCSkill, 0},
-		{db.StatusStormkickReady, spriteActionPCSkill, 0},
-		{db.StatusDownkickOn, spriteActionPCSkill, 2},
-		{db.StatusDownkickReady, spriteActionPCSkill, 2},
-		{db.StatusTurnkickOn, spriteActionPCSkill, 3},
-		{db.StatusTurnkickReady, spriteActionPCSkill, 3},
-		{db.StatusCounterOn, spriteActionPCSkill, 4},
-		{db.StatusCounterReady, spriteActionPCSkill, 4},
-		{db.StatusDodgeOn, spriteActionPickup, 1},
-		{db.StatusDodgeReady, spriteActionPickup, 1},
-	}
-	for _, tc := range stances {
-		action, frame, ok := taekwonStanceAction(tc.status)
-		if !ok || action != tc.action || frame != tc.frame {
-			t.Fatalf("status %d stance = action %d frame %d ok=%t, want %d/%d/true", tc.status, action, frame, ok, tc.action, tc.frame)
-		}
-	}
-
-	mode.applyStatusEffectChange(ctx, network.StatusEffectChange{StatusID: db.StatusCounterReady, ActorID: 2000000, Active: true})
-	anim, ok := mode.actorAnims[150000]
-	if !ok || anim.actionFamily != spriteActionPCSkill || !anim.hasFixedMotion || anim.fixedMotion != 4 || anim.play || !anim.holdFinal {
-		t.Fatalf("counter stance animation = %+v ok=%t", anim, ok)
-	}
-}
-
-func TestStarWarmAndSoulLinkStatusTintsMatchRobrowser(t *testing.T) {
-	swoo := actorStateTint(worldstate.Actor{Opt3State: db.Opt3Overthrust})
-	if swoo.R != 255 || swoo.G != 191 || swoo.B != 191 || swoo.A != 255 {
-		t.Fatalf("Eswoo tint = %+v", swoo)
+func TestStarWarmAndSoulLinkStatusTints(t *testing.T) {
+	swoo := actorStateTint(worldstate.Actor{Job: 1002, Opt3State: db.Opt3Overthrust})
+	if swoo.R != 255 || swoo.G != 255 || swoo.B != 255 || swoo.A != 255 {
+		t.Fatalf("Eswoo must not apply the player Overthrust tint: %+v", swoo)
 	}
 	warm := actorStateTint(worldstate.Actor{Opt3State: db.Opt3Warm})
-	if warm.R != 255 || warm.G != 102 || warm.B != 102 || warm.A != 255 {
-		t.Fatalf("warm tint = %+v", warm)
+	if warm.R != 255 || warm.G != 255 || warm.B != 255 || warm.A != 255 {
+		t.Fatalf("Warmth uses an additive red overlay, not a flat tint = %+v", warm)
 	}
 	soulLink := actorStateTint(worldstate.Actor{Opt3State: db.Opt3Soullink})
-	if soulLink.R != 89 || soulLink.G != 89 || soulLink.B != 229 || soulLink.A != 229 {
-		t.Fatalf("soul link tint = %+v", soulLink)
+	if soulLink.R != 255 || soulLink.G != 255 || soulLink.B != 255 || soulLink.A != 255 {
+		t.Fatalf("Soul Link uses additive silhouettes, not a flat tint: %+v", soulLink)
 	}
 }
 
 func TestSoulLinkAndEskeToggleLocalNightLighting(t *testing.T) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 150000, Job: db.JobLinker}
+	world.GND = testutil.GNDWithTopHeights(1, 1, func(int, int) [4]float32 { return [4]float32{} })
+	world.RSW = &res.RSW{Models: []res.RSWModel{{Filename: "test.rsm", Scale: res.RSWVector3{X: 1, Y: 1, Z: 1}}}}
+	world.RSW.Light.Diffuse = [3]float32{1, 1, 1}
+	world.RSM = map[string]*res.RSM{"test.rsm": {MainNodeName: "root", Nodes: []res.RSMNode{{
+		Name:     "root",
+		Matrix:   [9]float32{1, 0, 0, 0, 1, 0, 0, 0, 1},
+		Scale:    res.RSMVector3{X: 1, Y: 1, Z: 1},
+		Vertices: []res.RSMVector3{{}, {X: 1}, {Z: 1}},
+		Faces:    []res.RSMFace{{VertexIndices: [3]uint16{0, 1, 2}}},
+	}}}}
 	ctx := client.Context{Session: &session.Session{AccountID: 2000000, CharID: 150000}, World: world}
-	mode := &WorldMode{
-		gndMeshCache: &gndRetainedMeshCache{},
-		rsmMeshCache: map[int][]retainedWorldMesh{1: nil},
+	mode := &WorldMode{}
+	defer mode.Leave()
+	drawColors := func() [2][3]float64 {
+		t.Helper()
+		frame := render.NewFrame(800, 600)
+		projection := testutil.Projection(800, 600, 1, 1, 0)
+		mode.mapScene.DrawGNDMeshes(frame, nil, world.GND, world.RSW, projection)
+		mode.mapScene.DrawRSMModels(frame, nil, world.RSW, world.RSM, world.GND, projection, time.Unix(100, 0))
+		meshes := reflect.ValueOf(frame).Elem().FieldByName("worldMeshes")
+		if meshes.Len() != 2 {
+			t.Fatalf("drawn meshes = %d, want ground and model", meshes.Len())
+		}
+		var colors [2][3]float64
+		for i := range colors {
+			vertex := meshes.Index(i).FieldByName("Mesh").Elem().FieldByName("vertices").Index(0)
+			for c, name := range []string{"ColorR", "ColorG", "ColorB"} {
+				colors[i][c] = vertex.FieldByName(name).Float()
+			}
+		}
+		return colors
 	}
+	day := drawColors()
 
 	mode.applyStatusEffectChange(ctx, network.StatusEffectChange{StatusID: db.StatusSoullink, ActorID: 2000000, Active: true})
-	if !mode.taekwonNight || mode.gndMeshCache != nil || len(mode.rsmMeshCache) != 0 {
-		t.Fatalf("night state=%t gnd=%p rsm=%v", mode.taekwonNight, mode.gndMeshCache, mode.rsmMeshCache)
+	if !mode.mapScene.Night {
+		t.Fatalf("night state=%t", mode.mapScene.Night)
 	}
-	lighting := mode.sceneLighting(nil)
-	if lighting.diffuse.x != 0.5 || lighting.diffuse.y != 0.5 || lighting.diffuse.z != 1 || lighting.env.x != 0.5 || lighting.env.y != 0.5 || lighting.env.z != 1 {
+	lighting := mode.mapScene.Lighting(nil)
+	if lighting.Diffuse.X != 0.5 || lighting.Diffuse.Y != 0.5 || lighting.Diffuse.Z != 1 || lighting.Env.X != 0.5 || lighting.Env.Y != 0.5 || lighting.Env.Z != 1 {
 		t.Fatalf("night lighting = %+v", lighting)
+	}
+	night := drawColors()
+	for i, name := range []string{"ground", "model"} {
+		if night[i][0] >= day[i][0] || night[i][1] >= day[i][1] || night[i][2] != day[i][2] {
+			t.Errorf("%s mesh did not acquire night lighting: day=%v night=%v", name, day[i], night[i])
+		}
 	}
 
 	mode.applyStatusEffectChange(ctx, network.StatusEffectChange{StatusID: db.StatusSke, ActorID: 2000000, Active: false})
-	if mode.taekwonNight {
+	if mode.mapScene.Night {
 		t.Fatal("inactive Eske did not restore day lighting")
 	}
-	lighting = mode.sceneLighting(nil)
-	if lighting.diffuse.x != 1 || lighting.diffuse.y != 1 || lighting.diffuse.z != 1 {
+	lighting = mode.mapScene.Lighting(nil)
+	if lighting.Diffuse.X != 1 || lighting.Diffuse.Y != 1 || lighting.Diffuse.Z != 1 {
 		t.Fatalf("restored lighting = %+v", lighting)
+	}
+	if restored := drawColors(); restored != day {
+		t.Fatalf("meshes did not regain day lighting: got=%v want=%v", restored, day)
 	}
 }
 

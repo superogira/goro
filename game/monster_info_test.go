@@ -7,6 +7,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	worldstate "github.com/kivutar/goro/world"
 )
@@ -14,8 +15,8 @@ import (
 func TestSenseActorUsesRecentRequestedTarget(t *testing.T) {
 	now := time.Now()
 	world := &worldstate.World{Actors: map[uint32]worldstate.Actor{
-		300: {ID: 300, Job: 1002, Name: "Poring", HasObjectType: true, ObjectType: actorObjectTypeMob},
-		301: {ID: 301, Job: 1002, Name: "Poring", HasObjectType: true, ObjectType: actorObjectTypeMob},
+		300: {ID: 300, Job: 1002, Name: "Poring", HasObjectType: true, ObjectType: scene.ActorObjectTypeMob},
+		301: {ID: 301, Job: 1002, Name: "Poring", HasObjectType: true, ObjectType: scene.ActorObjectTypeMob},
 	}}
 	mode := &WorldMode{}
 	mode.rememberSenseTarget(db.SkillWZEstimation, 301, now)
@@ -32,7 +33,7 @@ func TestSenseActorUsesRecentRequestedTarget(t *testing.T) {
 func TestSenseActorDoesNotGuessPartyResultFromVisibleMonsters(t *testing.T) {
 	now := time.Now()
 	world := &worldstate.World{Actors: map[uint32]worldstate.Actor{
-		300: {ID: 300, Job: 1002, HasObjectType: true, ObjectType: actorObjectTypeMob},
+		300: {ID: 300, Job: 1002, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob},
 	}}
 	mode := &WorldMode{}
 	if actor, ok := mode.senseActor(client.Context{World: world}, 1002, now); ok {
@@ -43,7 +44,7 @@ func TestSenseActorDoesNotGuessPartyResultFromVisibleMonsters(t *testing.T) {
 func TestSenseActorRejectsExpiredRequest(t *testing.T) {
 	now := time.Now()
 	world := &worldstate.World{Actors: map[uint32]worldstate.Actor{
-		300: {ID: 300, Job: 1002, HasObjectType: true, ObjectType: actorObjectTypeMob},
+		300: {ID: 300, Job: 1002, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob},
 	}}
 	mode := &WorldMode{senseRequest: senseRequest{targetID: 300, requestedAt: now.Add(-senseResponseTimeout - time.Millisecond)}}
 	if actor, ok := mode.senseActor(client.Context{World: world}, 1002, now); ok {
@@ -58,7 +59,7 @@ func TestMonsterInfoPacketOpensInformationWindow(t *testing.T) {
 	now := time.Now()
 	uiManager := &worldModeTestUIManager{}
 	world := &worldstate.World{Actors: map[uint32]worldstate.Actor{
-		300: {ID: 300, Job: 1002, Name: "Poring", HasObjectType: true, ObjectType: actorObjectTypeMob},
+		300: {ID: 300, Job: 1002, Name: "Poring", HasObjectType: true, ObjectType: scene.ActorObjectTypeMob},
 	}}
 	ctx := client.Context{
 		ScreenW:   800,

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/bot"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/render"
 )
@@ -33,7 +34,7 @@ type Manager struct {
 	ctx           client.Context
 	mode          Mode
 	login         atomic.Bool
-	script        *luaScript
+	script        *bot.Script
 	scriptBlocked [input.GamepadButtonCount]bool
 }
 
@@ -96,7 +97,7 @@ func (m *Manager) HandleGamepadInput(ctx client.Context, dt float64) input.Gamep
 		}
 	}
 	m.syncScript(ctx)
-	return m.script.handleGamepad(ctx, dt)
+	return m.script.HandleGamepad(ctx, dt)
 }
 
 func (m *Manager) HandleKeyPress(ctx client.Context, code input.KeyCode) {
@@ -132,9 +133,9 @@ func (m *Manager) Update() error {
 
 	m.syncScript(m.ctx)
 	// Gameplay input and ticks retain WorldMode's modal/death ordering.
-	if m.script != nil && m.script.mode == nil {
-		if err := m.script.inputFrame(false); err != nil {
-			m.script.fail("input", err)
+	if m.script != nil && !m.script.InGame() {
+		if err := m.script.InputFrame(false); err != nil {
+			m.script.Fail("input", err)
 		}
 	}
 	next, err := m.mode.Update(m.ctx)

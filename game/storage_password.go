@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	gameui "github.com/kivutar/goro/ui"
@@ -49,7 +50,7 @@ func (m *WorldMode) handleStoragePasswordResult(ctx client.Context, result netwo
 		m.ui.storagePassword.CloseFromServer(ctx)
 		m.ui.storageWindow.OpenWindow(ctx)
 	case network.StoragePasswordCheckFailed:
-		remaining := maxInt(0, storagePasswordMaximumFailures-int(result.ErrorCount))
+		remaining := scene.MaxInt(0, storagePasswordMaximumFailures-int(result.ErrorCount))
 		message := fmt.Sprintf("Wrong password. %d attempt(s) left.", remaining)
 		m.ui.storagePassword.OpenPrompt(ctx, gameui.StoragePasswordModeEnter, message)
 	case network.StoragePasswordTooManyFailures:

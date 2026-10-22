@@ -11,6 +11,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
@@ -158,7 +159,7 @@ func (m *WorldMode) applyGuildEmblemChange(ctx client.Context, change network.Gu
 	if change.ActorID == 0 || ctx.World == nil {
 		return
 	}
-	if isLocalActor(ctx, change.ActorID) {
+	if scene.IsLocalActor(ctx, change.ActorID) {
 		ctx.World.Player.GuildID = change.GuildID
 		ctx.World.Player.EmblemVersion = change.EmblemVersion
 		if ctx.Session != nil {
@@ -202,7 +203,7 @@ func (m *WorldMode) actorGuildEmblem(ctx client.Context, actor worldstate.Actor,
 	return emblem.image
 }
 
-func (m *WorldMode) drawSiegeGuildEmblems(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time, entries []sceneActorDrawEntry) {
+func (m *WorldMode) drawSiegeGuildEmblems(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time, entries []scene.ActorDrawEntry) {
 	if screen == nil || ctx.World == nil || !ctx.World.MapProperty.IsSiege() {
 		return
 	}
@@ -210,7 +211,7 @@ func (m *WorldMode) drawSiegeGuildEmblems(screen *render.Frame, ctx client.Conte
 		if !siegeActorShowsGuildEmblem(entry) {
 			continue
 		}
-		emblem := m.actorGuildEmblem(ctx, entry.actor, entry.isPlayer)
+		emblem := m.actorGuildEmblem(ctx, entry.Actor, entry.IsPlayer)
 		if emblem == nil {
 			continue
 		}
@@ -229,35 +230,35 @@ func (m *WorldMode) drawSiegeGuildEmblems(screen *render.Frame, ctx client.Conte
 	}
 }
 
-func siegeActorShowsGuildEmblem(entry sceneActorDrawEntry) bool {
+func siegeActorShowsGuildEmblem(entry scene.ActorDrawEntry) bool {
 	const hiddenEffectMask = db.EffectStateHide | db.EffectStateCloak | db.EffectStateInvisible | db.EffectStateChasewalk
-	return entry.stealth != stealthHidden && entry.actor.EffectState&hiddenEffectMask == 0 && entry.actor.GuildID != 0 && entry.actor.EmblemVersion != 0
+	return entry.Stealth != scene.StealthHidden && entry.Actor.EffectState&hiddenEffectMask == 0 && entry.Actor.GuildID != 0 && entry.Actor.EmblemVersion != 0
 }
 
-func (m *WorldMode) siegeGuildEmblemAnchor(ctx client.Context, projection sceneProjection, now time.Time, entry sceneActorDrawEntry) (float64, float64) {
-	centerX := entry.screenX
-	topY := actorSpriteTopY(entry.screenY, entry.scale)
-	if entry.isPlayer || !m.nonPCActorHasGR2Model(ctx, entry.actor) {
+func (m *WorldMode) siegeGuildEmblemAnchor(ctx client.Context, projection scene.Projection, now time.Time, entry scene.ActorDrawEntry) (float64, float64) {
+	centerX := entry.ScreenX
+	topY := actorSpriteTopY(entry.ScreenY, entry.Scale)
+	if entry.IsPlayer || !m.nonPCActorHasGR2Model(ctx, entry.Actor) {
 		return centerX, topY
 	}
 
-	view := m.nonPCGR2ModelView(ctx, entry.actor)
+	view := m.nonPCGR2ModelView(ctx, entry.Actor)
 	if view == nil || view.geometry == nil {
 		return centerX, topY
 	}
-	scale := gr2ModelWorldScale * m.actorBodySizeMultiplier(entry.actor.ID, now)
-	top := modelPoint3{
-		x: float64(view.geometry.Center[0]),
-		y: float64(view.geometry.Center[1]),
-		z: float64(view.geometry.Center[2] + view.geometry.Size[2]/2),
+	scale := gr2ModelWorldScale * m.actorBodySizeMultiplier(entry.Actor.ID, now)
+	top := scene.Point3{
+		X: float64(view.geometry.Center[0]),
+		Y: float64(view.geometry.Center[1]),
+		Z: float64(view.geometry.Center[2] + view.geometry.Size[2]/2),
 	}
-	matrix := gr2ActorModelMatrix(entry.worldX, entry.worldY, entry.worldZ, entry.actor.Dir, scale)
-	worldTop := mat4TransformPoint(matrix, top)
-	projected := projection.Project(worldTop.x, worldTop.z, worldTop.y)
-	if !isFinite(float64(projected.x)) || !isFinite(float64(projected.y)) {
+	matrix := gr2ActorModelMatrix(entry.WorldX, entry.WorldY, entry.WorldZ, entry.Actor.Dir, scale)
+	worldTop := scene.Mat4TransformPoint(matrix, top)
+	projected := projection.Project(worldTop.X, worldTop.Z, worldTop.Y)
+	if !scene.IsFinite(float64(projected.X)) || !scene.IsFinite(float64(projected.Y)) {
 		return centerX, topY
 	}
-	return float64(projected.x), float64(projected.y)
+	return float64(projected.X), float64(projected.Y)
 }
 
 func siegeGuildEmblemPosition(centerX, topY float64, size int) (float64, float64) {

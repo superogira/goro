@@ -6,6 +6,10 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/internal/testutil"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -17,13 +21,13 @@ func TestHiddenWarpNPCIsNotVisibleOrSelectable(t *testing.T) {
 	for _, name := range []string{"", "boom1#airplane"} {
 		for _, hasObjectType := range []bool{false, true} {
 			t.Run(fmt.Sprintf("name=%q/object-type=%t", name, hasObjectType), func(t *testing.T) {
-				actor := worldstate.Actor{ID: 300, Job: 139, Name: name, X: 11, Y: 20, ObjectType: actorObjectTypeNPC, HasObjectType: hasObjectType}
+				actor := worldstate.Actor{ID: 300, Job: 139, Name: name, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeNPC, HasObjectType: hasObjectType}
 				ctx, projection := cursorHoverTestContext(actor)
 				ctx.Resources = &res.Manager{}
 				mode := &WorldMode{}
 				now := time.Now()
 				for _, entry := range mode.collectSceneActorEntries(render.NewFrame(800, 600), ctx, projection) {
-					if entry.actor.ID == actor.ID {
+					if entry.Actor.ID == actor.ID {
 						t.Error("hidden warp NPC entered the actor draw list")
 					}
 				}
@@ -57,7 +61,7 @@ func TestHiddenWarpNPCIsNotVisibleOrSelectable(t *testing.T) {
 
 func TestHiddenWarpNPCRetainsAirshipExplosionAnchor(t *testing.T) {
 	ctx := client.Context{World: worldstate.New(), Session: &session.Session{AccountID: 100, CharID: 200}}
-	entry := network.ActorEntry{ID: 300, Job: 139, X: 239, Y: 62, ObjectType: actorObjectTypeNPC, HasObjectType: true, Appearance: true}
+	entry := network.ActorEntry{ID: 300, Job: 139, X: 239, Y: 62, ObjectType: scene.ActorObjectTypeNPC, HasObjectType: true, Appearance: true}
 	mode := &WorldMode{}
 	mode.upsertNetworkActor(ctx, entry)
 	actor, ok := ctx.World.Actors[entry.ID]
@@ -65,22 +69,22 @@ func TestHiddenWarpNPCRetainsAirshipExplosionAnchor(t *testing.T) {
 		t.Fatalf("hidden effect anchor was not retained: %+v, exists=%t", actor, ok)
 	}
 	mode.applyWarpPortalEntry(ctx, entry)
-	if len(mode.worldEffects) != 0 {
+	if len(mode.effects().Active) != 0 {
 		t.Fatal("hidden warp NPC generated a visible warp portal")
 	}
-	mode.applySpecialEffectNotify(ctx, network.SpecialEffectNotify{AID: entry.ID, EffectID: effectSuiExplosion})
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want one explosion", len(mode.worldEffects))
+	mode.applySpecialEffectNotify(ctx, network.SpecialEffectNotify{AID: entry.ID, EffectID: effects.SuiExplosion})
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want one explosion", len(mode.effects().Active))
 	}
-	effect := mode.worldEffects[0]
-	if effect.effectID != effectSuiExplosion || effect.actorID != entry.ID || effect.x != entry.X || effect.y != entry.Y {
+	effect := mode.effects().Active[0]
+	if effect.EffectID != effects.SuiExplosion || effect.ActorID != entry.ID || effect.X != entry.X || effect.Y != entry.Y {
 		t.Fatalf("explosion lost its hidden NPC anchor: %+v", effect)
 	}
 }
 
 func TestHiddenNPCRemainsInteractive(t *testing.T) {
 	// Unlike class 139, the original client gives class 111 a pick rectangle.
-	actor := worldstate.Actor{ID: 300, Job: 111, X: 11, Y: 20, ObjectType: actorObjectTypeNPC, HasObjectType: true}
+	actor := worldstate.Actor{ID: 300, Job: 111, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeNPC, HasObjectType: true}
 	ctx, projection := cursorHoverTestContext(actor)
 	got, ok := clickedTalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, time.Now(), nil)
 	if !ok || got.ID != actor.ID {
@@ -89,11 +93,11 @@ func TestHiddenNPCRemainsInteractive(t *testing.T) {
 }
 
 func TestHiddenWarpNPCDoesNotLoadPoringRealData(t *testing.T) {
-	manager := realDataManager(t)
-	if view, status := loadNonPCSpriteView(manager, 139, "hidden warp NPC"); view != nil {
+	manager := testutil.RealDataManager(t)
+	if view, status := sprites.LoadNonPC(manager, 139, "hidden warp NPC"); view != nil {
 		t.Fatalf("hidden warp NPC loaded a sprite: %s", status)
 	}
-	if view, status := loadNonPCSpriteView(manager, 1002, "Poring"); view == nil {
+	if view, status := sprites.LoadNonPC(manager, 1002, "Poring"); view == nil {
 		t.Fatalf("normal Poring failed to load: %s", status)
 	}
 }

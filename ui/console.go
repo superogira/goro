@@ -697,9 +697,9 @@ func (c *ChatConsole) submitCompanionAI(ctx client.Context, homunculus bool) {
 		enabled = ctx.Session.MercenaryCustomAI
 	}
 	if enabled {
-		c.AddSystemMessage("%s AI: Custom", label)
+		c.AddSystemMessage("%s AI mode: Custom", label)
 	} else {
-		c.AddSystemMessage("%s AI: Default", label)
+		c.AddSystemMessage("%s AI mode: Default", label)
 	}
 }
 

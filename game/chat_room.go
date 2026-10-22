@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	gameui "github.com/kivutar/goro/ui"
@@ -81,7 +82,7 @@ func applyChatRoomBoardToWorld(ctx client.Context, board network.ChatRoomBoard) 
 	if ctx.World == nil {
 		return
 	}
-	if isLocalActor(ctx, board.OwnerID) {
+	if scene.IsLocalActor(ctx, board.OwnerID) {
 		ctx.World.Player.ChatRoom = true
 		ctx.World.Player.ChatRoomID = board.RoomID
 		ctx.World.Player.ChatRoomTitle = board.Title

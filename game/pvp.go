@@ -2,6 +2,7 @@ package game
 
 import (
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	worldstate "github.com/kivutar/goro/world"
 )
@@ -21,7 +22,7 @@ func applyPvPRanking(ctx client.Context, ranking network.PvPRanking) {
 	if ctx.World == nil || !ctx.World.MapProperty.PvPRankingEnabled() || ranking.ActorID == 0 {
 		return
 	}
-	if isLocalActor(ctx, ranking.ActorID) {
+	if scene.IsLocalActor(ctx, ranking.ActorID) {
 		setActorPvPRanking(&ctx.World.Player, ranking)
 		return
 	}

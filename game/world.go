@@ -2,165 +2,146 @@ package game
 
 import (
 	"context"
-	"fmt"
-	"hash/fnv"
 	"image"
-	"image/color"
 	"math"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/bot"
+	"github.com/kivutar/goro/game/companion"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/login"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
+	"github.com/kivutar/goro/game/weather"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
-	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 	gameui "github.com/kivutar/goro/ui"
 	worldstate "github.com/kivutar/goro/world"
 )
 
 type WorldMode struct {
-	mail               mailState
-	walkCooldownUntil  time.Time
-	nextHeldWalkAt     time.Time
-	camera             followCamera
-	cameraShakeStart   time.Time
-	cameraShakeEnd     time.Time
-	whitePixel         *render.Image
-	tileCursor         *render.Image
-	textures           map[string]*render.Image
+	mapScene     maps.System
+	effectSystem effects.System
+
+	mail              mailState
+	walkCooldownUntil time.Time
+	walkSequence      uint64
+	nextHeldWalkAt    time.Time
+	camera            followCamera
+	cameraShakeStart  time.Time
+	cameraShakeEnd    time.Time
+	spriteUpscaler    *sprites.Upscaler
+	imageCache        map[string]image.Image
+	imageMiss         map[string]struct{}
+
+	playerView       *sprites.Humanoid
+	shadowView       *scene.SpriteView
+	shadowViewMiss   bool
+	cartViews        map[int]*scene.SpriteView
+	cartViewMiss     map[int]struct{}
+	falconViews      map[int]*scene.SpriteView
+	falconViewMiss   map[int]struct{}
+	falcons          map[uint32]*falconRenderState
+	cursorView       *scene.SpriteView
+	cursorViewMiss   bool
+	slotMachineView  *scene.SpriteView
+	slotMachineMiss  bool
+	cursorFallback   *render.Image
+	cursorAction     int
+	cursorStarted    time.Time
+	damageNumberView *scene.SpriteView
+	damageNumberMiss bool
+	damageNumbers    map[string]*scene.Billboard
+	cursorLevelNums  map[string]*scene.Billboard
+	damageMsgView    *scene.SpriteView
+	damageMsgMiss    bool
+	timeFontView     *scene.SpriteView
+	timeFontMiss     bool
+	itemMarker       *render.Image
+	itemViews        map[itemSpriteKey]*scene.SpriteView
+	itemViewMiss     map[itemSpriteKey]struct{}
+
+	actorViews        map[sprites.Appearance]*sprites.Humanoid
+	actorViewMiss     map[sprites.Appearance]struct{}
+	mercenaryViews    map[sprites.Appearance]*sprites.Humanoid
+	mercenaryViewMiss map[sprites.Appearance]struct{}
+	nonPCViews        map[int]*scene.SpriteView
+	nonPCViewMiss     map[int]struct{}
+	gr2Models         map[int]*gr2ModelView
+	gr2ModelMiss      map[int]struct{}
+	petAccessoryIDs   map[uint32]uint32
+	petAccessoryViews map[petAccessorySpriteKey]*scene.SpriteView
+	petAccessoryMiss  map[petAccessorySpriteKey]struct{}
+	pendingWarp       bool
+	deferredPackets   []network.Packet
+	pendingAttack     attackIntent
+	pendingPickup     pickupIntent
+	pendingSkill      pendingSkillTarget
+	pendingSkillText  pendingSkillTextTarget
+	senseRequest      senseRequest
+	guildAction       gameui.GuildMemberAction
+	guildOpenPending  bool
+	pendingPetCapture petCaptureState
+	petProperty       network.PetProperty
+	hasPetProperty    bool
+	petOldFullness    uint16
+	petLastTalk       time.Time
+	petInfoRequested  bool
+	petID             uint32
+	petSlotMachine    petSlotMachineState
+	lockedAttackID    uint32
+	attackFocusID     uint32
+	attackFocusStart  time.Time
+	scriptHighlight   actorHighlight
+	lastAttackAt      time.Time
+	lastChaseAt       time.Time
+	actorAnims        map[uint32]actorAnimation
+
+	damageFloaters []damageFloater
+
+	actorCastBars    map[uint32]actorCastBar
+	serverProgress   serverProgressState
+	showDigit        showDigitState
+	scheduledSounds  []scheduledSound
+	scheduledStops   []scheduledActorStop
+	scheduledResumes []scheduledWalkResume
+	weather          weather.System
+	actorDeaths      map[uint32]time.Time
+	actorVanishes    map[uint32]actorVanishFade
+	actorSoundFrames map[uint32]actorSoundFrame
+	actorLife        map[uint32]actorLife
+	graffiti         map[uint32]*groundGraffiti
+	skillUnitModels  map[uint32]skillUnitModel
+	hiddenSkillUnits map[uint32]skillUnitModel
+	actorNameReqAt   map[uint32]time.Time
+	guildEmblems     map[uint32]guildEmblem
+	speechBubbles    map[uint32]speechBubble
+
+	ui               worldUI
+	pendingChatRoom  network.ChatRoomCreate
+	pendingTradeName string
+	mapFade          maps.Fade
+	hoveredWalk      hoveredWalkCellCache
+	bot              *bot.Script
+	companionSystem  companion.System
 	textureMiss        map[string]struct{}
-	imageCache         map[string]image.Image
-	imageMiss          map[string]struct{}
-	strEffects         map[string]*res.STR
 	strEffectMiss      map[string]struct{}
-	playerView         *humanoidSpriteView
-	shadowView         *spriteView
-	shadowViewMiss     bool
-	cartViews          map[int]*spriteView
-	cartViewMiss       map[int]struct{}
-	falconViews        map[int]*spriteView
-	falconViewMiss     map[int]struct{}
-	falcons            map[uint32]*falconRenderState
-	cursorView         *spriteView
-	cursorViewMiss     bool
 	chatBoardTipSig    string
-	chatBoardBounds    map[uint32]vendingBoardBounds
-	vendingBoardBounds map[uint32]vendingBoardBounds
 	vendingBoardsSig   string
-	slotMachineView    *spriteView
-	slotMachineMiss    bool
-	cursorFallback     *render.Image
-	cursorAction       int
-	cursorStarted      time.Time
-	touch              touchControls
-	damageNumberView   *spriteView
-	damageNumberMiss   bool
-	damageNumbers      map[string]*spriteBillboard
-	cursorLevelNums    map[string]*spriteBillboard
-	damageMsgView      *spriteView
-	damageMsgMiss      bool
-	timeFontView       *spriteView
-	timeFontMiss       bool
-	itemMarker         *render.Image
-	itemViews          map[itemSpriteKey]*spriteView
-	itemViewMiss       map[itemSpriteKey]struct{}
-	itemViewPrefetch   map[itemSpriteKey]*res.PrefetchHandle
-	itemIconPrefetch   map[itemSpriteKey]*res.PrefetchHandle
-	effectViews        map[string]*spriteView
 	effectViewMiss     map[string]struct{}
-	actorViews         map[actorSpriteKey]*humanoidSpriteView
-	actorViewMiss      map[actorSpriteKey]struct{}
-	actorViewPrefetch  map[actorSpriteKey]*res.PrefetchHandle
-	mercenaryViews     map[actorSpriteKey]*humanoidSpriteView
-	mercenaryViewMiss  map[actorSpriteKey]struct{}
-	nonPCViews         map[int]*spriteView
-	nonPCViewMiss      map[int]struct{}
-	nonPCViewPrefetch  map[int]*res.PrefetchHandle
-	gr2Models          map[int]*gr2ModelView
-	gr2ModelMiss       map[int]struct{}
-	petAccessoryIDs    map[uint32]uint32
-	petAccessoryViews  map[petAccessorySpriteKey]*spriteView
-	petAccessoryMiss   map[petAccessorySpriteKey]struct{}
-	rsmMeshCache       map[int][]retainedWorldMesh
-	rsmNodeMatrices    map[*res.RSM]map[string]mat4
-	rsmAnimNodes       map[*res.RSM]animatedRSMNodeCache
-	rsmBoundsCache     map[rsmBoundsCacheKey]rsmBounds
-	rsmFaceMetaCache   map[*res.RSM]map[*res.RSMNode][]rsmFaceMeta
-	rsmAnimScratch     animatedRSMScratch
-	rsmPlacementGrid   *rsmPlacementGrid
-	runtimeRSMModels   map[string]*res.RSM
-	gndMeshCache       *gndRetainedMeshCache
-	pendingWarp        bool
-	deferredPackets    []network.Packet
-	pendingAttack      attackIntent
-	pendingPickup      pickupIntent
-	pendingSkill       pendingSkillTarget
-	pendingSkillText   pendingSkillTextTarget
-	senseRequest       senseRequest
-	guildAction        gameui.GuildMemberAction
-	guildOpenPending   bool
-	pendingPetCapture  petCaptureState
-	petProperty        network.PetProperty
-	hasPetProperty     bool
-	petOldFullness     uint16
-	petLastTalk        time.Time
-	petInfoRequested   bool
-	petID              uint32
-	homDeleteID        uint32
-	mercDeleteID       uint32
-	petSlotMachine     petSlotMachineState
-	lockedAttackID     uint32
-	attackFocusID      uint32
-	attackFocusStart   time.Time
-	scriptHighlight    actorHighlight
-	lastAttackAt       time.Time
-	lastChaseAt        time.Time
-	actorAnims         map[uint32]actorAnimation
-	damageFloaters     []damageFloater
-	worldEffects       []worldEffect
-	actorCastBars      map[uint32]actorCastBar
-	serverProgress     serverProgressState
-	showDigit          showDigitState
-	scheduledSounds    []scheduledSound
-	scheduledStops     []scheduledActorStop
-	scheduledResumes   []scheduledWalkResume
-	mapSoundNext       map[int]time.Time
-	mapWeatherSounds   map[int]time.Time
-	mapWeatherCloud    mapWeatherCloudState
-	mapWeatherPokJuk   mapWeatherFireworkState
-	actorDeaths        map[uint32]time.Time
-	actorVanishes      map[uint32]actorVanishFade
-	actorSoundFrames   map[uint32]actorSoundFrame
-	actorLife          map[uint32]actorLife
-	skillUnitModels    map[uint32]skillUnitModel
-	hiddenSkillUnits   map[uint32]skillUnitModel
-	actorNameReqAt     map[uint32]time.Time
-	guildEmblems       map[uint32]guildEmblem
-	speechBubbles      map[uint32]speechBubble
-	gndNormalSource    *res.GND
-	gndTopNormals      [][4]modelPoint3
-	taekwonNight       bool
-	ui                 worldUI
-	pendingChatRoom    network.ChatRoomCreate
-	pendingTradeName   string
-	mapFade            mapFadeState
-	loadingBG          *render.Image
-	hoveredWalk        hoveredWalkCellCache
-	bot                *luaScript
-	companionAI        companionAISystem
-	walkSequence       uint64
-	mapImages          *render.ImageGroup
-	mapTextureUploads  []*render.Image
 	mapUploadBatch     int
 	textureUpscaling   bool // Captured when loading the map; cached meshes keep matching UVs.
-	spriteUpscaler     *spriteUpscaler
 }
 
 type worldUI struct {
+	companions           companion.Windows
 	minimap              gameui.Minimap
 	statusIcons          gameui.StatusIcons
 	pvpCounter           gameui.PvPCounter
@@ -211,14 +192,6 @@ type worldUI struct {
 	petInfoWindow        gameui.PetInfoWindow
 	petContext           gameui.PetContextMenu
 	petConfirm           gameui.ConfirmModal
-	homunculusInfo       gameui.HomunculusInfoWindow
-	homunculusSkill      gameui.HomunculusSkillWindow
-	homunculusContext    gameui.HomunculusContextMenu
-	homunculusConfirm    gameui.ConfirmModal
-	mercenaryInfo        gameui.MercenaryInfoWindow
-	mercenarySkill       gameui.MercenarySkillWindow
-	mercenaryContext     gameui.MercenaryContextMenu
-	mercenaryConfirm     gameui.ConfirmModal
 	statsWindow          gameui.StatsWindow
 	skillWindow          gameui.SkillWindow
 	questWindow          gameui.QuestWindow
@@ -254,23 +227,19 @@ func (m *WorldMode) drainCameraButtons(ctx client.Context) {
 	for _, action := range gameui.DrainCameraActions() {
 		switch action {
 		case "zoomin":
-			if !cameraZoomLockedForMap(ctx) {
-				m.camera.ZoomBy(1 / cameraButtonZoomStep)
-			}
+			m.camera.ZoomBy(1 / cameraButtonZoomStep)
 		case "zoomout":
-			if !cameraZoomLockedForMap(ctx) {
-				m.camera.ZoomBy(cameraButtonZoomStep)
-			}
+			m.camera.ZoomBy(cameraButtonZoomStep)
 		case "rotl":
-			if !cameraRotationLockedForMap(ctx) {
+			if !scene.CameraRotationLockedForMap(ctx) {
 				m.camera.Rotate(-cameraButtonRotateStep)
 			}
 		case "rotr":
-			if !cameraRotationLockedForMap(ctx) {
+			if !scene.CameraRotationLockedForMap(ctx) {
 				m.camera.Rotate(cameraButtonRotateStep)
 			}
 		case "reset":
-			if !cameraRotationLockedForMap(ctx) {
+			if !scene.CameraRotationLockedForMap(ctx) {
 				m.camera.ResetRotation()
 			}
 		}
@@ -308,7 +277,7 @@ func (u *worldUI) nonConsoleKeyboardInputBlockedExcept(ctx client.Context, excep
 		u.weaponRefine.IsOpen() ||
 		u.petEggWindow.IsOpen() ||
 		(except != &u.petInfoWindow.Window && u.petInfoWindow.KeyboardShortcutsBlocked()) ||
-		(except != &u.homunculusInfo.Window && u.homunculusInfo.KeyboardShortcutsBlocked()) ||
+		(except != &u.companions.HomunculusInfo.Window && u.companions.HomunculusInfo.KeyboardShortcutsBlocked()) ||
 		u.changeCartWindow.IsOpen() ||
 		u.inventoryBag.KeyboardShortcutsBlocked() ||
 		u.itemWindows.KeyboardShortcutsBlocked() ||
@@ -336,8 +305,8 @@ func (u *worldUI) npcInputAvailable() bool {
 		!u.interactionModalOpen() &&
 		!u.partyInfo.IsOpen() &&
 		!u.petConfirm.IsOpen() &&
-		!u.homunculusConfirm.IsOpen() &&
-		!u.mercenaryConfirm.IsOpen() &&
+		!u.companions.HomunculusConfirm.IsOpen() &&
+		!u.companions.MercenaryConfirm.IsOpen() &&
 		!u.inventoryBag.KeyboardShortcutsBlocked()
 }
 
@@ -363,20 +332,6 @@ func (u *worldUI) interactionModalOpen() bool {
 
 func (m *WorldMode) KeyboardShortcutsBlocked(ctx client.Context) bool {
 	return m.ui.KeyboardShortcutsBlocked(ctx)
-}
-
-type actorSpriteKey struct {
-	job         int
-	head        int
-	sex         byte
-	admin       bool
-	bodyPalette int
-	headPalette int
-	weapon      int
-	shield      int
-	headTop     int
-	headMid     int
-	headLow     int
 }
 
 type pickupIntent struct {
@@ -411,39 +366,7 @@ type pendingSkillTextTarget struct {
 	source string
 }
 
-type mapFadePhase int
-
-const (
-	mapFadeNone mapFadePhase = iota
-	mapFadeOut
-	mapFadeHold
-	mapFadePrewarm
-	mapFadeIn
-)
-
-type mapFadeState struct {
-	phase           mapFadePhase
-	started         time.Time
-	coveredFrames   int
-	change          network.MapChange
-	hasChange       bool
-	characterSelect bool
-}
-
-const (
-	mapFadeOutDuration = 220 * time.Millisecond
-	mapFadeInDuration  = 340 * time.Millisecond
-	// Present the transition cover before blocking on synchronous map loading.
-	mapFadeHandoffFrames = 1
-	// Warm the base map, then allow a frame for the initial post-ack actors.
-	mapFadePrewarmFrames     = 2
-	actorNameRequestCooldown = time.Second
-)
-
-var (
-	quadIndices012023 = []uint16{0, 1, 2, 0, 2, 3}
-	quadIndices012213 = []uint16{0, 1, 2, 2, 1, 3}
-)
+const actorNameRequestCooldown = time.Second
 
 func NewWorldMode() *WorldMode {
 	m := &WorldMode{}
@@ -462,7 +385,7 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	m.releaseMapTextures()
 	now := time.Now()
 	m.bindNPCDialogLifecycle()
-	m.startMapPrewarm()
+	m.mapFade.StartPrewarm()
 	// Parse the item tables while the map streams: the first drop's sprite
 	// cannot resolve its resource name until these are loaded, and the lazy
 	// first-query load lands mid-combat otherwise. Cheap when the login
@@ -474,6 +397,7 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 		// lookups fall back to loose files until then.
 		ctx.Resources.StartDeferredWebPack()
 	}
+	m.mapFade.StartPrewarm()
 	m.camera.ResetTracking()
 	ctx.World.GAT = nil
 	ctx.World.GND = nil
@@ -484,14 +408,14 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 		// One pack download replaces the per-file round trips for everything
 		// this map references; missing packs fall through to loose streaming.
 		ctx.Resources.EnsureWebMapPack(strings.TrimSuffix(strings.TrimSuffix(ctx.World.MapName, ".gat"), ".rsw"))
-		gat, _, err := loadGAT(ctx.Resources, ctx.World.MapName)
+		gat, _, err := maps.LoadGAT(ctx.Resources, ctx.World.MapName)
 		if err != nil {
 			return newMapErrorMode(ctx, err, m.ui.console)
 		}
 		ctx.World.GAT = gat
 	}
-	m.textures = make(map[string]*render.Image)
-	m.textureMiss = make(map[string]struct{})
+	m.mapScene.Textures = make(map[string]*render.Image)
+	m.mapScene.TextureMiss = make(map[string]struct{})
 	m.playerView = nil
 	m.shadowView = nil
 	m.shadowViewMiss = false
@@ -502,40 +426,29 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	m.cursorStarted = now
 	m.damageNumberView = nil
 	m.damageNumberMiss = false
-	m.damageNumbers = make(map[string]*spriteBillboard)
-	m.cursorLevelNums = make(map[string]*spriteBillboard)
+	m.damageNumbers = make(map[string]*scene.Billboard)
+	m.cursorLevelNums = make(map[string]*scene.Billboard)
 	m.damageMsgView = nil
 	m.damageMsgMiss = false
 	m.timeFontView = nil
 	m.timeFontMiss = false
 	m.itemMarker = nil
-	m.itemViews = make(map[itemSpriteKey]*spriteView)
+	m.itemViews = make(map[itemSpriteKey]*scene.SpriteView)
 	m.itemViewMiss = make(map[itemSpriteKey]struct{})
-	m.itemViewPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
-	m.itemIconPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
-	m.effectViews = make(map[string]*spriteView)
-	m.effectViewMiss = make(map[string]struct{})
-	m.actorViews = make(map[actorSpriteKey]*humanoidSpriteView)
-	m.actorViewMiss = make(map[actorSpriteKey]struct{})
-	m.actorViewPrefetch = make(map[actorSpriteKey]*res.PrefetchHandle)
-	m.mercenaryViews = make(map[actorSpriteKey]*humanoidSpriteView)
-	m.mercenaryViewMiss = make(map[actorSpriteKey]struct{})
-	m.nonPCViews = make(map[int]*spriteView)
+	m.effects().EffectViews = make(map[string]*scene.SpriteView)
+	m.effects().EffectViewMiss = make(map[string]struct{})
+	m.actorViews = make(map[sprites.Appearance]*sprites.Humanoid)
+	m.actorViewMiss = make(map[sprites.Appearance]struct{})
+	m.mercenaryViews = make(map[sprites.Appearance]*sprites.Humanoid)
+	m.mercenaryViewMiss = make(map[sprites.Appearance]struct{})
+	m.nonPCViews = make(map[int]*scene.SpriteView)
 	m.nonPCViewMiss = make(map[int]struct{})
-	m.nonPCViewPrefetch = make(map[int]*res.PrefetchHandle)
 	m.gr2Models = make(map[int]*gr2ModelView)
 	m.gr2ModelMiss = make(map[int]struct{})
 	m.petAccessoryIDs = make(map[uint32]uint32)
-	m.petAccessoryViews = make(map[petAccessorySpriteKey]*spriteView)
+	m.petAccessoryViews = make(map[petAccessorySpriteKey]*scene.SpriteView)
 	m.petAccessoryMiss = make(map[petAccessorySpriteKey]struct{})
-	m.rsmMeshCache = make(map[int][]retainedWorldMesh)
-	m.rsmNodeMatrices = make(map[*res.RSM]map[string]mat4)
-	m.rsmAnimNodes = make(map[*res.RSM]animatedRSMNodeCache)
-	m.rsmBoundsCache = make(map[rsmBoundsCacheKey]rsmBounds)
-	m.rsmFaceMetaCache = make(map[*res.RSM]map[*res.RSMNode][]rsmFaceMeta)
-	m.rsmAnimScratch.reset()
-	m.rsmPlacementGrid = nil
-	m.gndMeshCache = nil
+	m.mapScene.ResetGeometry()
 	m.pendingWarp = false
 	m.pendingAttack = attackIntent{}
 	m.pendingPickup = pickupIntent{}
@@ -550,6 +463,7 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	m.lastAttackAt = time.Time{}
 	m.lastChaseAt = time.Time{}
 	m.actorAnims = make(map[uint32]actorAnimation)
+	m.effects().ActorBlurs = nil
 	m.damageFloaters = nil
 	m.serverProgress = serverProgressState{}
 	m.showDigit = showDigitState{}
@@ -557,10 +471,9 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	m.ui.poptips.Clear()
 	m.scheduledSounds = nil
 	m.scheduledStops = nil
-	m.mapSoundNext = make(map[int]time.Time)
-	m.mapWeatherSounds = make(map[int]time.Time)
-	m.mapWeatherCloud = mapWeatherCloudState{}
-	m.mapWeatherPokJuk = mapWeatherFireworkState{}
+	m.mapScene.MapSoundNext = make(map[int]time.Time)
+	m.weather = weather.System{}
+	m.effects().StarFlights = nil
 	m.actorDeaths = make(map[uint32]time.Time)
 	m.actorVanishes = make(map[uint32]actorVanishFade)
 	m.actorSoundFrames = make(map[uint32]actorSoundFrame)
@@ -580,13 +493,13 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 	playerStatus := ""
 	character := ctx.Session.SelectedCharacter()
 	visualCharacter := localPlayerVisualCharacter(ctx)
-	if view, status := loadPlayerHumanoidSpriteView(ctx.Resources, visualCharacter, ctx.Session.Sex, localPlayerIsAdmin(ctx)); view != nil {
+	if view, status := sprites.LoadPlayer(ctx.Resources, visualCharacter, ctx.Session.Sex, localPlayerIsAdmin(ctx)); view != nil {
 		m.playerView = view
 		playerStatus = status
 	} else {
 		playerStatus = status
 	}
-	if view, status := loadActorShadowSpriteView(ctx.Resources); view != nil {
+	if view, status := sprites.LoadShadow(ctx.Resources); view != nil {
 		m.shadowView = view
 		if status != "" {
 			playerStatus += " " + status
@@ -595,12 +508,12 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 		m.shadowViewMiss = true
 		glog.Warnf("actor shadow resources unavailable: %s", status)
 	}
-	m.cartViews = make(map[int]*spriteView)
+	m.cartViews = make(map[int]*scene.SpriteView)
 	m.cartViewMiss = make(map[int]struct{})
-	m.falconViews = make(map[int]*spriteView)
+	m.falconViews = make(map[int]*scene.SpriteView)
 	m.falconViewMiss = make(map[int]struct{})
 	m.falcons = make(map[uint32]*falconRenderState)
-	if view, status := loadCursorSpriteView(ctx.Resources); view != nil {
+	if view, status := sprites.LoadCursor(ctx.Resources); view != nil {
 		m.cursorView = view
 		if status != "" {
 			playerStatus += " " + status
@@ -616,28 +529,26 @@ func (m *WorldMode) Enter(ctx client.Context) Mode {
 		return nil
 	}
 
-	if gnd, _, err := loadGND(ctx.Resources, ctx.World.MapName); err == nil {
+	if gnd, _, err := maps.LoadGND(ctx.Resources, ctx.World.MapName); err == nil {
 		ctx.World.GND = gnd
 	} else {
 		ctx.World.GND = nil
 	}
-	if rsw, rswSource, err := loadRSW(ctx.Resources, ctx.World.MapName); err == nil {
+	if rsw, rswSource, err := maps.LoadRSW(ctx.Resources, ctx.World.MapName); err == nil {
 		ctx.World.RSW = rsw
-		ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, rsw)
-		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, rsw, ctx.World.RSM)
+		ctx.World.RSM, ctx.World.RSMFail = maps.LoadRSMModels(ctx.Resources, rsw)
 		m.playMapBGM(ctx, rswSource)
-		m.preloadMapSounds(ctx)
+		m.mapScene.PreloadMapSounds(ctx)
 	} else {
 		ctx.World.RSW = nil
 		ctx.World.RSM = nil
 		ctx.World.RSMFail = 0
-		m.prefetchMapTextures(ctx.Resources, ctx.World.GND, nil, nil)
 		m.playMapBGM(ctx, ctx.World.MapName)
 	}
 	// Server-driven digit displays load their sprite on first use; warm it
 	// with the rest of the map.
 	ctx.Resources.Prefetch(serverDigitSpritePrefetchGroups()...)
-	m.preloadMapTextures(ctx)
+	m.mapScene.PreloadTextures(ctx)
 	_ = ctx.Network.SendLoadEndAck()
 	return nil
 }
@@ -683,8 +594,8 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 	m.ui.chatShortcuts.Rebind(ctx, &m.ui.console, func() {
 		m.ui.emoteWindow.OpenWindow(ctx, &m.ui.console)
 	})
-	m.ui.homunculusSkill.Rebind(ctx, m)
-	m.ui.mercenarySkill.Rebind(ctx, m)
+	m.ui.companions.HomunculusSkill.Rebind(ctx, m)
+	m.ui.companions.MercenarySkill.Rebind(ctx, m)
 	m.ui.friendsWindow.Rebind(ctx)
 	m.ui.guildWindow.Rebind(ctx)
 	m.ui.guildMemberPrompt.Rebind(ctx)
@@ -695,8 +606,8 @@ func (m *WorldMode) rebindPersistentUI(ctx client.Context) {
 	m.ui.chatRoomCreate.Rebind(ctx)
 	m.ui.chatRoom.Rebind(ctx)
 	m.ui.settingsWindow.Rebind(ctx)
-	m.ui.homunculusInfo.Rebind(ctx)
-	m.ui.mercenaryInfo.Rebind(ctx)
+	m.ui.companions.HomunculusInfo.Rebind(ctx)
+	m.ui.companions.MercenaryInfo.Rebind(ctx)
 	m.ui.whisperWindows.Rebind(ctx)
 	m.ui.shortcutBar.ResetOverlay(ctx)
 }
@@ -722,41 +633,39 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// Touch overlay actions land with settings priority: a stick held across
 	// a map fade must keep steering once the new map is in, and the action
 	// button must work during prewarm. Steering itself is throttled inside.
-	m.drainTouchActions(ctx)
-	m.updateTouchControls(ctx, now)
 	// Fold a finished wav-pack download into the archive list on this
 	// goroutine; no-op until StartDeferredWebPack's fetch lands.
 	if ctx.Resources != nil {
 		ctx.Resources.PollDeferredWebPack()
 	}
-	if m.mapFade.phase == mapFadeOut {
-		if !m.mapFadeElapsed(now) {
+	if m.mapFade.Phase == maps.FadeOut {
+		if !m.mapFade.Elapsed(now) {
 			return nil, nil
 		}
-		m.mapFade.phase = mapFadeHold
-		m.mapFade.coveredFrames = 0
+		m.mapFade.Phase = maps.FadeHold
+		m.mapFade.CoveredFrames = 0
 		return nil, nil
 	}
-	if m.mapFade.phase == mapFadeHold && m.mapFade.coveredFrames >= mapFadeHandoffFrames {
-		if m.mapFade.characterSelect {
+	if m.mapFade.Phase == maps.FadeHold && m.mapFade.CoveredFrames >= maps.FadeHandoffFrames {
+		if m.mapFade.CharacterSelect {
 			return m.nextCharacterSelectMode(ctx), nil
 		}
-		if m.mapFade.hasChange {
-			change := m.mapFade.change
-			m.mapFade = mapFadeState{phase: mapFadeHold, started: now}
+		if m.mapFade.HasChange {
+			change := m.mapFade.Change
+			m.mapFade = maps.Fade{Phase: maps.FadeHold, Started: now}
 			next := m.handleMapChange(ctx, change)
 			if next != nil {
 				return next, nil
 			}
 			if !m.pendingWarp {
-				m.startMapFadeIn(now)
+				m.mapFade.StartIn(now)
 			}
 			return nil, nil
 		}
 	}
-	m.advanceMapPrewarm(now)
-	if m.mapFade.phase == mapFadeIn && m.mapFadeElapsed(now) {
-		m.mapFade = mapFadeState{}
+	m.mapFade.AdvancePrewarm(now, len(m.mapScene.Images.Uploads) != 0)
+	if m.mapFade.Phase == maps.FadeIn && m.mapFade.Elapsed(now) {
+		m.mapFade = maps.Fade{}
 	}
 
 	if m.updateDisconnectDialog(ctx) {
@@ -769,6 +678,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	// Status presentation must follow server updates even when a window or
 	// modal consumes input for the rest of the frame.
 	m.removeExpiredStatusEffects(ctx.Session, now)
+	m.effects().AdvanceTaekwonFootprints(ctx, now)
 	m.updateMail(ctx, now)
 	progressBlocksActions := m.updateServerProgress(ctx, now)
 	if !ctx.Config.Headless {
@@ -804,22 +714,22 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	m.processScheduledWalkResumes(ctx, now)
 	if ctx.Config.Headless {
 		m.playDueScheduledSounds(ctx, now)
-		if !progressBlocksActions && m.mapFade.phase != mapFadeHold && m.mapFade.phase != mapFadePrewarm {
+		if !progressBlocksActions && m.mapFade.Phase != maps.FadeHold && m.mapFade.Phase != maps.FadePrewarm {
 			dead := playerIsDead(ctx)
 			m.updateBotInput(ctx, !dead)
 			if !dead {
-				m.updateCompanionAI(ctx, now)
+				m.companions().Update(ctx, m.actorDeaths, now)
 			}
 			m.updateBot(ctx, now)
 		}
 		return nil, nil
 	}
 	m.processActorMotionSounds(ctx, now)
-	m.processMapSounds(ctx, now)
+	m.mapScene.ProcessMapSounds(ctx, now, m.scheduleSoundVolumeAtPosition)
 	m.playDueScheduledSounds(ctx, now)
 
 	m.camera.Update(ctx, now)
-	if m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm {
+	if m.mapFade.Phase == maps.FadeHold || m.mapFade.Phase == maps.FadePrewarm {
 		return nil, nil
 	}
 	m.ui.console.UpdatePresentation(ctx)
@@ -897,10 +807,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if !dead && m.openPetContextFromInput(ctx, now) {
 		return nil, nil
 	}
-	homunculusContextConsumed := m.ui.homunculusContext.Update(ctx)
-	if action := m.ui.homunculusContext.PopAction(); action.Kind != gameui.HomunculusContextActionNone {
+	homunculusContextConsumed := m.ui.companions.HomunculusContext.Update(ctx)
+	if action := m.ui.companions.HomunculusContext.PopAction(); action.Kind != gameui.HomunculusContextActionNone {
 		if !dead {
-			m.handleHomunculusContextAction(ctx, action)
+			m.companions().HandleHomunculusContextAction(ctx, action)
 		}
 		return nil, nil
 	}
@@ -910,10 +820,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if !dead && m.openHomunculusContextFromInput(ctx, now) {
 		return nil, nil
 	}
-	mercenaryContextConsumed := m.ui.mercenaryContext.Update(ctx)
-	if action := m.ui.mercenaryContext.PopAction(); action.Kind != gameui.MercenaryContextActionNone {
+	mercenaryContextConsumed := m.ui.companions.MercenaryContext.Update(ctx)
+	if action := m.ui.companions.MercenaryContext.PopAction(); action.Kind != gameui.MercenaryContextActionNone {
 		if !dead {
-			m.handleMercenaryContextAction(ctx, action)
+			m.companions().HandleMercenaryContextAction(ctx, action)
 		}
 		return nil, nil
 	}
@@ -963,7 +873,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if !dead && m.openPlayerContextFromInput(ctx, now) {
 		return nil, nil
 	}
-	if !m.mapPointerBlocked(ctx) && !m.ui.escapeMenu.IsOpen() && !m.ui.interactionModalOpen() && !m.ui.settingsWindow.IsOpen() && !m.ui.identifyWindow.IsOpen() && !m.ui.petEggWindow.IsOpen() && !m.ui.petConfirm.IsOpen() && !m.ui.homunculusConfirm.IsOpen() && !m.ui.mercenaryConfirm.IsOpen() {
+	if !m.mapPointerBlocked(ctx) && !m.ui.escapeMenu.IsOpen() && !m.ui.interactionModalOpen() && !m.ui.settingsWindow.IsOpen() && !m.ui.identifyWindow.IsOpen() && !m.ui.petEggWindow.IsOpen() && !m.ui.petConfirm.IsOpen() && !m.ui.companions.HomunculusConfirm.IsOpen() && !m.ui.companions.MercenaryConfirm.IsOpen() {
 		m.updateCameraRotation(ctx)
 	}
 	if !dead && m.ui.escapeMenu.IsOpen() {
@@ -1008,21 +918,21 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.petInfoWindow.Update(ctx) {
 		return nil, nil
 	}
-	if m.ui.homunculusConfirm.Update(ctx) {
+	if m.ui.companions.HomunculusConfirm.Update(ctx) {
 		return nil, nil
 	}
-	if m.ui.homunculusInfo.Update(ctx) {
-		if action := m.ui.homunculusInfo.PopAction(); action.Kind != gameui.HomunculusInfoActionNone {
-			m.handleHomunculusInfoAction(ctx, action)
+	if m.ui.companions.HomunculusInfo.Update(ctx) {
+		if action := m.ui.companions.HomunculusInfo.PopAction(); action.Kind != gameui.HomunculusInfoActionNone {
+			m.companions().HandleHomunculusInfoAction(ctx, action)
 		}
 		return nil, nil
 	}
-	if m.ui.mercenaryConfirm.Update(ctx) {
+	if m.ui.companions.MercenaryConfirm.Update(ctx) {
 		return nil, nil
 	}
-	if m.ui.mercenaryInfo.Update(ctx) {
-		if action := m.ui.mercenaryInfo.PopAction(); action.Kind != gameui.MercenaryInfoActionNone {
-			m.handleMercenaryInfoAction(ctx, action)
+	if m.ui.companions.MercenaryInfo.Update(ctx) {
+		if action := m.ui.companions.MercenaryInfo.PopAction(); action.Kind != gameui.MercenaryInfoActionNone {
+			m.companions().HandleMercenaryInfoAction(ctx, action)
 		}
 		return nil, nil
 	}
@@ -1124,10 +1034,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.skillWindow.UpdateDrag(ctx, &m.ui.shortcutBar) {
 		return nil, nil
 	}
-	if m.ui.homunculusSkill.UpdateDrag(ctx, &m.ui.shortcutBar) {
+	if m.ui.companions.HomunculusSkill.UpdateDrag(ctx, &m.ui.shortcutBar) {
 		return nil, nil
 	}
-	if m.ui.mercenarySkill.UpdateDrag(ctx, &m.ui.shortcutBar) {
+	if m.ui.companions.MercenarySkill.UpdateDrag(ctx, &m.ui.shortcutBar) {
 		return nil, nil
 	}
 	if m.ui.guildWindow.UpdateDrag(ctx, &m.ui.shortcutBar) {
@@ -1172,10 +1082,10 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if m.ui.questWindow.Update(ctx) {
 		return nil, nil
 	}
-	if m.ui.homunculusSkill.Update(ctx, &m.ui.shortcutBar, m) {
+	if m.ui.companions.HomunculusSkill.Update(ctx, &m.ui.shortcutBar, m) {
 		return nil, nil
 	}
-	if m.ui.mercenarySkill.Update(ctx, &m.ui.shortcutBar, m) {
+	if m.ui.companions.MercenarySkill.Update(ctx, &m.ui.shortcutBar, m) {
 		return nil, nil
 	}
 	if m.ui.emoteWindow.Update(ctx, &m.ui.console) {
@@ -1256,7 +1166,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		}
 	}
 	minimapDragging := m.ui.minimap.Update(ctx)
-	m.syncLevel99AuraEffects(ctx, now)
+	m.effects().SyncLevel99AuraEffects(ctx, now)
 	pointerBlocked := minimapDragging || m.mapPointerBlocked(ctx)
 	if !pointerBlocked {
 		m.updateCameraZoom(ctx)
@@ -1264,7 +1174,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 	if dead {
 		return nil, nil
 	}
-	m.updateCompanionAI(ctx, now)
+	m.companions().Update(ctx, m.actorDeaths, now)
 	m.updateBot(ctx, now)
 
 	leftClick := !pointerBlocked && ctx.Input.MouseJustPressed(input.MouseButtonLeft)
@@ -1288,7 +1198,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 		if m.handlePetCaptureClick(ctx, projection, now) {
 			return nil, nil
 		}
-		playerX, playerY := currentPlayerCell(ctx, now)
+		playerX, playerY := scene.CurrentPlayerCell(ctx, now)
 		if actor, ok := m.hoveredVendingBoard(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now); ok {
 			glog.Debugf("click vending target mouse=%d,%d id=%d name=%q shop=%q player=%d,%d target=%d,%d", ctx.Input.MouseX, ctx.Input.MouseY, actor.ID, actor.Name, actor.VendingName, playerX, playerY, actor.X, actor.Y)
 			m.requestVendingList(ctx, actor, "click")
@@ -1333,7 +1243,7 @@ func (m *WorldMode) Update(ctx client.Context) (Mode, error) {
 			m.requestNPCTalk(ctx, actor, "click")
 			return nil, nil
 		}
-		if targetX, targetY, ok := clickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); ok && m.walkReady(now) {
+		if targetX, targetY, ok := maps.ClickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); ok && m.walkReady(now) {
 			glog.Debugf("click walk target mouse=%d,%d player=%d,%d target=%d,%d", ctx.Input.MouseX, ctx.Input.MouseY, playerX, playerY, targetX, targetY)
 			// Walking somewhere else is also the cancel gesture for an
 			// in-flight action: the attack intent clears above, and a
@@ -1395,10 +1305,7 @@ func (m *WorldMode) applyQuitGameAck(ctx client.Context, ack network.QuitGameAck
 }
 
 func (m *WorldMode) addLeaveWorldRefusalMessage(ctx client.Context) {
-	message := disconnectMessageText(ctx.Resources, disconnectMessage{
-		msgID:    502,
-		fallback: "You cannot exit the game right now.",
-	})
+	message := login.MessageText(ctx.Resources, 502, "You cannot exit the game right now.")
 	m.ui.console.AddErrorMessage("%s", message)
 }
 
@@ -1558,13 +1465,13 @@ func (m *WorldMode) handleMapChange(ctx client.Context, change network.MapChange
 		cancel()
 		if err != nil {
 			glog.Warnf("map reconnect failed map=%s addr=%s port=%d: %v", change.MapName, change.Address, change.Port, err)
-			openConnectionFailedDialog(ctx, &m.ui.disconnectDialog)
+			login.OpenConnectionFailedDialog(ctx, &m.ui.disconnectDialog)
 			return nil
 		}
 		if err := ctx.Network.SendMapServerEnter(ctx.Session.AccountID, ctx.Session.CharID, ctx.Session.AuthCode, uint32(time.Now().UnixMilli()), ctx.Session.Sex); err != nil {
 			glog.Warnf("map re-enter failed map=%s addr=%s port=%d: %v", change.MapName, change.Address, change.Port, err)
-			message := disconnectMessageText(ctx.Resources, disconnectMessage{2, "Disconnected from Server."})
-			openDisconnectDialog(ctx, &m.ui.disconnectDialog, message, nil)
+			message := login.MessageText(ctx.Resources, 2, "Disconnected from Server.")
+			login.OpenDisconnectDialog(ctx, &m.ui.disconnectDialog, message)
 			return nil
 		}
 		m.pendingWarp = true
@@ -1601,10 +1508,10 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.cardWindow = m.ui.cardWindow
 	next.ui.petEggWindow = m.ui.petEggWindow
 	next.ui.petInfoWindow = m.ui.petInfoWindow
-	next.ui.homunculusInfo = m.ui.homunculusInfo
-	next.ui.homunculusSkill = m.ui.homunculusSkill
-	next.ui.mercenaryInfo = m.ui.mercenaryInfo
-	next.ui.mercenarySkill = m.ui.mercenarySkill
+	next.ui.companions.HomunculusInfo = m.ui.companions.HomunculusInfo
+	next.ui.companions.HomunculusSkill = m.ui.companions.HomunculusSkill
+	next.ui.companions.MercenaryInfo = m.ui.companions.MercenaryInfo
+	next.ui.companions.MercenarySkill = m.ui.companions.MercenarySkill
 	next.petProperty = m.petProperty
 	next.hasPetProperty = m.hasPetProperty
 	next.petOldFullness = m.petOldFullness
@@ -1632,7 +1539,7 @@ func (m *WorldMode) nextWorldMode() *WorldMode {
 	next.ui.pvpCounter = m.ui.pvpCounter
 	next.ui.perfHUD = m.ui.perfHUD
 	next.ui.levelUpNotifications = m.ui.levelUpNotifications
-	m.companionAI.close()
+	m.companionSystem.Close()
 	return next
 }
 
@@ -1678,7 +1585,7 @@ func (m *WorldMode) requestNPCTalk(ctx client.Context, actor worldstate.Actor, s
 	if err := ctx.Network.SendNPCContact(actor.ID); err == nil {
 		m.setWalkCooldown(walkRequestCooldown)
 	} else {
-		playerX, playerY := currentPlayerCell(ctx, time.Now())
+		playerX, playerY := scene.CurrentPlayerCell(ctx, time.Now())
 		glog.Warnf("%s npc talk failed target=%d player=%d,%d target=%d,%d: %v", source, actor.ID, playerX, playerY, actor.X, actor.Y, err)
 		m.setWalkCooldown(walkErrorCooldown)
 	}
@@ -1686,55 +1593,59 @@ func (m *WorldMode) requestNPCTalk(ctx client.Context, actor worldstate.Actor, s
 
 func (m *WorldMode) Draw(ctx client.Context, screen *render.Frame) {
 	render.SetWebLoading(false)
-	if m.prepareMapTextureUploads(screen) {
-		clearWorldScene(screen, ctx.World.MapName)
+	if m.mapScene.Images.PrepareUploads(screen) {
+		maps.ClearWorldScene(screen, ctx.World.MapName)
 		return
 	}
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
-	fog := sceneFogFromMap(ctx.Resources, ctx.World.MapName, ctx.Config.Fog)
-	clearWorldScene(screen, ctx.World.MapName)
-	var actorOverlays []sceneActorDrawEntry
+	fog := weather.FogFromMap(ctx.Resources, ctx.World.MapName, ctx.Config.Fog)
+	var actorOverlays []scene.ActorDrawEntry
 	screen.SetCamera3D(projection.RenderCameraWithFog(fog))
-	vertexFog := sceneFog{}
+	vertexFog := scene.SceneFog{}
 
 	if ctx.World.GND != nil {
-		m.drawGNDMeshes(screen, ctx.Resources, ctx.World.GND, ctx.World.RSW, projection)
-		m.drawGNDWater(screen, ctx.Resources, ctx.World.GND, ctx.World.RSW, projection, now, vertexFog)
+		m.mapScene.DrawGNDMeshes(screen, ctx.Resources, ctx.World.GND, ctx.World.RSW, projection)
+		m.mapScene.DrawGNDWater(screen, ctx.Resources, ctx.World.GND, ctx.World.RSW, projection, now, vertexFog)
+		m.drawGraffiti(screen, ctx, projection)
 		if !ctx.Config.Render.NoUI {
 			m.drawTileCursor(screen, ctx, projection)
 		}
 		if ctx.World.RSW != nil && len(ctx.World.RSM) > 0 {
-			actorOverlays = m.drawSceneModelsAndActors(screen, ctx, projection, vertexFog, now)
+			actorOverlays = m.drawSceneModelsAndActors(screen, ctx, projection, now)
 		} else {
 			m.drawSkillUnitRSMModels(screen, ctx, projection, now)
+			m.effects().Draw(screen, ctx, projection, now, true)
 			m.drawGroundItems(screen, ctx, projection, now)
 			actorOverlays = m.drawSceneActors(screen, ctx, projection)
 		}
 	} else if ctx.World.GAT != nil {
+		m.effects().Draw(screen, ctx, projection, now, true)
 		m.drawGroundItems(screen, ctx, projection, now)
 		actorOverlays = m.drawSceneActors(screen, ctx, projection)
+	} else {
+		m.effects().Draw(screen, ctx, projection, now, true)
 	}
 
 	if !ctx.Config.Render.NoUI {
 		m.drawSceneActorOverlays(screen, ctx, projection, now, actorOverlays)
 	}
-	m.drawRSWEffects(screen, ctx, projection, now)
-	m.drawMapWeatherEffects(screen, ctx, projection, now)
-	m.drawWorldEffects(screen, ctx, projection, now)
+	m.mapScene.DrawRSWEffects(screen, ctx, projection, now, m.effects)
+	m.weather.Draw(screen, ctx, projection, now, m.effects(), m.scheduleSound)
+	m.effects().Draw(screen, ctx, projection, now, false)
 	m.drawDamageFloaters(screen, ctx, projection, now)
 
 	if !ctx.Config.Render.NoUI {
 		m.ui.npcCutin.Draw(screen)
-		m.ui.inventoryBag.Draw(screen, ctx, m)
-		m.ui.storageWindow.Draw(screen, ctx, m)
-		m.ui.cartWindow.Draw(screen, ctx, m)
-		m.ui.shopWindow.Draw(screen, ctx, m)
-		m.ui.vendingWindow.Draw(screen, ctx, m)
-		m.ui.skillWindow.Draw(screen, ctx, m)
-		m.ui.homunculusSkill.Draw(screen, ctx, m)
-		m.ui.mercenarySkill.Draw(screen, ctx, m)
+		m.ui.inventoryBag.Publish(ctx)
+		m.ui.storageWindow.Publish(ctx)
+		m.ui.cartWindow.Publish(ctx)
+		m.ui.shopWindow.Publish(ctx)
+		m.ui.vendingWindow.Publish(ctx)
+		m.ui.skillWindow.Publish(ctx)
+		m.ui.companions.HomunculusSkill.Publish(ctx)
+		m.ui.companions.MercenarySkill.Publish(ctx)
 		m.drawHoveredGroundItemLabel(screen, ctx, projection, now)
 	}
 }
@@ -1743,7 +1654,7 @@ func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	now := time.Now()
 	projection := m.sceneProjection(ctx, width, height, now)
-	m.drawMapFade(ctx, screen, now)
+	m.mapFade.Draw(screen, now)
 	if !ctx.Config.Render.NoUI {
 		m.drawUIDragGhosts(screen, ctx)
 		m.drawPetSlotMachine(screen, ctx, now)
@@ -1752,13 +1663,10 @@ func (m *WorldMode) DrawOverlay(ctx client.Context, screen *render.Frame) {
 }
 
 func (m *WorldMode) FrameSubmitted() {
-	if m.mapUploadBatch > 0 {
-		clear(m.mapTextureUploads[:m.mapUploadBatch])
-		m.mapTextureUploads = m.mapTextureUploads[m.mapUploadBatch:]
-		m.mapUploadBatch = 0
+	if m.mapScene.Images.FrameSubmitted() {
 		return
 	}
-	m.recordCoveredMapFrame()
+	m.mapFade.RecordCoveredFrame()
 }
 
 func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
@@ -1776,8 +1684,8 @@ func (m *WorldMode) DrawUIOverlay(ctx client.Context, screen *render.Frame) {
 	m.ui.cartWindow.DrawTooltip(ctx, screen)
 	m.ui.itemWindows.DrawTooltip(ctx, screen)
 	m.ui.skillWindow.DrawTooltip(ctx, screen)
-	m.ui.homunculusSkill.DrawTooltip(ctx, screen)
-	m.ui.mercenarySkill.DrawTooltip(ctx, screen)
+	m.ui.companions.HomunculusSkill.DrawTooltip(ctx, screen)
+	m.ui.companions.MercenarySkill.DrawTooltip(ctx, screen)
 	m.ui.guildWindow.DrawTooltip(ctx, screen)
 	m.ui.shortcutBar.DrawTooltip(ctx, screen)
 	m.ui.itemPickup.Draw(screen, ctx, m, now)
@@ -1790,12 +1698,12 @@ func (m *WorldMode) drawUIDragGhosts(screen *render.Frame, ctx client.Context) {
 	m.ui.shopWindow.DrawDragGhost(screen, ctx, m)
 	m.ui.vendingWindow.DrawDragGhost(screen, ctx, m)
 	m.ui.skillWindow.DrawDragGhost(screen, ctx, m)
-	m.ui.homunculusSkill.DrawDragGhost(screen, ctx, m)
-	m.ui.mercenarySkill.DrawDragGhost(screen, ctx, m)
+	m.ui.companions.HomunculusSkill.DrawDragGhost(screen, ctx, m)
+	m.ui.companions.MercenarySkill.DrawDragGhost(screen, ctx, m)
 	m.ui.guildWindow.DrawDragGhost(screen, ctx, m)
 }
 
-func clickedAttackTarget(ctx client.Context, projection sceneProjection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
+func clickedAttackTarget(ctx client.Context, projection scene.Projection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
 	if ctx.World == nil {
 		return worldstate.Actor{}, false
 	}
@@ -1808,15 +1716,15 @@ func clickedAttackTarget(ctx client.Context, projection sceneProjection, mouseX,
 		if !actorCanBeAttackClicked(ctx, actor) {
 			continue
 		}
-		actorX, actorY := actorRenderPosition(actor, now)
-		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
-		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
-		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
+		actorX, actorY := scene.ActorRenderPosition(actor, now)
+		terrainZ := scene.TerrainHeightAt(ctx.World, actorX, actorY)
+		point := projection.Project(scene.CellCenter(actorX), scene.CellCenter(actorY), terrainZ)
+		scale := scene.ActorBillboardScreenScale(projection, scene.CellCenter(actorX), scene.CellCenter(actorY), terrainZ)
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.X), float64(point.Y), scale) {
 			continue
 		}
-		dx := float64(point.x) - float64(mouseX)
-		dy := float64(point.y) - float64(mouseY)
+		dx := float64(point.X) - float64(mouseX)
+		dy := float64(point.Y) - float64(mouseY)
 		distance := dx*dx + dy*dy
 		if distance < bestDistance {
 			bestDistance = distance
@@ -1826,7 +1734,7 @@ func clickedAttackTarget(ctx client.Context, projection sceneProjection, mouseX,
 	return best, bestDistance < math.Inf(1)
 }
 
-func clickedSkillTarget(ctx client.Context, projection sceneProjection, skill session.Skill, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
+func clickedSkillTarget(ctx client.Context, projection scene.Projection, skill session.Skill, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
 	if ctx.World == nil {
 		return worldstate.Actor{}, false
 	}
@@ -1839,15 +1747,15 @@ func clickedSkillTarget(ctx client.Context, projection sceneProjection, skill se
 		if !actorCanBeSkillTargeted(ctx, skill, actor) {
 			continue
 		}
-		actorX, actorY := actorRenderPosition(actor, now)
-		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
-		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
-		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
+		actorX, actorY := scene.ActorRenderPosition(actor, now)
+		terrainZ := scene.TerrainHeightAt(ctx.World, actorX, actorY)
+		point := projection.Project(scene.CellCenter(actorX), scene.CellCenter(actorY), terrainZ)
+		scale := scene.ActorBillboardScreenScale(projection, scene.CellCenter(actorX), scene.CellCenter(actorY), terrainZ)
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.X), float64(point.Y), scale) {
 			continue
 		}
-		dx := float64(point.x) - float64(mouseX)
-		dy := float64(point.y) - float64(mouseY)
+		dx := float64(point.X) - float64(mouseX)
+		dy := float64(point.Y) - float64(mouseY)
 		distance := dx*dx + dy*dy
 		if distance < bestDistance {
 			bestDistance = distance
@@ -1857,7 +1765,7 @@ func clickedSkillTarget(ctx client.Context, projection sceneProjection, skill se
 	return best, bestDistance < math.Inf(1)
 }
 
-func clickedPlayerTarget(ctx client.Context, projection sceneProjection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
+func clickedPlayerTarget(ctx client.Context, projection scene.Projection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
 	if ctx.World == nil {
 		return worldstate.Actor{}, false
 	}
@@ -1870,15 +1778,15 @@ func clickedPlayerTarget(ctx client.Context, projection sceneProjection, mouseX,
 		if !actorCanOpenPlayerContext(ctx, actor) {
 			continue
 		}
-		actorX, actorY := actorRenderPosition(actor, now)
-		terrainZ := terrainHeightAt(ctx.World, actorX, actorY)
-		point := projection.Project(cellCenter(actorX), cellCenter(actorY), terrainZ)
-		scale := actorBillboardScreenScale(projection, cellCenter(actorX), cellCenter(actorY), terrainZ)
-		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
+		actorX, actorY := scene.ActorRenderPosition(actor, now)
+		terrainZ := scene.TerrainHeightAt(ctx.World, actorX, actorY)
+		point := projection.Project(scene.CellCenter(actorX), scene.CellCenter(actorY), terrainZ)
+		scale := scene.ActorBillboardScreenScale(projection, scene.CellCenter(actorX), scene.CellCenter(actorY), terrainZ)
+		if !pointInActorPickBounds(float64(mouseX), float64(mouseY), float64(point.X), float64(point.Y), scale) {
 			continue
 		}
-		dx := float64(point.x) - float64(mouseX)
-		dy := float64(point.y) - float64(mouseY)
+		dx := float64(point.X) - float64(mouseX)
+		dy := float64(point.Y) - float64(mouseY)
 		distance := dx*dx + dy*dy
 		if distance < bestDistance {
 			bestDistance = distance
@@ -1894,7 +1802,7 @@ func skillTargetCandidates(ctx client.Context, skill session.Skill) []worldstate
 	}
 	candidates := make([]worldstate.Actor, 0, len(ctx.World.Actors)+1)
 	if skillTargetFlagsIncludeSelfPick(skill.Type) {
-		if actor, ok, _ := actorForCombatID(ctx, localSkillTarget(ctx)); ok {
+		if actor, ok, _ := scene.ActorForCombatID(ctx, scene.LocalSkillTarget(ctx)); ok {
 			candidates = append(candidates, actor)
 		}
 	}
@@ -1908,33 +1816,12 @@ func skillTargetFlagsIncludeSelfPick(flags uint32) bool {
 	return flags&(skillTargetFriend|skillTargetSelf) != 0
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func clampGameInt(value, minValue, maxValue int) int {
 	if value < minValue {
 		return minValue
 	}
 	if value > maxValue {
 		return maxValue
-	}
-	return value
-}
-
-func absInt(value int) int {
-	if value < 0 {
-		return -value
 	}
 	return value
 }
@@ -1948,9 +1835,10 @@ type sceneDrawEntry struct {
 	itemShadowIndex int
 }
 
-func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Context, projection sceneProjection, fog sceneFog, now time.Time) []sceneActorDrawEntry {
-	m.drawRSMModels(screen, ctx.Resources, ctx.World.RSW, ctx.World.RSM, ctx.World.GND, projection, fog, now)
+func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time) []scene.ActorDrawEntry {
+	m.mapScene.DrawRSMModels(screen, ctx.Resources, ctx.World.RSW, ctx.World.RSM, ctx.World.GND, projection, now)
 	m.drawSkillUnitRSMModels(screen, ctx, projection, now)
+	m.effects().Draw(screen, ctx, projection, now, true)
 	actors := m.collectSceneActorEntries(screen, ctx, projection)
 	items := m.collectSceneItemEntries(screen, ctx, projection, now)
 	for _, entry := range sortedSceneDrawEntries(actors, items) {
@@ -1972,7 +1860,7 @@ func (m *WorldMode) drawSceneModelsAndActors(screen *render.Frame, ctx client.Co
 	return actors
 }
 
-func sortedSceneDrawEntries(actors []sceneActorDrawEntry, items []sceneItemDrawEntry) []sceneDrawEntry {
+func sortedSceneDrawEntries(actors []scene.ActorDrawEntry, items []sceneItemDrawEntry) []sceneDrawEntry {
 	entries := make([]sceneDrawEntry, 0, len(actors)*2+len(items)*2)
 	for i, item := range items {
 		entries = append(entries,
@@ -1981,10 +1869,10 @@ func sortedSceneDrawEntries(actors []sceneActorDrawEntry, items []sceneItemDrawE
 		)
 	}
 	for i, actor := range actors {
-		if actor.castShadow {
-			entries = append(entries, sceneDrawEntry{depth: actor.shadowDepth, entityID: actor.actor.ID, actorIndex: -1, shadowIndex: i, itemIndex: -1, itemShadowIndex: -1})
+		if actor.CastShadow {
+			entries = append(entries, sceneDrawEntry{depth: actor.ShadowDepth, entityID: actor.Actor.ID, actorIndex: -1, shadowIndex: i, itemIndex: -1, itemShadowIndex: -1})
 		}
-		entries = append(entries, sceneDrawEntry{depth: actor.depth, entityID: actor.actor.ID, actorIndex: i, shadowIndex: -1, itemIndex: -1, itemShadowIndex: -1})
+		entries = append(entries, sceneDrawEntry{depth: actor.Depth, entityID: actor.Actor.ID, actorIndex: i, shadowIndex: -1, itemIndex: -1, itemShadowIndex: -1})
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		// A stable sort alone preserves the world's random map iteration order
@@ -1997,276 +1885,36 @@ func sortedSceneDrawEntries(actors []sceneActorDrawEntry, items []sceneItemDrawE
 	return entries
 }
 
-func loadGAT(manager *res.Manager, mapName string) (*res.GAT, string, error) {
-	if manager == nil {
-		return nil, "", fmt.Errorf("no game resources available for map %s", mapName)
+func (m *WorldMode) releaseMapTextures() {
+	for id := range m.graffiti {
+		m.removeGraffiti(id)
 	}
-	base := strings.TrimSuffix(strings.TrimSuffix(mapName, ".gat"), ".rsw")
-	candidates := []string{
-		"data\\" + base + ".gat",
-		"data/" + base + ".gat",
-		base + ".gat",
+	m.graffiti = nil
+	if m.spriteUpscaler != nil {
+		m.spriteUpscaler.Close()
+		m.spriteUpscaler = nil
 	}
-	data, source, err := manager.ReadFileCandidates(candidates)
-	if err != nil {
-		return nil, source, fmt.Errorf("cannot load GAT for map %s: %w", mapName, err)
-	}
-	gat, err := res.ParseGAT(data)
-	if err != nil {
-		return nil, source, fmt.Errorf("parse %s: %w", source, err)
-	}
-	return gat, source, nil
+	m.mapScene.Images.Release()
 }
 
-func loadRSW(manager *res.Manager, mapName string) (*res.RSW, string, error) {
-	base := strings.TrimSuffix(strings.TrimSuffix(mapName, ".gat"), ".rsw")
-	candidates := []string{
-		"data\\" + base + ".rsw",
-		"data/" + base + ".rsw",
-		base + ".rsw",
+// Leave also covers disconnects, character selection, and failed map loads.
+func (m *WorldMode) Leave() {
+	m.releaseMapTextures()
+}
+
+func (m *WorldMode) startMapFadeOut(change network.MapChange, now time.Time) {
+	m.ui.npcCutin.Clear()
+	// A queued cell (or message) belongs to the map where it was selected,
+	// even when the server warps us within the same loaded map.
+	m.pendingSkill = pendingSkillTarget{}
+	m.pendingSkillText = pendingSkillTextTarget{}
+	if m.ui.skillTextPrompt.IsOpen() {
+		m.ui.skillTextPrompt.Close()
 	}
-	data, source, err := manager.ReadFileCandidates(candidates)
-	if err != nil {
-		return nil, source, fmt.Errorf("cannot load RSW for map %s: %w", mapName, err)
-	}
-	rsw, err := res.ParseRSW(data)
-	return rsw, source, err
+	m.mapFade.StartOut(change, now)
 }
 
-func loadRSMModels(manager *res.Manager, rsw *res.RSW) (map[string]*res.RSM, int) {
-	if rsw == nil {
-		return nil, 0
-	}
-	models := make(map[string]*res.RSM)
-	failures := 0
-	for _, placement := range rsw.Models {
-		if placement.Filename == "" {
-			continue
-		}
-		if _, ok := models[placement.Filename]; ok {
-			continue
-		}
-		rsm, err := loadRSMModel(manager, placement.Filename)
-		models[placement.Filename] = rsm
-		if err != nil {
-			failures++
-			continue
-		}
-	}
-	return models, failures
-}
-
-func loadRSMModel(manager *res.Manager, filename string) (*res.RSM, error) {
-	var data []byte
-	for _, candidate := range res.RSMModelCandidates(filename) {
-		raw, err := manager.ReadFile(candidate)
-		if err == nil {
-			data = raw
-			break
-		}
-	}
-	if data == nil {
-		return nil, fmt.Errorf("rsm not found: %s", filename)
-	}
-	return res.ParseRSM(data)
-}
-
-type screenPoint struct {
-	x float32
-	y float32
-}
-
-type texturePoint struct {
-	u float32
-	v float32
-}
-
-func quadNormal(verts [4]modelPoint3) modelPoint3 {
-	normal := normalize3(cross3(sub3(verts[1], verts[0]), sub3(verts[2], verts[0])))
-	if normal == (modelPoint3{}) {
-		return modelPoint3{y: 1}
-	}
-	return normal
-}
-
-type sceneLighting struct {
-	direction modelPoint3
-	diffuse   modelPoint3
-	ambient   modelPoint3
-	env       modelPoint3
-	opacity   float64
-}
-
-func sceneLightingFromRSW(rsw *res.RSW) sceneLighting {
-	longitude := 45.0
-	latitude := 45.0
-	diffuse := modelPoint3{x: 1, y: 1, z: 1}
-	ambient := modelPoint3{}
-	opacity := 1.0
-	if rsw != nil {
-		longitude = float64(rsw.Light.Longitude)
-		latitude = float64(rsw.Light.Latitude)
-		diffuse = modelPoint3{x: float64(rsw.Light.Diffuse[0]), y: float64(rsw.Light.Diffuse[1]), z: float64(rsw.Light.Diffuse[2])}
-		ambient = modelPoint3{x: float64(rsw.Light.Ambient[0]), y: float64(rsw.Light.Ambient[1]), z: float64(rsw.Light.Ambient[2])}
-		opacity = float64(rsw.Light.Opacity)
-	}
-	longitude = degreesToRadians(longitude)
-	latitude = degreesToRadians(latitude)
-	dir := normalize3(modelPoint3{
-		x: -math.Cos(longitude) * math.Sin(latitude),
-		y: -math.Cos(latitude),
-		z: -math.Sin(longitude) * math.Sin(latitude),
-	})
-	if dir == (modelPoint3{}) {
-		dir = normalize3(modelPoint3{x: -0.5, y: -0.7, z: -0.5})
-	}
-	diffuse = clampUnitPoint(diffuse)
-	ambient = clampUnitPoint(ambient)
-	opacity = math.Max(0, math.Min(1, opacity))
-	env := modelPoint3{
-		x: 1 - (1-ambient.x)*(1-diffuse.x),
-		y: 1 - (1-ambient.y)*(1-diffuse.y),
-		z: 1 - (1-ambient.z)*(1-diffuse.z),
-	}
-	return sceneLighting{
-		direction: dir,
-		diffuse:   diffuse,
-		ambient:   ambient,
-		env:       clampUnitPoint(env),
-		opacity:   opacity,
-	}
-}
-
-func (m *WorldMode) sceneLighting(rsw *res.RSW) sceneLighting {
-	lighting := sceneLightingFromRSW(rsw)
-	if !m.taekwonNight {
-		return lighting
-	}
-	lighting.diffuse.x = math.Min(lighting.diffuse.x, 0.5)
-	lighting.diffuse.y = math.Min(lighting.diffuse.y, 0.5)
-	lighting.env = modelPoint3{
-		x: 1 - (1-lighting.ambient.x)*(1-lighting.diffuse.x),
-		y: 1 - (1-lighting.ambient.y)*(1-lighting.diffuse.y),
-		z: 1 - (1-lighting.ambient.z)*(1-lighting.diffuse.z),
-	}
-	return lighting
-}
-
-func (l sceneLighting) groundScale(normal modelPoint3) modelPoint3 {
-	weight := math.Max(dot3(normalize3(normal), l.direction), 0)
-	return modelPoint3{
-		x: clampUnit(l.ambient.x+l.diffuse.x*weight) * clampUnit(l.env.x),
-		y: clampUnit(l.ambient.y+l.diffuse.y*weight) * clampUnit(l.env.y),
-		z: clampUnit(l.ambient.z+l.diffuse.z*weight) * clampUnit(l.env.z),
-	}
-}
-
-func (l sceneLighting) modelScale(normal modelPoint3) modelPoint3 {
-	weight := math.Max(dot3(normalize3(normal), l.direction), 0.5)
-	return l.modelScaleFromWeight(weight)
-}
-
-func (l sceneLighting) modelScaleNormalized(normal modelPoint3) modelPoint3 {
-	weight := math.Max(dot3(normal, l.direction), 0.5)
-	return l.modelScaleFromWeight(weight)
-}
-
-func (l sceneLighting) modelScaleFromWeight(weight float64) modelPoint3 {
-	return modelPoint3{
-		x: clampUnit(l.ambient.x+l.diffuse.x*weight) * clampUnit(l.env.x),
-		y: clampUnit(l.ambient.y+l.diffuse.y*weight) * clampUnit(l.env.y),
-		z: clampUnit(l.ambient.z+l.diffuse.z*weight) * clampUnit(l.env.z),
-	}
-}
-
-func clampUnitPoint(point modelPoint3) modelPoint3 {
-	return modelPoint3{x: clampUnit(point.x), y: clampUnit(point.y), z: clampUnit(point.z)}
-}
-
-func clampUnit(value float64) float64 {
-	return math.Max(0, math.Min(1, value))
-}
-
-func textureColor(name string) color.RGBA {
-	if name == "" {
-		return color.RGBA{R: 78, G: 86, B: 78, A: 255}
-	}
-	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(strings.ToLower(name)))
-	value := hash.Sum32()
-	return color.RGBA{
-		R: 70 + uint8(value&0x3f),
-		G: 80 + uint8((value>>8)&0x4f),
-		B: 68 + uint8((value>>16)&0x4f),
-		A: 255,
-	}
-}
-
-func clampColor(value float64) uint8 {
-	return uint8(min(255, max(0, int(value))))
-}
-
-func drawColoredSurfaceTints3DAlpha(screen *render.Frame, white *render.Image, verts [4]modelPoint3, indices []uint16, colors [4]color.RGBA) {
-	drawColoredSurfaceTints3DWithOptions(screen, white, verts, indices, colors, triangleDrawOptions(render.FilterNearest, render.AddressUnsafe))
-}
-
-func drawColoredSurfaceTints3DWithOptions(screen *render.Frame, white *render.Image, verts [4]modelPoint3, indices []uint16, colors [4]color.RGBA, options *render.DrawTrianglesOptions) {
-	vertices := []render.Vertex3D{
-		coloredSurfaceVertex3D(verts[0], 0, 0, colors[0]),
-		coloredSurfaceVertex3D(verts[1], 1, 0, colors[1]),
-		coloredSurfaceVertex3D(verts[2], 1, 1, colors[2]),
-		coloredSurfaceVertex3D(verts[3], 0, 1, colors[3]),
-	}
-	screen.DrawTriangles3DOwned(vertices, indices, white, options)
-}
-
-func drawTexturedSurface3DAlpha(screen *render.Frame, texture *render.Image, verts [4]modelPoint3, uvs [4]texturePoint, indices []uint16, tints [4]color.RGBA) {
-	drawTexturedSurface3DWithOptions(screen, texture, verts, uvs, indices, tints, triangleDrawOptions(render.FilterLinear, render.AddressRepeat))
-}
-
-func drawTexturedSurface3DWithOptions(screen *render.Frame, texture *render.Image, verts [4]modelPoint3, uvs [4]texturePoint, indices []uint16, tints [4]color.RGBA, options *render.DrawTrianglesOptions) {
-	bounds := texture.Bounds()
-	w := float32(bounds.Dx())
-	h := float32(bounds.Dy())
-	vertices := []render.Vertex3D{
-		texturedSurfaceVertex3D(verts[0], uvs[0], tints[0], w, h),
-		texturedSurfaceVertex3D(verts[1], uvs[1], tints[1], w, h),
-		texturedSurfaceVertex3D(verts[2], uvs[2], tints[2], w, h),
-		texturedSurfaceVertex3D(verts[3], uvs[3], tints[3], w, h),
-	}
-	screen.DrawTriangles3DOwned(vertices, indices, texture, options)
-}
-
-func coloredSurfaceVertex3D(point modelPoint3, u, v float32, tint color.RGBA) render.Vertex3D {
-	return render.Vertex3D{
-		X:      float32(point.x),
-		Y:      float32(point.y),
-		Z:      float32(point.z),
-		SrcX:   u,
-		SrcY:   v,
-		ColorR: float32(tint.R) / 255,
-		ColorG: float32(tint.G) / 255,
-		ColorB: float32(tint.B) / 255,
-		ColorA: float32(tint.A) / 255,
-		DepthX: float32(point.x),
-		DepthY: float32(point.y),
-		DepthZ: float32(point.z),
-	}
-}
-
-func texturedSurfaceVertex3D(point modelPoint3, uv texturePoint, tint color.RGBA, textureWidth, textureHeight float32) render.Vertex3D {
-	return render.Vertex3D{
-		X:      float32(point.x),
-		Y:      float32(point.y),
-		Z:      float32(point.z),
-		SrcX:   uv.u * textureWidth,
-		SrcY:   uv.v * textureHeight,
-		ColorR: float32(tint.R) / 255,
-		ColorG: float32(tint.G) / 255,
-		ColorB: float32(tint.B) / 255,
-		ColorA: float32(tint.A) / 255,
-		DepthX: float32(point.x),
-		DepthY: float32(point.y),
-		DepthZ: float32(point.z),
-	}
+func (m *WorldMode) startCharacterSelectFadeOut(now time.Time) {
+	m.ui.npcCutin.Clear()
+	m.mapFade.StartCharacterSelectOut(now)
 }

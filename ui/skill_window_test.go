@@ -1473,7 +1473,7 @@ func TestSkillWindowDoubleClickUsesSharedSkillController(t *testing.T) {
 	window := &SkillWindow{selectedLevels: map[uint16]int{db.SkillSMProvoke: 1}}
 	skill := session.Skill{ID: 6, Type: 1, Level: 2, Range: 9}
 
-	window.pressSkill(ctx, mode, skill, 20, 30)
+	window.pressSkill(ctx, mode, skill)
 	if mode.used.ID != 0 {
 		t.Fatalf("skill used after first click = %+v, want none", mode.used)
 	}
@@ -1481,7 +1481,7 @@ func TestSkillWindowDoubleClickUsesSharedSkillController(t *testing.T) {
 		t.Fatalf("dragged skill level = %d, want selected level 1", window.dragSkill.Level)
 	}
 
-	window.pressSkill(ctx, mode, skill, 20, 30)
+	window.pressSkill(ctx, mode, skill)
 	if mode.used.ID != 6 || mode.used.Level != 1 {
 		t.Fatalf("used skill = %+v, want provoke level 1", mode.used)
 	}
@@ -1675,12 +1675,12 @@ func TestSkillWindowCachesOrderedAndGroupedSkills(t *testing.T) {
 }
 
 func TestSkillDefaultPositionCentersOnScreen(t *testing.T) {
-	x, y := skillDefaultPosition(Context{ScreenW: 800, ScreenH: 600})
+	x, y := skillWindowDefaultPosition(Context{ScreenW: 800, ScreenH: 600}, skillWindowWidth, skillWindowHeight)
 	if x != 184 || y != 106 {
 		t.Fatalf("skill default position = %d,%d; want centered 184,106", x, y)
 	}
 
-	x, y = skillDefaultPosition(Context{ScreenW: 320, ScreenH: 240})
+	x, y = skillWindowDefaultPosition(Context{ScreenW: 320, ScreenH: 240}, skillWindowWidth, skillWindowHeight)
 	if x != windowScreenMargin || y != windowScreenMargin {
 		t.Fatalf("small screen skill default position = %d,%d; want margin %d,%d", x, y, windowScreenMargin, windowScreenMargin)
 	}
@@ -1690,7 +1690,7 @@ func TestSkillWindowTablePlusStagesSkill(t *testing.T) {
 	skill := session.Skill{ID: db.SkillSMBash, Level: 1, MaxLevel: 10, Upgradable: true}
 	s := &session.Session{Skills: session.Skills{Points: 1}}
 	window := &SkillWindow{}
-	bounds := skillTableLevelUpButtonBounds(0)
+	bounds := skillTableButtonBounds(0, "levelup")
 
 	consumed := window.handleSkillTableRowEvent(
 		nil,
@@ -1753,7 +1753,7 @@ func TestSkillWindowMonkListOnlyUpgradesAvailableSkills(t *testing.T) {
 				t.Fatal("locked skill without server type information should not be labeled passive")
 			}
 		}
-		point := skillTableLevelUpButtonBounds(row).Center()
+		point := skillTableButtonBounds(row, "levelup").Center()
 		window.handleSkillTableRowEvent(nil, ctx, nil, skills, row,
 			event.NewMouseEvent(event.MousePress, event.ButtonLeft, event.ButtonStateLeft, point, point, 0))
 		if got := window.pendingFor(db.SkillMOIronhand); (got == 1) != unlocked {
@@ -1856,7 +1856,7 @@ func TestSkillDragReleaseStoresLevelSelectedWithArrows(t *testing.T) {
 
 	skill := session.Skill{ID: db.SkillMGSoulstrike, Level: 10, Type: 1}
 	window := &SkillWindow{selectedLevels: map[uint16]int{skill.ID: 4}}
-	window.pressSkill(Context{}, nil, skill, 20, 30)
+	window.pressSkill(Context{}, nil, skill)
 	if !window.UpdateDrag(Context{Input: inputState, ScreenW: 800, ScreenH: 600}, bar) {
 		t.Fatal("selected-level skill drag release was not consumed")
 	}
@@ -1894,8 +1894,6 @@ func TestSkillWindowRejectsPassiveDrag(t *testing.T) {
 		Context{},
 		nil,
 		session.Skill{ID: db.SkillALDemonbane, Type: 0, Level: 10},
-		20,
-		30,
 	)
 	if window.dragActive {
 		t.Fatal("passive player skill started a drag")
@@ -1960,7 +1958,7 @@ func (r *skillWindowTestRenderer) DrawInventoryItemIcon(*render.Frame, *res.Mana
 func (r *skillWindowTestRenderer) DrawSkillIcon(*render.Frame, *res.Manager, session.Skill, int, int, int) {
 }
 
-func (r *skillWindowTestRenderer) SkillIconImage(*res.Manager, session.Skill, int) image.Image {
+func (r *skillWindowTestRenderer) SkillIconImage(*res.Manager, session.Skill) image.Image {
 	return nil
 }
 

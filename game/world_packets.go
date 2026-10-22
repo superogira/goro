@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/companion"
+	"github.com/kivutar/goro/game/login"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	gameui "github.com/kivutar/goro/ui"
@@ -34,7 +37,7 @@ func (m *WorldMode) handleNetworkPackets(ctx client.Context, now time.Time) (Mod
 		}
 	}
 	networkErrors := ctx.Network.DrainErrors()
-	if handleNetworkDisconnectErrors(ctx, &m.ui.disconnectDialog, networkErrors, nil) {
+	if login.HandleNetworkDisconnectErrors(ctx, &m.ui.disconnectDialog, networkErrors) {
 		m.ui.npcCutin.Clear()
 		m.ui.mailWindow.CloseFromServer(ctx)
 		m.mail = mailState{}
@@ -57,7 +60,7 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	if m.handleMailPacket(ctx, pkt, now) {
 		return nil, false
 	}
-	if handleDisconnectPacket(ctx, &m.ui.disconnectDialog, pkt, nil) {
+	if login.HandleDisconnectPacket(ctx, &m.ui.disconnectDialog, pkt) {
 		m.ui.npcCutin.Clear()
 		m.ui.mailWindow.CloseFromServer(ctx)
 		m.mail = mailState{}
@@ -122,6 +125,12 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		glog.Errorf("parse progress bar cancellation 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		m.finishServerProgress(ctx, "server cancel")
+		return nil, false
+	}
+	if chat, ok, err := network.ParseTalkBoxChatContents(pkt); err != nil {
+		glog.Errorf("parse talk box chat 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.applySpeechBubble(ctx, chat, now)
 		return nil, false
 	}
 	if chat, ok, err := network.ParseChatMessage(pkt); err != nil {
@@ -319,11 +328,11 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	if position, ok, err := network.ParseActorSetPosition(pkt); err != nil {
 		glog.Errorf("parse actor set position 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		if isLocalActor(ctx, position.ID) {
+		if scene.IsLocalActor(ctx, position.ID) {
 			glog.Debugf("local position fix id=%d x=%d y=%d", position.ID, position.X, position.Y)
 		}
 		applyActorSetPosition(ctx, position)
-		if isLocalActor(ctx, position.ID) {
+		if scene.IsLocalActor(ctx, position.ID) {
 			m.continuePendingAttack(ctx, "position fix")
 			m.continuePendingPickup(ctx, "position fix")
 			m.skills().ContinuePendingTarget(ctx, "position fix")
@@ -333,7 +342,7 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	if position, ok, err := network.ParseActorJumpPosition(pkt); err != nil {
 		glog.Errorf("parse actor jump position 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		if isLocalActor(ctx, position.ID) {
+		if scene.IsLocalActor(ctx, position.ID) {
 			glog.Debugf("local jump position id=%d x=%d y=%d", position.ID, position.X, position.Y)
 		}
 		applyActorJumpPosition(ctx, position)
@@ -1149,6 +1158,21 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		m.applyActorStateChange(ctx, state)
 		return nil, false
 	}
+	if update, ok, err := network.ParseNPCShowEffectUpdate(pkt); err != nil {
+		glog.Errorf("parse NPC effect update 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		if applyNPCShowEffectUpdate(ctx, update) {
+			m.syncActorSpiritEffects(ctx, update.ActorID)
+			m.effects().SyncActorEntryLevel99Aura(ctx, update.ActorID)
+		}
+		return nil, false
+	}
+	if devotion, ok, err := network.ParseActorDevotion(pkt); err != nil {
+		glog.Errorf("parse devotion list 0x%04X: %v", pkt.ID, err)
+	} else if ok {
+		m.effects().ApplyActorDevotion(ctx, devotion)
+		return nil, false
+	}
 	if bladeStop, ok, err := network.ParseActorBladeStop(pkt); err != nil {
 		glog.Errorf("parse actor blade stop 0x%04X: %v", pkt.ID, err)
 	} else if ok {
@@ -1194,68 +1218,69 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 	if hom, ok, err := network.ParseHomunculusProperty(pkt); err != nil {
 		glog.Errorf("parse homunculus property 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		m.applyHomunculusProperty(ctx, hom)
+		m.companions().ApplyHomunculusProperty(ctx, hom)
 		return nil, false
 	}
 	if feed, ok, err := network.ParseHomunculusFeedResult(pkt); err != nil {
 		glog.Errorf("parse homunculus feed 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		glog.Debugf("homunculus feed result success=%t item=%d", feed.Result, feed.ItemID)
-		m.applyHomunculusFeedResultMessage(ctx, feed)
+		m.companions().ApplyHomunculusFeedResultMessage(ctx, feed)
 		return nil, false
 	}
 	if homState, ok, err := network.ParseHomunculusStateChange(pkt); err != nil {
 		glog.Errorf("parse homunculus state 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		m.applyHomunculusStateChange(ctx, homState)
+		m.companions().ApplyHomunculusStateChange(ctx, homState)
 		return nil, false
 	}
 	if homParam, ok, err := network.ParseHomunculusParamChange(pkt); err != nil {
 		glog.Errorf("parse homunculus param 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		m.applyHomunculusParamChange(ctx, homParam)
+		m.companions().ApplyHomunculusParamChange(ctx, homParam)
 		return nil, false
 	}
 	if homSkills, ok, err := network.ParseHomunculusSkillInfoList(pkt); err != nil {
 		glog.Errorf("parse homunculus skill list 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		applyHomunculusSkillInfoList(ctx, homSkills)
+		companion.ApplyHomunculusSkillInfoList(ctx, homSkills)
 		return nil, false
 	}
 	if homSkill, ok, err := network.ParseHomunculusSkillInfoUpdate(pkt); err != nil {
 		glog.Errorf("parse homunculus skill update 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		applyHomunculusSkillInfoUpdate(ctx, homSkill)
+		companion.ApplyHomunculusSkillInfoUpdate(ctx, homSkill)
 		return nil, false
 	}
 	if merc, ok, err := network.ParseMercenaryProperty(pkt); err != nil {
 		glog.Errorf("parse mercenary property 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		m.applyMercenaryProperty(ctx, merc)
+		m.companions().ApplyMercenaryProperty(ctx, merc)
 		return nil, false
 	}
 	if mercParam, ok, err := network.ParseMercenaryParamChange(pkt); err != nil {
 		glog.Errorf("parse mercenary param 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		m.applyMercenaryParamChange(ctx, mercParam)
+		m.companions().ApplyMercenaryParamChange(ctx, mercParam)
 		return nil, false
 	}
 	if mercSkills, ok, err := network.ParseMercenarySkillInfoList(pkt); err != nil {
 		glog.Errorf("parse mercenary skill list 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		applyMercenarySkillInfoList(ctx, mercSkills)
+		companion.ApplyMercenarySkillInfoList(ctx, mercSkills)
 		return nil, false
 	}
 	if mercSkill, ok, err := network.ParseMercenarySkillInfoUpdate(pkt); err != nil {
 		glog.Errorf("parse mercenary skill update 0x%04X: %v", pkt.ID, err)
 	} else if ok {
-		applyMercenarySkillInfoUpdate(ctx, mercSkill)
+		companion.ApplyMercenarySkillInfoUpdate(ctx, mercSkill)
 		return nil, false
 	}
 	if list, ok, err := network.ParseSkillInfoList(pkt); err != nil {
 		glog.Errorf("parse skill list 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		applySkillInfoList(ctx, list)
+		m.syncStarDevil(ctx)
 		m.ui.skillWindow.ClampScroll(ctx.Session)
 		return nil, false
 	}
@@ -1263,6 +1288,7 @@ func (m *WorldMode) handleNetworkPacket(ctx client.Context, pkt network.Packet, 
 		glog.Errorf("parse skill update 0x%04X: %v", pkt.ID, err)
 	} else if ok {
 		applySkillInfoUpdate(ctx, update)
+		m.syncStarDevil(ctx)
 		m.ui.skillWindow.ClampScroll(ctx.Session)
 		return nil, false
 	}

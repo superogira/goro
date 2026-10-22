@@ -121,3 +121,21 @@ func TestCharacterWindowRebindKeepsCompactStateAndOwnsToggle(t *testing.T) {
 func TestCharacterWindowToggleSurvivesUpdatesWhilePressed(t *testing.T) {
 	t.Skip("fork: main's character window is the DOM-styled canvas HUD; upstream's widget-window tests do not apply (the HUD's own tests cover it)")
 }
+
+func TestFormatEXPPercent(t *testing.T) {
+	if got := formatEXPPercent(123, 1000); got != "12.3%" {
+		t.Fatalf("formatted exp percent = %q", got)
+	}
+	if got := formatEXPPercent(12, 0); got != "--" {
+		t.Fatalf("formatted exp percent without next = %q", got)
+	}
+	if got := formatEXPPercent(1001, 1000); got != "100.0%" {
+		t.Fatalf("formatted capped exp percent = %q", got)
+	}
+}
+
+func TestDisplayWeightUsesROVisibleUnits(t *testing.T) {
+	if got := displayWeight(240); got != 24 {
+		t.Fatalf("display weight = %d, want 24", got)
+	}
+}

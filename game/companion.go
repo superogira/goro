@@ -1,290 +1,18 @@
 package game
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/companion"
+	"github.com/kivutar/goro/game/effects"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
-	"github.com/kivutar/goro/network"
-	"github.com/kivutar/goro/session"
+	"github.com/kivutar/goro/input"
+	worldstate "github.com/kivutar/goro/world"
 )
-
-const (
-	aiMotionStand  = 0
-	aiMotionMove   = 1
-	aiMotionAttack = 2
-	aiMotionDead   = 3
-
-	homunculusHungerMax = 100
-)
-
-func applyCompanionActorEntry(ctx client.Context, entry network.ActorEntry) {
-	if ctx.Session == nil || entry.ID == 0 || !entry.HasObjectType {
-		return
-	}
-	switch entry.ObjectType {
-	case actorObjectTypeHomunculus:
-		ctx.Session.Homunculus.ID = entry.ID
-		ctx.Session.Homunculus.Active = true
-		ctx.Session.Homunculus.Job = entry.Job
-	case actorObjectTypeMercenary:
-		ctx.Session.Mercenary.ID = entry.ID
-		ctx.Session.Mercenary.Active = true
-		ctx.Session.Mercenary.Job = entry.Job
-	}
-}
-
-func companionActorEntryName(ctx client.Context, entry network.ActorEntry) string {
-	if ctx.Session == nil || !entry.HasObjectType {
-		return ""
-	}
-	switch entry.ObjectType {
-	case actorObjectTypeHomunculus:
-		if ctx.Session.Homunculus.ID != 0 && ctx.Session.Homunculus.ID != entry.ID {
-			return ""
-		}
-		return sanitizeActorName(ctx.Session.Homunculus.Name)
-	case actorObjectTypeMercenary:
-		if ctx.Session.Mercenary.ID != 0 && ctx.Session.Mercenary.ID != entry.ID {
-			return ""
-		}
-		return sanitizeActorName(ctx.Session.Mercenary.Name)
-	default:
-		return ""
-	}
-}
-
-func (m *WorldMode) applyHomunculusProperty(ctx client.Context, property network.HomunculusProperty) {
-	if ctx.Session == nil {
-		return
-	}
-	hom := &ctx.Session.Homunculus
-	hom.Active = true
-	hom.Name = property.Name
-	hom.Flags = property.Flags
-	hom.Level = property.Level
-	hom.Hunger = property.Hunger
-	hom.Intimacy = property.Intimacy
-	hom.ItemID = property.ItemID
-	hom.Attack = property.Attack
-	hom.MagicAttack = property.MagicAttack
-	hom.Hit = property.Hit
-	hom.Critical = property.Critical
-	hom.Defense = property.Defense
-	hom.MagicDefense = property.MagicDefense
-	hom.Flee = property.Flee
-	hom.ASPD = property.ASPD
-	hom.HP = property.HP
-	hom.MaxHP = property.MaxHP
-	hom.SP = property.SP
-	hom.MaxSP = property.MaxSP
-	hom.Exp = property.Exp
-	hom.MaxExp = property.MaxExp
-	hom.Skills.Points = property.SkillPoints
-	hom.AttackRange = property.AttackRange
-	if hom.ID == 0 {
-		hom.ID = findCompanionActorID(ctx, actorObjectTypeHomunculus)
-	}
-	m.applyCompanionActorName(ctx, hom.ID, hom.Name)
-	m.applyCompanionLife(ctx, hom.ID, property.HP, property.MaxHP, property.SP, property.MaxSP, property.AttackRange)
-	m.applyCompanionHunger(ctx, hom.ID, property.Hunger, homunculusHungerMax)
-	glog.Debugf("homunculus property id=%d name=%q level=%d hp=%d/%d sp=%d/%d hunger=%d intimacy=%d range=%d skills=%d", hom.ID, hom.Name, hom.Level, hom.HP, hom.MaxHP, hom.SP, hom.MaxSP, hom.Hunger, hom.Intimacy, hom.AttackRange, hom.Skills.Points)
-}
-
-func (m *WorldMode) applyHomunculusStateChange(ctx client.Context, change network.HomunculusStateChange) {
-	if ctx.Session == nil || change.GID == 0 {
-		return
-	}
-	hom := &ctx.Session.Homunculus
-	hom.ID = change.GID
-	hom.Active = true
-	m.applyCompanionActorName(ctx, hom.ID, hom.Name)
-	switch change.State {
-	case 0:
-		// Pre-init: robrowser uses this packet to learn Session.homunId.
-	case 1:
-		hom.Intimacy = int(change.Data)
-	case 2:
-		hom.Hunger = int(change.Data)
-		m.applyCompanionHunger(ctx, hom.ID, hom.Hunger, homunculusHungerMax)
-	}
-	glog.Debugf("homunculus state id=%d type=%d state=%d data=%d", change.GID, change.Type, change.State, change.Data)
-}
-
-func (m *WorldMode) applyHomunculusParamChange(ctx client.Context, change network.HomunculusParamChange) {
-	if ctx.Session == nil || !ctx.Session.Homunculus.Active {
-		return
-	}
-	hom := &ctx.Session.Homunculus
-	previousLevel := hom.Level
-	value := int(change.Value)
-	switch change.Param {
-	case network.StatusSpeed:
-		m.applyCompanionSpeed(ctx, hom.ID, value)
-	case network.StatusBaseExp:
-		hom.Exp = nonNegativeUint64(change.Value)
-	case network.StatusHP:
-		hom.HP = value
-	case network.StatusMaxHP:
-		hom.MaxHP = value
-	case network.StatusSP:
-		hom.SP = value
-	case network.StatusMaxSP:
-		hom.MaxSP = value
-	case network.StatusBaseLevel:
-		if previousLevel > 0 && value > previousLevel {
-			if hom.ID == 0 {
-				hom.ID = findCompanionActorID(ctx, actorObjectTypeHomunculus)
-			}
-			m.addWorldEffectIfMissing(ctx, effectHoUp, hom.ID)
-		}
-		hom.Level = value
-	case network.StatusSkillPoint:
-		hom.Skills.Points = value
-	case network.StatusNextBaseExp:
-		hom.MaxExp = nonNegativeUint64(change.Value)
-	default:
-		glog.Debugf("homunculus param ignored param=%d value=%d", change.Param, change.Value)
-		return
-	}
-	m.applyCompanionLife(ctx, hom.ID, hom.HP, hom.MaxHP, hom.SP, hom.MaxSP, hom.AttackRange)
-	glog.Debugf("homunculus param id=%d param=%d value=%d hp=%d/%d sp=%d/%d exp=%d/%d skills=%d", hom.ID, change.Param, change.Value, hom.HP, hom.MaxHP, hom.SP, hom.MaxSP, hom.Exp, hom.MaxExp, hom.Skills.Points)
-}
-
-func applyHomunculusSkillInfoList(ctx client.Context, list network.HomunculusSkillInfoList) {
-	if ctx.Session == nil {
-		return
-	}
-	ctx.Session.Homunculus.Skills.List = ctx.Session.Homunculus.Skills.List[:0]
-	for _, skill := range list.Skills {
-		ctx.Session.Homunculus.Skills.List = append(ctx.Session.Homunculus.Skills.List, sessionSkillFromNetworkWithResources(ctx.Resources, skill))
-	}
-	glog.Debugf("homunculus skill list received count=%d points=%d", len(ctx.Session.Homunculus.Skills.List), ctx.Session.Homunculus.Skills.Points)
-}
-
-func applyHomunculusSkillInfoUpdate(ctx client.Context, update network.HomunculusSkillInfoUpdate) {
-	if ctx.Session == nil {
-		return
-	}
-	upsertCompanionSkill(&ctx.Session.Homunculus, sessionSkillFromNetworkWithResources(ctx.Resources, update.Skill))
-	glog.Debugf("homunculus skill update id=%d level=%d sp=%d range=%d upgradable=%t", update.Skill.ID, update.Skill.Level, update.Skill.SPCost, update.Skill.Range, update.Skill.Upgradable)
-}
-
-func (m *WorldMode) applyMercenaryProperty(ctx client.Context, property network.MercenaryProperty) {
-	if ctx.Session == nil {
-		return
-	}
-	merc := &ctx.Session.Mercenary
-	merc.Active = true
-	if property.ID != 0 {
-		merc.ID = property.ID
-	}
-	if merc.ID == 0 {
-		merc.ID = findCompanionActorID(ctx, actorObjectTypeMercenary)
-	}
-	if property.Name != "" {
-		merc.Name = property.Name
-	}
-	merc.Level = property.Level
-	merc.Faith = property.Faith
-	merc.SummonCount = property.SummonCount
-	merc.Calls = property.Calls
-	merc.Kills = property.Kills
-	merc.ExpireTick = property.ExpireTick
-	merc.Attack = property.Attack
-	merc.MagicAttack = property.MagicAttack
-	merc.Hit = property.Hit
-	merc.Critical = property.Critical
-	merc.Defense = property.Defense
-	merc.MagicDefense = property.MagicDefense
-	merc.Flee = property.Flee
-	merc.ASPD = property.ASPD
-	merc.HP = property.HP
-	merc.MaxHP = property.MaxHP
-	merc.SP = property.SP
-	merc.MaxSP = property.MaxSP
-	merc.Exp = uint64(property.Exp)
-	if property.AttackRange > 0 {
-		merc.AttackRange = property.AttackRange
-	}
-	m.applyCompanionActorName(ctx, merc.ID, merc.Name)
-	m.applyCompanionLife(ctx, merc.ID, merc.HP, merc.MaxHP, merc.SP, merc.MaxSP, merc.AttackRange)
-	glog.Debugf("mercenary property id=%d name=%q level=%d hp=%d/%d sp=%d/%d faith=%d kills=%d range=%d", merc.ID, merc.Name, merc.Level, merc.HP, merc.MaxHP, merc.SP, merc.MaxSP, merc.Faith, merc.Kills, merc.AttackRange)
-}
-
-func (m *WorldMode) applyMercenaryParamChange(ctx client.Context, change network.MercenaryParamChange) {
-	if ctx.Session == nil || !ctx.Session.Mercenary.Active {
-		return
-	}
-	merc := &ctx.Session.Mercenary
-	value := int(change.Value)
-	switch change.Param {
-	case network.StatusHP:
-		merc.HP = value
-	case network.StatusMaxHP:
-		merc.MaxHP = value
-	case network.StatusSP:
-		merc.SP = value
-	case network.StatusMaxSP:
-		merc.MaxSP = value
-	case network.StatusMercFlee:
-		merc.Flee = value
-	case network.StatusMercKills:
-		merc.Kills = uint32(maxInt(0, value))
-	case network.StatusMercFaith:
-		merc.Faith = value
-	default:
-		glog.Debugf("mercenary param ignored param=%d value=%d", change.Param, value)
-		return
-	}
-	m.applyCompanionLife(ctx, merc.ID, merc.HP, merc.MaxHP, merc.SP, merc.MaxSP, merc.AttackRange)
-	glog.Debugf("mercenary param id=%d param=%d value=%d hp=%d/%d sp=%d/%d", merc.ID, change.Param, value, merc.HP, merc.MaxHP, merc.SP, merc.MaxSP)
-}
-
-func applyMercenarySkillInfoList(ctx client.Context, list network.MercenarySkillInfoList) {
-	if ctx.Session == nil {
-		return
-	}
-	ctx.Session.Mercenary.Skills.List = ctx.Session.Mercenary.Skills.List[:0]
-	for _, skill := range list.Skills {
-		ctx.Session.Mercenary.Skills.List = append(ctx.Session.Mercenary.Skills.List, sessionSkillFromNetworkWithResources(ctx.Resources, skill))
-	}
-	glog.Debugf("mercenary skill list received count=%d", len(ctx.Session.Mercenary.Skills.List))
-}
-
-func applyMercenarySkillInfoUpdate(ctx client.Context, update network.MercenarySkillInfoUpdate) {
-	if ctx.Session == nil {
-		return
-	}
-	upsertCompanionSkill(&ctx.Session.Mercenary, sessionSkillFromNetworkWithResources(ctx.Resources, update.Skill))
-	glog.Debugf("mercenary skill update id=%d level=%d sp=%d range=%d upgradable=%t", update.Skill.ID, update.Skill.Level, update.Skill.SPCost, update.Skill.Range, update.Skill.Upgradable)
-}
-
-func upsertCompanionSkill(companion *session.Companion, skill session.Skill) {
-	if companion == nil {
-		return
-	}
-	for i := range companion.Skills.List {
-		if companion.Skills.List[i].ID != skill.ID {
-			continue
-		}
-		companion.Skills.List[i] = skill
-		return
-	}
-	companion.Skills.List = append(companion.Skills.List, skill)
-}
-
-func findCompanionActorID(ctx client.Context, objectType uint8) uint32 {
-	if ctx.World == nil {
-		return 0
-	}
-	for id, actor := range ctx.World.Actors {
-		if actor.HasObjectType && actor.ObjectType == objectType {
-			return id
-		}
-	}
-	return 0
-}
 
 func (m *WorldMode) applyCompanionLife(ctx client.Context, id uint32, hp, maxHP, sp, maxSP, attackRange int) {
 	if id == 0 || ctx.World == nil {
@@ -304,32 +32,15 @@ func (m *WorldMode) applyCompanionLife(ctx client.Context, id uint32, hp, maxHP,
 	}
 	life := m.actorLife[id]
 	if maxHP > 0 {
-		life.hp = clampInt(hp, 0, maxHP)
+		life.hp = scene.ClampInt(hp, 0, maxHP)
 		life.maxHP = maxHP
 	}
 	if maxSP > 0 {
-		life.sp = clampInt(sp, 0, maxSP)
+		life.sp = scene.ClampInt(sp, 0, maxSP)
 		life.maxSP = maxSP
 		life.hasSP = true
 	}
-	life.updatedAt = time.Now()
 	m.actorLife[id] = life
-}
-
-func (m *WorldMode) applyCompanionActorName(ctx client.Context, id uint32, name string) {
-	if id == 0 || ctx.World == nil {
-		return
-	}
-	name = sanitizeActorName(name)
-	if name == "" {
-		return
-	}
-	actor, ok := ctx.World.Actors[id]
-	if !ok {
-		return
-	}
-	actor.Name = name
-	ctx.World.Actors[id] = actor
 }
 
 func (m *WorldMode) applyCompanionHunger(ctx client.Context, id uint32, hunger, maxHunger int) {
@@ -340,48 +51,142 @@ func (m *WorldMode) applyCompanionHunger(ctx client.Context, id uint32, hunger, 
 		m.actorLife = make(map[uint32]actorLife)
 	}
 	life := m.actorLife[id]
-	life.hunger = clampInt(hunger, 0, maxHunger)
+	life.hunger = scene.ClampInt(hunger, 0, maxHunger)
 	life.maxHunger = maxHunger
 	life.hasHunger = true
-	life.updatedAt = time.Now()
 	m.actorLife[id] = life
 }
 
-func (m *WorldMode) applyCompanionSpeed(ctx client.Context, id uint32, speed int) {
-	if id == 0 || ctx.World == nil {
-		return
+func (m *WorldMode) handleCompanionAICommandClick(ctx client.Context, now time.Time) bool {
+	if ctx.Input == nil || ctx.World == nil || ctx.Session == nil || m.mapPointerBlocked(ctx) || !ctx.Input.Pressed(input.KeyAlt) {
+		return false
 	}
-	if actor, ok := ctx.World.Actors[id]; ok {
-		actor.Speed = speed
-		ctx.World.Actors[id] = actor
+	kind := ""
+	id := uint32(0)
+	if ctx.Input.MouseJustPressed(input.MouseButtonLeft) {
+		kind = "mercenary"
+		id = ctx.Session.Mercenary.ID
+	} else if ctx.Input.MouseJustPressed(input.MouseButtonRight) {
+		kind = "homunculus"
+		id = ctx.Session.Homunculus.ID
+	} else {
+		return false
 	}
+	if id == 0 {
+		return true
+	}
+	screenW, screenH := ctx.ScreenSize()
+	projection := m.sceneProjection(ctx, screenW, screenH, now)
+	if actor, ok := clickedAttackTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths); ok {
+		m.companions().SetMessage(id, fmt.Sprintf("3,%d", actor.ID))
+		glog.Debugf("%s AI command attack companion=%d target=%d", kind, id, actor.ID)
+		return true
+	}
+	if x, y, ok := maps.ClickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); ok {
+		m.companions().SetMessage(id, fmt.Sprintf("1,%d,%d", x, y))
+		glog.Debugf("%s AI command move companion=%d target=%d,%d", kind, id, x, y)
+		return true
+	}
+	return true
 }
 
-func nonNegativeUint64(value int64) uint64 {
-	if value <= 0 {
-		return 0
+func (m *WorldMode) companionLife(ctx client.Context, id uint32) (hp, maxHP, sp, maxSP int, ok bool) {
+	if hp, maxHP, sp, maxSP, ok := companion.Life(ctx, id); ok {
+		return hp, maxHP, sp, maxSP, true
 	}
-	return uint64(value)
+	if m.actorLife != nil {
+		if life, found := m.actorLife[id]; found {
+			return life.hp, life.maxHP, life.sp, life.maxSP, true
+		}
+	}
+	return 0, 0, 0, 0, false
 }
 
-func (m *WorldMode) setActorAIMotion(ctx client.Context, id uint32, motion int, targetID uint32, expires time.Time) {
-	if id == 0 || ctx.World == nil {
-		return
+func (m *WorldMode) openHomunculusContextFromInput(ctx client.Context, now time.Time) bool {
+	if ctx.Input == nil || !ctx.Input.MouseJustPressed(input.MouseButtonRight) || ctx.Input.Pressed(input.KeyAlt) || m.mapPointerBlocked(ctx) {
+		return false
 	}
-	if isLocalActor(ctx, id) {
-		ctx.World.Player.AIMotion = motion
-		ctx.World.Player.HasAIMotion = true
-		ctx.World.Player.AIMotionExpires = expires
-		ctx.World.Player.AITargetID = targetID
-		return
-	}
-	actor, ok := ctx.World.Actors[id]
+	screenW, screenH := ctx.ScreenSize()
+	projection := m.sceneProjection(ctx, screenW, screenH, now)
+	actor, ok := clickedHomunculusTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths)
 	if !ok {
-		return
+		return false
 	}
-	actor.AIMotion = motion
-	actor.HasAIMotion = true
-	actor.AIMotionExpires = expires
-	actor.AITargetID = targetID
-	ctx.World.Actors[id] = actor
+	m.companions().OpenHomunculusContext(ctx, actor)
+	return true
+}
+
+func clickedHomunculusTarget(ctx client.Context, projection scene.Projection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
+	if ctx.World == nil {
+		return worldstate.Actor{}, false
+	}
+	expectedID := uint32(0)
+	if ctx.Session != nil {
+		expectedID = ctx.Session.Homunculus.ID
+	}
+	if expectedID == 0 {
+		expectedID = companion.FindActorID(ctx, scene.ActorObjectTypeHomunculus)
+	}
+	actor, ok := hoveredCursorActor(ctx, projection, mouseX, mouseY, now, deadActors)
+	if !ok || actor.ID == 0 || !actor.HasObjectType || actor.ObjectType != scene.ActorObjectTypeHomunculus {
+		return worldstate.Actor{}, false
+	}
+	if expectedID != 0 && actor.ID != expectedID {
+		return worldstate.Actor{}, false
+	}
+	return actor, true
+}
+
+func (m *WorldMode) openMercenaryContextFromInput(ctx client.Context, now time.Time) bool {
+	if ctx.Input == nil || !ctx.Input.MouseJustPressed(input.MouseButtonRight) || ctx.Input.Pressed(input.KeyAlt) || m.mapPointerBlocked(ctx) {
+		return false
+	}
+	screenW, screenH := ctx.ScreenSize()
+	projection := m.sceneProjection(ctx, screenW, screenH, now)
+	actor, ok := clickedMercenaryTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths)
+	if !ok {
+		return false
+	}
+	m.companions().OpenMercenaryContext(ctx, actor)
+	return true
+}
+
+func clickedMercenaryTarget(ctx client.Context, projection scene.Projection, mouseX, mouseY int, now time.Time, deadActors map[uint32]time.Time) (worldstate.Actor, bool) {
+	if ctx.World == nil {
+		return worldstate.Actor{}, false
+	}
+	expectedID := uint32(0)
+	if ctx.Session != nil {
+		expectedID = ctx.Session.Mercenary.ID
+	}
+	if expectedID == 0 {
+		expectedID = companion.FindActorID(ctx, scene.ActorObjectTypeMercenary)
+	}
+	actor, ok := hoveredCursorActor(ctx, projection, mouseX, mouseY, now, deadActors)
+	if !ok || actor.ID == 0 || !actor.HasObjectType || actor.ObjectType != scene.ActorObjectTypeMercenary {
+		return worldstate.Actor{}, false
+	}
+	if expectedID != 0 && actor.ID != expectedID {
+		return worldstate.Actor{}, false
+	}
+	return actor, true
+}
+
+func (m *WorldMode) companions() *companion.System {
+	m.companionSystem.Bind(companion.Bindings{
+		Windows:   &m.ui.companions,
+		SetLife:   m.applyCompanionLife,
+		SetHunger: m.applyCompanionHunger,
+		LevelUp:   func(ctx client.Context, id uint32) { m.effects().AddIfMissing(ctx, effects.HoUp, id) },
+		SnapshotLife: func() map[uint32]companion.Vitals {
+			life := make(map[uint32]companion.Vitals, len(m.actorLife))
+			for id, value := range m.actorLife {
+				life[id] = companion.Vitals{HP: value.hp, MaxHP: value.maxHP, SP: value.sp, MaxSP: value.maxSP}
+			}
+			return life
+		},
+		Error:   m.ui.console.AddErrorMessage,
+		Actions: m,
+	})
+	return &m.companionSystem
 }

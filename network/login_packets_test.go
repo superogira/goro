@@ -182,13 +182,13 @@ func TestBuildPingPacket(t *testing.T) {
 }
 
 func TestBuildMapServerEnterPacket(t *testing.T) {
-	packet := BuildMapServerEnterPacket(MapServerEnter{
+	packet := BuildMapServerEnterPacketForClientDate(MapServerEnter{
 		AccountID:  0x11223344,
 		CharID:     0x55667788,
 		AuthCode:   0x99aabbcc,
 		ClientTick: 0xddeeff00,
 		Sex:        1,
-	})
+	}, 20080910)
 	if len(packet) != 19 {
 		t.Fatalf("len = %d", len(packet))
 	}
@@ -225,7 +225,7 @@ func TestBuildMapServerEnterPacketFor2021ClientDate(t *testing.T) {
 }
 
 func TestBuildTickSendPacket(t *testing.T) {
-	packet := BuildTickSendPacket(0x11223344)
+	packet := BuildTickSendPacketForClientDate(0x11223344, 20080910)
 	if len(packet) != 8 {
 		t.Fatalf("len = %d", len(packet))
 	}
@@ -247,19 +247,6 @@ func TestBuildTickSendPacketFor2021ClientDate(t *testing.T) {
 	}
 	if packet[2] != 0x44 || packet[3] != 0x33 || packet[4] != 0x22 || packet[5] != 0x11 {
 		t.Fatalf("unexpected tick bytes: % x", packet[2:6])
-	}
-}
-
-func TestBuildNameRequestPacket(t *testing.T) {
-	packet := BuildNameRequestPacket(0x11223344)
-	want := []byte{0x94, 0x00, 0x44, 0x33, 0x22, 0x11}
-	if len(packet) != len(want) {
-		t.Fatalf("len = %d", len(packet))
-	}
-	for i := range want {
-		if packet[i] != want[i] {
-			t.Fatalf("packet = % x, want % x", packet, want)
-		}
 	}
 }
 
@@ -292,23 +279,6 @@ func TestBuildNameRequestPacketForClientDate20101124(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(packet[2:6]); got != 0x11223344 {
 		t.Fatalf("gid = 0x%08X, want 0x11223344", got)
-	}
-}
-
-func TestBuildWalkToXYPacket(t *testing.T) {
-	packet, ok := BuildWalkToXYPacket(150, 200)
-	if !ok {
-		t.Fatal("expected packet")
-	}
-	if len(packet) != 8 {
-		t.Fatalf("len = %d", len(packet))
-	}
-	if packet[0] != 0xA7 || packet[1] != 0x00 {
-		t.Fatalf("unexpected opcode: % x", packet[:2])
-	}
-	want0, want1, want2 := packPosition(150, 200, 0)
-	if packet[5] != want0 || packet[6] != want1 || packet[7] != want2 {
-		t.Fatalf("unexpected dest: got % x want %02x %02x %02x", packet[5:8], want0, want1, want2)
 	}
 }
 

@@ -18,7 +18,7 @@ var windowShortcutKeys = [...]input.KeyCode{
 func (m *WorldMode) windowShortcutAllowed(ctx client.Context, code input.KeyCode) bool {
 	var target *gameui.Window
 	if code == gpucontext.KeyR && plainCtrlDown(ctx.Input) {
-		target = &m.ui.mercenaryInfo.Window
+		target = &m.ui.companions.MercenaryInfo.Window
 	} else {
 		if !plainAltDown(ctx.Input) {
 			return false
@@ -31,7 +31,7 @@ func (m *WorldMode) windowShortcutAllowed(ctx client.Context, code input.KeyCode
 		case gpucontext.KeyJ:
 			target = &m.ui.petInfoWindow.Window
 		case gpucontext.KeyR:
-			target = &m.ui.homunculusInfo.Window
+			target = &m.ui.companions.HomunculusInfo.Window
 		case gpucontext.KeyO:
 			target = &m.ui.settingsWindow.Window
 		default:
@@ -82,15 +82,15 @@ func (m *WorldMode) toggleWindowFromInput(ctx client.Context) bool {
 			}
 		case gpucontext.KeyR:
 			if plainCtrlDown(ctx.Input) {
-				if m.ui.mercenaryInfo.IsOpen() {
-					m.ui.mercenaryInfo.Close()
+				if m.ui.companions.MercenaryInfo.IsOpen() {
+					m.ui.companions.MercenaryInfo.Close()
 				} else {
-					m.openMercenaryInfo(ctx)
+					m.companions().OpenMercenaryInfo(ctx)
 				}
-			} else if m.ui.homunculusInfo.IsOpen() {
-				m.ui.homunculusInfo.Close()
+			} else if m.ui.companions.HomunculusInfo.IsOpen() {
+				m.ui.companions.HomunculusInfo.Close()
 			} else {
-				m.openHomunculusInfo(ctx)
+				m.companions().OpenHomunculusInfo(ctx)
 			}
 		case gpucontext.KeyO:
 			if m.ui.settingsWindow.IsOpen() {

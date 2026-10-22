@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/render"
@@ -104,36 +105,36 @@ func (m *WorldMode) drawPetSlotMachine(screen *render.Frame, ctx client.Context,
 		return
 	}
 	view := m.loadPetSlotMachineView(ctx.Resources)
-	if view == nil || view.act == nil || len(view.act.Actions) == 0 {
+	if view == nil || view.Act == nil || len(view.Act.Actions) == 0 {
 		return
 	}
-	actionIndex, motion, visible := m.petSlotMachineFrame(view.act, now)
+	actionIndex, motion, visible := m.petSlotMachineFrame(view.Act, now)
 	if !visible {
 		return
 	}
-	if actionIndex < 0 || actionIndex >= len(view.act.Actions) {
+	if actionIndex < 0 || actionIndex >= len(view.Act.Actions) {
 		return
 	}
-	action := view.act.Actions[actionIndex]
+	action := view.Act.Actions[actionIndex]
 	if motion < 0 || motion >= len(action.Animations) {
 		return
 	}
-	key := singleSpriteBillboardKey{actionIndex: actionIndex, motion: motion}
-	billboard, ok := view.billboards[key]
+	key := scene.SpriteBillboardKey{ActionIndex: actionIndex, Motion: motion}
+	billboard, ok := view.Billboards[key]
 	if !ok {
 		var baseOK bool
-		billboard, baseOK = composeSingleSpriteBillboard(view, action.Animations[motion])
+		billboard, baseOK = scene.ComposeSingleSpriteBillboard(view, action.Animations[motion])
 		if !baseOK {
 			return
 		}
-		view.billboards[key] = billboard
+		view.Billboards[key] = billboard
 	}
 	x, y := petSlotMachineOrigin(ctx)
 	var opts render.DrawImageOptions
-	opts.GeoM.Translate(float64(x)+petSlotMachineAnchorX-billboard.anchorX, float64(y)+petSlotMachineAnchorY-billboard.anchorY)
-	opts.Filter = spriteDrawFilter()
+	opts.GeoM.Translate(float64(x)+petSlotMachineAnchorX-billboard.AnchorX, float64(y)+petSlotMachineAnchorY-billboard.AnchorY)
+	opts.Filter = scene.SpriteDrawFilter()
 	opts.Blend = render.BlendSourceOver
-	screen.DrawImage(billboard.image, &opts)
+	screen.DrawImage(billboard.Image, &opts)
 }
 
 func (m *WorldMode) petSlotMachineFrame(act *res.ACT, now time.Time) (int, int, bool) {
@@ -188,7 +189,7 @@ func (m *WorldMode) petSlotMachineFrame(act *res.ACT, now time.Time) (int, int, 
 	}
 }
 
-func (m *WorldMode) loadPetSlotMachineView(manager *res.Manager) *spriteView {
+func (m *WorldMode) loadPetSlotMachineView(manager *res.Manager) *scene.SpriteView {
 	if manager == nil || m.slotMachineMiss {
 		return nil
 	}
@@ -206,8 +207,8 @@ func (m *WorldMode) loadPetSlotMachineView(manager *res.Manager) *spriteView {
 	return view
 }
 
-func loadSlotMachineSpriteView(manager *res.Manager) (*spriteView, string) {
-	return loadSpriteView(manager,
+func loadSlotMachineSpriteView(manager *res.Manager) (*scene.SpriteView, string) {
+	return scene.LoadSpriteView(manager,
 		[]string{"data\\sprite\\slotmachine.act", "data/sprite/slotmachine.act"},
 		[]string{"data\\sprite\\slotmachine.spr", "data/sprite/slotmachine.spr"},
 		nil,

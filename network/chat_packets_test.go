@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestParseTalkBoxChatContents(t *testing.T) {
+	data := make([]byte, 86)
+	binary.LittleEndian.PutUint16(data, PacketZCTalkBoxChatContents)
+	binary.LittleEndian.PutUint32(data[2:], 12345)
+	copy(data[6:], "Beware : trap!\x00ignored")
+	chat, ok, err := ParseTalkBoxChatContents(Packet{ID: PacketZCTalkBoxChatContents, Data: data})
+	if err != nil || !ok || chat.GID != 12345 || chat.Text != "Beware : trap!" {
+		t.Fatalf("decoded Talkie Box = %+v, ok=%t err=%v", chat, ok, err)
+	}
+	for n := 0; n < len(data); n++ {
+		if _, ok, err := ParseTalkBoxChatContents(Packet{ID: PacketZCTalkBoxChatContents, Data: data[:n]}); err == nil || ok {
+			t.Fatalf("accepted truncated Talkie Box: %d bytes", n)
+		}
+	}
+	for i := 6; i < len(data); i++ {
+		data[i] = 'x'
+	}
+	chat, ok, err = ParseTalkBoxChatContents(Packet{ID: PacketZCTalkBoxChatContents, Data: data})
+	if err != nil || !ok || len(chat.Text) != 80 {
+		t.Fatal("full-width Talkie Box text was truncated")
+	}
+}
+
 func TestBuildGlobalChatPacketFor2008ClientDate(t *testing.T) {
 	packet := BuildGlobalChatPacketForClientDate("Kivutar", "hello", 20080910)
 	if got := ID(packet); got != PacketCZRequestChat {

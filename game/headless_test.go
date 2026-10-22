@@ -1,6 +1,7 @@
 package game
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/companion"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
@@ -40,7 +42,7 @@ func TestHeadlessCombatKeepsStateWithoutVisuals(t *testing.T) {
 	mode.applyActorActionNotify(ctx, network.ActorActionNotify{
 		SourceID: 300, TargetID: sess.AccountID, SourceSpeed: 600, TargetSpeed: 250, Damage: 10,
 	})
-	if actor := world.Actors[300]; actor.AITargetID != sess.AccountID || actor.AIMotion != aiMotionAttack {
+	if actor := world.Actors[300]; actor.AITargetID != sess.AccountID || actor.AIMotion != companion.MotionAttack {
 		t.Fatalf("monster combat state was lost: %+v", actor)
 	}
 	if anim := mode.actorAnims[300]; anim.duration != 600*time.Millisecond {
@@ -64,7 +66,7 @@ func TestHeadlessCombatKeepsStateWithoutVisuals(t *testing.T) {
 	if _, dead := mode.actorDeaths[300]; !dead {
 		t.Fatal("dead monster was not excluded from bot targets")
 	}
-	if len(mode.worldEffects) != 0 || len(mode.damageFloaters) != 0 || len(mode.speechBubbles) != 0 || len(mode.actorCastBars) != 0 {
+	if len(mode.effects().Active) != 0 || len(mode.damageFloaters) != 0 || len(mode.speechBubbles) != 0 || len(mode.actorCastBars) != 0 {
 		t.Fatal("headless combat retained visuals that require drawing to expire")
 	}
 	if mode.playerView != nil || len(mode.nonPCViews) != 0 || len(mode.nonPCViewMiss) != 0 || len(mode.mercenaryViews) != 0 || len(mode.mercenaryViewMiss) != 0 {
@@ -73,10 +75,10 @@ func TestHeadlessCombatKeepsStateWithoutVisuals(t *testing.T) {
 	if len(mode.gr2Models) != 0 || len(mode.gr2ModelMiss) != 0 {
 		t.Fatal("headless combat loaded or attempted to load actor models")
 	}
-	if len(mode.effectViews) != 0 || len(mode.effectViewMiss) != 0 || len(mode.strEffects) != 0 || len(mode.strEffectMiss) != 0 {
+	if len(mode.effects().EffectViews) != 0 || len(mode.effects().EffectViewMiss) != 0 || len(mode.effects().StrEffects) != 0 || len(mode.effects().StrEffectMiss) != 0 {
 		t.Fatal("headless combat loaded or attempted to load effect assets")
 	}
-	if len(mode.textures) != 0 || len(mode.textureMiss) != 0 {
+	if len(mode.mapScene.Textures) != 0 || len(mode.mapScene.TextureMiss) != 0 {
 		t.Fatal("headless mode loaded or attempted to load textures")
 	}
 }
@@ -110,20 +112,28 @@ func TestHeadlessSongSkillsStillSendChat(t *testing.T) {
 		mode.applySkillNoDamageNotify(ctx, network.SkillNoDamageNotify{SourceID: sess.AccountID, TargetID: sess.AccountID, SkillID: tc.skill, Result: 1})
 		readBotTestPackets(t, conn, network.BuildGlobalChatPacketForClientDate("Tester", tc.text, 20080910))
 	}
-	if len(mode.worldEffects) != 0 || len(mode.speechBubbles) != 0 {
+	if len(mode.effects().Active) != 0 || len(mode.speechBubbles) != 0 {
 		t.Fatal("song skills created headless visuals")
 	}
 }
 
 func TestHeadlessBotWaitsForProgressAndCanRevive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bot.lua")
-	if err := os.WriteFile(path, []byte(`
+	output := filepath.Join(t.TempDir(), "ticks.txt")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`
+local function report(ticks)
+	local file = assert(io.open(%q, "w"))
+	file:write(ticks)
+	file:close()
+end
 ticks = 0
+report(ticks)
 function tick()
     ticks = ticks + 1
+    report(ticks)
     if goro.player().dead then assert(goro.revive()) end
 end
-`), 0600); err != nil {
+`, output)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	networkClient, conn := newBotTestConnection(t, 20080910)
@@ -143,19 +153,17 @@ end
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mode.bot.close()
+	defer mode.bot.Close()
 	update := func(want string) {
 		t.Helper()
-		mode.bot.nextTick = time.Time{}
+		mode.bot.NextTick = time.Time{}
 		if next, err := mode.Update(ctx); next != nil || err != nil {
 			t.Fatalf("headless update = %v, %v", next, err)
 		}
-		if mode.bot.disabled {
+		if mode.bot.Disabled {
 			t.Fatal("bot script failed")
 		}
-		if got := mode.bot.state.GetGlobal("ticks").String(); got != want {
-			t.Fatalf("bot ticks = %s, want %s", got, want)
-		}
+		assertScriptOutput(t, output, want)
 	}
 	mode.startServerProgress(ctx, network.ProgressBar{Duration: time.Hour}, time.Now())
 	update("0")

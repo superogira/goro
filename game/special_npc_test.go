@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/scene"
 	worldstate "github.com/kivutar/goro/world"
 )
 
@@ -35,17 +37,17 @@ func TestSpecialNPCVisualForActor(t *testing.T) {
 		},
 		{
 			name:  "clear npc torch",
-			actor: worldstate.Actor{Job: actorJobClearNPC, Name: "Bobbing Torch#7"},
+			actor: worldstate.Actor{Job: scene.ActorJobClearNPC, Name: "Bobbing Torch#7"},
 			want:  specialNPCVisualTorch,
 		},
 		{
 			name:  "clear npc firewood",
-			actor: worldstate.Actor{Job: actorJobClearNPC, Name: "Wet Firewood#moc2"},
+			actor: worldstate.Actor{Job: scene.ActorJobClearNPC, Name: "Wet Firewood#moc2"},
 			want:  specialNPCVisualTorch,
 		},
 		{
 			name:  "flame monster remains sprite",
-			actor: worldstate.Actor{Job: 1869, HasObjectType: true, ObjectType: actorObjectTypeMob},
+			actor: worldstate.Actor{Job: 1869, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob},
 			want:  specialNPCVisualNone,
 		},
 	}
@@ -60,21 +62,21 @@ func TestSpecialNPCVisualForActor(t *testing.T) {
 
 func TestPersistentSpecialNPCWorldEffectKeepsActorCellAnchor(t *testing.T) {
 	now := time.Unix(100, 0)
-	entry := sceneActorDrawEntry{
-		actor:  worldstate.Actor{ID: 700, X: 30, Y: 40, Job: actorJobClearNPC},
-		worldX: 30.5,
-		worldY: 40.5,
+	entry := scene.ActorDrawEntry{
+		Actor:  worldstate.Actor{ID: 700, X: 30, Y: 40, Job: scene.ActorJobClearNPC},
+		WorldX: 30.5,
+		WorldY: 40.5,
 	}
 
-	effect := persistentWorldEffectForActorEntry(effectTorch, entry, now)
+	effect := persistentWorldEffectForActorEntry(effects.Torch, entry, now)
 
-	if effect.actorID != 700 || effect.effectID != effectTorch {
+	if effect.ActorID != 700 || effect.EffectID != effects.Torch {
 		t.Fatalf("effect identity = %+v", effect)
 	}
-	if effect.x != 30 || effect.y != 40 {
-		t.Fatalf("effect cell = %d,%d; want actor cell 30,40", effect.x, effect.y)
+	if effect.X != 30 || effect.Y != 40 {
+		t.Fatalf("effect cell = %d,%d; want actor cell 30,40", effect.X, effect.Y)
 	}
-	if !effect.starts.Equal(now) || !effect.expires.Equal(now.Add(24*time.Hour)) || effect.duration != 24*time.Hour {
-		t.Fatalf("effect lifetime = starts %s expires %s duration %s", effect.starts, effect.expires, effect.duration)
+	if !effect.Starts.Equal(now) || !effect.Expires.Equal(now.Add(24*time.Hour)) || effect.Duration != 24*time.Hour {
+		t.Fatalf("effect lifetime = starts %s expires %s duration %s", effect.Starts, effect.Expires, effect.Duration)
 	}
 }

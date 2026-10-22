@@ -6,6 +6,7 @@ import (
 
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
+	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/input"
 )
 
@@ -17,7 +18,7 @@ func TestClassicChatRespectsFormsAndTransitions(t *testing.T) {
 		{"settings", func(m *WorldMode, ctx client.Context) { m.ui.settingsWindow.OpenWindow(ctx) }},
 		{"shortcut editor", func(m *WorldMode, ctx client.Context) { m.ui.chatShortcuts.Toggle(ctx, &m.ui.console, nil) }},
 		{"progress", func(m *WorldMode, _ client.Context) { m.serverProgress.started = time.Now() }},
-		{"map transition", func(m *WorldMode, _ client.Context) { m.mapFade.phase = mapFadeHold }},
+		{"map transition", func(m *WorldMode, _ client.Context) { m.mapFade.Phase = maps.FadeHold }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := chatShortcutTestContext(t)

@@ -2,12 +2,17 @@ package game
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"time"
 
 	gameaudio "github.com/kivutar/goro/audio"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/companion"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
@@ -15,14 +20,15 @@ import (
 )
 
 type scheduledSound struct {
-	at          time.Time
-	paths       []string
-	volume      float64
-	positioned  bool
-	actorID     uint32
-	hasPosition bool
-	x           float64
-	y           float64
+	at            time.Time
+	paths         []string
+	volume        float64
+	positioned    bool
+	actorID       uint32
+	skillActionID uint16
+	hasPosition   bool
+	x             float64
+	y             float64
 }
 
 type actorSoundFrame struct {
@@ -43,6 +49,15 @@ func (m *WorldMode) scheduleSoundAtActor(at time.Time, actorID uint32, paths ...
 	m.scheduleSoundVolumeAtActor(at, 1, actorID, paths...)
 }
 
+func (m *WorldMode) scheduleSkillActionSoundAtActor(at time.Time, actorID uint32, skillID uint16, paths ...string) {
+	// Ground and damage packets can replace the same skill animation before
+	// its release sound plays. Keep only the latest release for that actor.
+	m.scheduledSounds = slices.DeleteFunc(m.scheduledSounds, func(sound scheduledSound) bool {
+		return sound.actorID == actorID && sound.skillActionID == skillID
+	})
+	m.scheduleSoundOptions(scheduledSound{at: at, volume: 1, positioned: true, actorID: actorID, skillActionID: skillID}, paths...)
+}
+
 func (m *WorldMode) scheduleSoundVolumeAtActor(at time.Time, volume float64, actorID uint32, paths ...string) {
 	m.scheduleSoundOptions(scheduledSound{at: at, volume: volume, positioned: true, actorID: actorID}, paths...)
 }
@@ -51,15 +66,15 @@ func (m *WorldMode) scheduleSoundVolumeAtPosition(at time.Time, volume float64, 
 	m.scheduleSoundOptions(scheduledSound{at: at, volume: volume, positioned: true, hasPosition: true, x: x, y: y}, paths...)
 }
 
-func (m *WorldMode) scheduleSoundAtWorldEffect(at time.Time, effect worldEffect, paths ...string) {
+func (m *WorldMode) scheduleSoundAtWorldEffect(at time.Time, effect effects.Instance, paths ...string) {
 	sound := scheduledSound{
 		at:          at,
 		volume:      1,
 		positioned:  true,
-		actorID:     effect.actorID,
+		actorID:     effect.ActorID,
 		hasPosition: true,
-		x:           float64(effect.x),
-		y:           float64(effect.y),
+		x:           float64(effect.X),
+		y:           float64(effect.Y),
 	}
 	m.scheduleSoundOptions(sound, paths...)
 }
@@ -106,55 +121,6 @@ func (m *WorldMode) playScheduledSound(ctx client.Context, sound scheduledSound,
 	m.playSFXFirstVolume(ctx, volume, sound.paths...)
 }
 
-func (m *WorldMode) preloadMapSounds(ctx client.Context) {
-	if ctx.Audio == nil || ctx.World == nil || ctx.World.RSW == nil {
-		return
-	}
-	for _, sound := range ctx.World.RSW.Sounds {
-		if sound.Volume <= 0 {
-			continue
-		}
-		if err := ctx.Audio.PreloadSFX(sound.File); err != nil {
-			glog.Debugf("preload map sound %s: %v", sound.File, err)
-		}
-	}
-}
-
-func (m *WorldMode) processMapSounds(ctx client.Context, now time.Time) {
-	if ctx.World == nil || ctx.World.RSW == nil || ctx.World.GND == nil || len(ctx.World.RSW.Sounds) == 0 {
-		return
-	}
-	playerX, playerY := actorRenderPosition(ctx.World.Player, now)
-	width := float64(ctx.World.GND.Width)
-	height := float64(ctx.World.GND.Height)
-	if m.mapSoundNext == nil {
-		m.mapSoundNext = make(map[int]time.Time)
-	}
-	for index, sound := range ctx.World.RSW.Sounds {
-		if strings.TrimSpace(sound.File) == "" {
-			continue
-		}
-		if sound.Volume <= 0 {
-			continue
-		}
-		if next := m.mapSoundNext[index]; !next.IsZero() && now.Before(next) {
-			continue
-		}
-		soundX := float64(sound.Position.X) + width
-		soundY := float64(sound.Position.Z) + height
-		maxDistance := float64(sound.Range)*0.2 + float64(sound.Height)
-		if math.Hypot(soundX-playerX, soundY-playerY) > maxDistance {
-			continue
-		}
-		m.scheduleSoundVolumeAtPosition(now, float64(sound.Volume), soundX, soundY, sound.File)
-		delay := time.Duration(float64(time.Second) * float64(sound.Cycle))
-		if delay < 100*time.Millisecond {
-			delay = 100 * time.Millisecond
-		}
-		m.mapSoundNext[index] = now.Add(delay)
-	}
-}
-
 func (m *WorldMode) processActorMotionSounds(ctx client.Context, now time.Time) {
 	if ctx.World == nil || len(ctx.World.Actors) == 0 {
 		return
@@ -169,24 +135,24 @@ func (m *WorldMode) processNonPCMotionSound(ctx client.Context, actor worldstate
 		return
 	}
 	view := m.nonPCSpriteView(ctx, actor)
-	if view == nil || view.act == nil {
+	if view == nil || view.Act == nil {
 		return
 	}
 	state := m.nonPCSpriteState(actor, now)
-	switch state.actionFamily {
-	case spriteActionNonPCAttack, spriteActionNonPCHurt:
+	switch state.ActionFamily {
+	case sprites.ActionNonPCAttack, sprites.ActionNonPCHurt:
 		return
 	}
-	_, action, ok := resolveSpriteAction(view.act, state.actionFamily, state.direction)
+	_, action, ok := sprites.ResolveAction(view.Act, state.ActionFamily, state.Direction)
 	if !ok || len(action.Animations) == 0 {
 		return
 	}
-	motion := bodyMotionForState(action, state, view.started, now)
+	motion := sprites.BodyMotionForState(action, state, view.Started, now)
 	if motion < 0 || motion >= len(action.Animations) {
 		return
 	}
 	soundIndex := action.Animations[motion].Sound
-	current := actorSoundFrame{actionFamily: state.actionFamily, motion: motion, soundIndex: soundIndex}
+	current := actorSoundFrame{actionFamily: state.ActionFamily, motion: motion, soundIndex: soundIndex}
 	if m.actorSoundFrames == nil {
 		m.actorSoundFrames = make(map[uint32]actorSoundFrame)
 	}
@@ -197,7 +163,7 @@ func (m *WorldMode) processNonPCMotionSound(ctx client.Context, actor worldstate
 	if soundIndex < 0 {
 		return
 	}
-	if sound := actionSoundName(view.act, action, motion); sound != "" {
+	if sound := actionSoundName(view.Act, action, motion); sound != "" {
 		m.scheduleSoundAtActor(now, actor.ID, sound)
 	}
 }
@@ -206,8 +172,8 @@ func actorWithinSoundRange(ctx client.Context, actor worldstate.Actor, now time.
 	if ctx.World == nil {
 		return false
 	}
-	actorX, actorY := actorRenderPosition(actor, now)
-	playerX, playerY := actorRenderPosition(ctx.World.Player, now)
+	actorX, actorY := scene.ActorRenderPosition(actor, now)
+	playerX, playerY := scene.ActorRenderPosition(ctx.World.Player, now)
 	const soundRangeCells = 25
 	return math.Hypot(actorX-playerX, actorY-playerY) <= soundRangeCells
 }
@@ -247,11 +213,11 @@ func scheduledSoundPosition(ctx client.Context, sound scheduledSound, now time.T
 	}
 	if sound.actorID != 0 {
 		if actor, ok := ctx.World.Actors[sound.actorID]; ok {
-			x, y := actorRenderPosition(actor, now)
+			x, y := scene.ActorRenderPosition(actor, now)
 			return x, y, true
 		}
-		if isLocalActor(ctx, sound.actorID) {
-			x, y := actorRenderPosition(ctx.World.Player, now)
+		if scene.IsLocalActor(ctx, sound.actorID) {
+			x, y := scene.ActorRenderPosition(ctx.World.Player, now)
 			return x, y, true
 		}
 		if sound.hasPosition {
@@ -269,16 +235,16 @@ func spatialSoundGain(ctx client.Context, sourceX, sourceY float64, now time.Tim
 	if ctx.World == nil {
 		return 1
 	}
-	listenerX, listenerY := actorRenderPosition(ctx.World.Player, now)
+	listenerX, listenerY := scene.ActorRenderPosition(ctx.World.Player, now)
 	return referenceSpatialSoundGain(listenerX, listenerY, sourceX, sourceY)
 }
 
 func referenceSpatialSoundGain(listenerX, listenerY, sourceX, sourceY float64) float64 {
 	dist := math.Hypot(sourceX-listenerX, sourceY-listenerY)
-	if !isFinite(dist) {
+	if !scene.IsFinite(dist) {
 		return 1
 	}
-	dist = clampFloat(dist, referenceSoundMinDistanceCells, referenceSoundMaxDistanceCells)
+	dist = scene.ClampFloat(dist, referenceSoundMinDistanceCells, referenceSoundMaxDistanceCells)
 	return referenceSoundMinDistanceCells / dist
 }
 
@@ -400,12 +366,12 @@ func combatHitSFXRoll(action network.ActorActionNotify) uint32 {
 }
 
 func actorUsesWeaponSounds(actor worldstate.Actor) bool {
-	return res.HasPlayerJobToken(int(actor.Job)) || actorIsMercenary(actor)
+	return res.HasPlayerJobToken(int(actor.Job)) || companion.IsMercenary(actor)
 }
 
 func actorWeaponForSounds(actor worldstate.Actor) int {
-	if actorIsMercenary(actor) {
-		return mercenaryWeaponForAppearance(int(actor.Job), int(actor.Weapon))
+	if companion.IsMercenary(actor) {
+		return companion.MercenaryWeaponForAppearance(int(actor.Job), int(actor.Weapon))
 	}
 	return int(actor.Weapon)
 }

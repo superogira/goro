@@ -5,6 +5,8 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -18,16 +20,40 @@ func (m *WorldMode) applyStatusEffectChange(ctx client.Context, change network.S
 		return
 	}
 	m.applyFalconStatus(ctx, change)
+	m.stopPerformance(ctx, change)
 	if actorID := applyActorOpt3StateStatus(ctx, change); actorID != 0 {
 		m.syncActorSpiritEffects(ctx, actorID)
+		if change.StatusID == db.StatusLkconcentration {
+			if scene.IsLocalActor(ctx, actorID) {
+				actorID = scene.LocalSkillTarget(ctx)
+			}
+			m.setActorStateEffect(ctx, actorID, effects.LKConcentration, change.Active)
+		}
 	}
 	m.applyTrickDeadStatus(ctx, change)
 	m.applyTaekwonStatus(ctx, change)
+	m.applyCloseConfineStatus(ctx, change)
+	if change.StatusID == db.StatusWzSightblaster {
+		id := change.ActorID
+		if id == 0 || scene.IsLocalActor(ctx, id) {
+			id = scene.LocalSkillTarget(ctx)
+		}
+		m.setActorStateEffect(ctx, id, effects.SightBlaster, change.Active)
+	}
+	if change.StatusID == db.StatusSmaReady && change.Active {
+		id := change.ActorID
+		if id == 0 {
+			id = scene.LocalSkillTarget(ctx)
+		}
+		m.effects().Add(ctx, effects.SmaReady, id)
+	}
 	m.applyTaekwonNightStatus(ctx, change)
 	if !applyLocalStatusEffectChange(ctx.Session, change, time.Now()) {
 		return
 	}
-	m.addStatusEffectTransition(ctx, change)
+	if change.StatusID == db.StatusDevil1 {
+		m.syncStarDevil(ctx)
+	}
 	if !change.Active {
 		if change.StatusID == db.StatusCashBossAlarm {
 			m.ui.minimap.ClearBossMarker()
@@ -75,16 +101,15 @@ func (m *WorldMode) applyTaekwonNightStatus(ctx client.Context, change network.S
 	}
 	id := change.ActorID
 	if id == 0 {
-		id = localSkillTarget(ctx)
+		id = scene.LocalSkillTarget(ctx)
 	}
-	if id == 0 || !isLocalActor(ctx, id) || m.taekwonNight == change.Active {
+	if id == 0 || !scene.IsLocalActor(ctx, id) || m.mapScene.Night == change.Active {
 		return
 	}
-	m.taekwonNight = change.Active
+	m.mapScene.Night = change.Active
 	// Ground and static-model colors include scene lighting, so rebuild their
 	// retained vertices when Soul Link or Eske changes the local night mode.
-	m.gndMeshCache = nil
-	m.rsmMeshCache = make(map[int][]retainedWorldMesh)
+	m.mapScene.InvalidateLighting()
 }
 
 func (m *WorldMode) applyTaekwonStatus(ctx client.Context, change network.StatusEffectChange) {
@@ -93,58 +118,27 @@ func (m *WorldMode) applyTaekwonStatus(ctx client.Context, change network.Status
 	}
 	id := change.ActorID
 	if id == 0 {
-		id = localSkillTarget(ctx)
+		id = scene.LocalSkillTarget(ctx)
 	}
 	if id == 0 {
 		return
 	}
-
+	if scene.IsLocalActor(ctx, id) {
+		id = scene.LocalSkillTarget(ctx)
+	}
+	now := time.Now()
 	switch change.StatusID {
 	case db.StatusRun:
-		effectID := 442 // EF_RUN; the reference effect currently only reserves the footprint hook.
-		if !change.Active {
-			effectID = effectStopEffect
+		if m.effects().HasActive(effects.Run, id, now) {
+			m.effects().AddAt(ctx, effects.StopRun, id, now)
 		}
-		if m.addWorldEffect(ctx, effectID, id) {
-			glog.Debugf("taekwon run status actor=%d active=%t effect=%d", id, change.Active, effectID)
-		}
+		m.effects().Remove(effects.Run, id)
 		return
 	case db.StatusTing:
-		if m.addWorldEffect(ctx, effectQuakeBody, id) {
-			glog.Debugf("taekwon ting status actor=%d effect=%d", id, effectQuakeBody)
-		}
+		m.scheduleSoundAtActor(now, id, "effect\\T_벽튕김.wav")
+		m.effects().AddAt(ctx, effects.QuakeBody, id, now)
+		m.effects().Remove(effects.Run, id)
 		return
-	}
-
-	actionFamily, frame, ok := taekwonStanceAction(change.StatusID)
-	if !ok {
-		return
-	}
-	m.setCombatActorAction(ctx, id, actorAnimation{
-		actionFamily:   actionFamily,
-		started:        time.Now(),
-		play:           false,
-		hasPlay:        true,
-		holdFinal:      true,
-		fixedMotion:    frame,
-		hasFixedMotion: true,
-	})
-}
-
-func taekwonStanceAction(statusID uint16) (actionFamily, frame int, ok bool) {
-	switch statusID {
-	case db.StatusStormkickOn, db.StatusStormkickReady:
-		return spriteActionPCSkill, 0, true
-	case db.StatusDownkickOn, db.StatusDownkickReady:
-		return spriteActionPCSkill, 2, true
-	case db.StatusTurnkickOn, db.StatusTurnkickReady:
-		return spriteActionPCSkill, 3, true
-	case db.StatusCounterOn, db.StatusCounterReady:
-		return spriteActionPCSkill, 4, true
-	case db.StatusDodgeOn, db.StatusDodgeReady:
-		return spriteActionPickup, 1, true
-	default:
-		return 0, 0, false
 	}
 }
 
@@ -155,12 +149,12 @@ func applyActorOpt3StateStatus(ctx client.Context, change network.StatusEffectCh
 	}
 	id := change.ActorID
 	if id == 0 {
-		id = localSkillTarget(ctx)
+		id = scene.LocalSkillTarget(ctx)
 	}
 	if id == 0 {
 		return 0
 	}
-	actor, ok, local := actorForCombatID(ctx, id)
+	actor, ok, local := scene.ActorForCombatID(ctx, id)
 	if !ok {
 		return 0
 	}
@@ -193,20 +187,20 @@ func (m *WorldMode) applyTrickDeadStatus(ctx client.Context, change network.Stat
 	}
 	id := change.ActorID
 	if id == 0 {
-		id = localSkillTarget(ctx)
+		id = scene.LocalSkillTarget(ctx)
 	}
-	actor, ok, _ := actorForCombatID(ctx, id)
+	actor, ok, _ := scene.ActorForCombatID(ctx, id)
 	if !ok {
 		return
 	}
 	now := time.Now()
 	if change.Active {
 		actionFamily := deathActionFamilyForActor(actor)
-		m.setTrickDeadStatusAction(ctx, id, actionFamily, now, m.actorActionDuration(ctx, actor, actionFamily, defaultDeathAnimationDuration), true)
+		m.setTrickDeadStatusAction(ctx, id, actionFamily, now, m.actorActionDuration(ctx, actor, actionFamily, scene.DefaultDeathAnimationDuration), true)
 		glog.Debugf("trick dead active actor=%d", id)
 		return
 	}
-	m.setTrickDeadStatusAction(ctx, id, spriteActionIdle, now, defaultAttackAnimationDuration, false)
+	m.setTrickDeadStatusAction(ctx, id, scene.SpriteActionIdle, now, scene.DefaultAttackAnimationDuration, false)
 	glog.Debugf("trick dead inactive actor=%d", id)
 }
 
@@ -221,18 +215,6 @@ func (m *WorldMode) setTrickDeadStatusAction(ctx client.Context, id uint32, acti
 	})
 }
 
-func (m *WorldMode) addStatusEffectTransition(ctx client.Context, change network.StatusEffectChange) {
-	if change.StatusID != db.StatusHiding {
-		return
-	}
-	effectID := effectSummonSlave
-	if change.Active {
-		effectID = effectBashBegin
-	}
-	if m.addWorldEffect(ctx, effectID, localSkillTarget(ctx)) {
-		glog.Debugf("status effect transition id=%d active=%t effect=%d", change.StatusID, change.Active, effectID)
-	}
-}
 
 func (m *WorldMode) removeExpiredStatusEffects(s *session.Session, now time.Time) {
 	if s == nil {

@@ -3,6 +3,7 @@ package game
 import (
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
@@ -364,7 +365,7 @@ func learnedSkillLevel(s *session.Session, id uint16) int {
 	}
 	for _, skill := range s.Skills.List {
 		if skill.ID == id {
-			return maxInt(0, skill.Level)
+			return scene.MaxInt(0, skill.Level)
 		}
 	}
 	return 0

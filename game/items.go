@@ -2,15 +2,17 @@ package game
 
 import (
 	"fmt"
-	"github.com/kivutar/goro/client"
-	"github.com/kivutar/goro/db"
-	"github.com/kivutar/goro/glog"
 	"image"
 	"image/color"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
+	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -20,7 +22,7 @@ import (
 
 type sceneItemDrawEntry struct {
 	item        worldstate.FloorItem
-	billboard   *spriteBillboard
+	billboard   *scene.Billboard
 	screenX     float64
 	screenY     float64
 	worldX      float64
@@ -91,47 +93,23 @@ func (m *WorldMode) applyFloorItemEntry(ctx client.Context, entry network.FloorI
 	glog.Debugf("floor item entry id=%d item_id=%d identified=%t amount=%d x=%d y=%d sub=%d,%d falling=%t", item.ID, item.ItemID, item.Identified, item.Amount, item.X, item.Y, item.SubX, item.SubY, item.Falling)
 }
 
-// prefetchItemSprite warms the act/spr pair for a floor item's sprite. The
-// resource name comes from the client's item tables, so no drop-table data
-// from the server is needed — the drop packet itself names the item.
+// prefetchItemSprite warms the act/spr pair for a floor item's sprite — plus
+// the icon bitmap the pickup notification shows and a card's illustration,
+// which the item info window can pop. All known the moment the drop packet
+// lands; a plain manager.Prefetch per group keeps every fetch off this frame.
 func (m *WorldMode) prefetchItemSprite(manager *res.Manager, itemID uint16, identified bool) {
 	if manager == nil || itemID == 0 {
 		return
-	}
-	key := itemSpriteKey{itemID: itemID, identified: identified}
-	if m.itemViewPrefetch == nil {
-		m.itemViewPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
-	}
-	if _, pending := m.itemViewPrefetch[key]; pending {
-		return
-	}
-	if m.itemViews != nil && m.itemViews[key] != nil {
-		return
-	}
-	if m.itemViewMiss != nil {
-		if _, missed := m.itemViewMiss[key]; missed {
-			return
-		}
 	}
 	resourceName, ok := manager.ItemResourceName(int(itemID), identified)
 	if !ok {
 		return
 	}
-	m.itemViewPrefetch[key] = manager.Prefetch(
+	manager.Prefetch(
 		res.ItemSpriteResourceCandidates(resourceName, "act"),
 		res.ItemSpriteResourceCandidates(resourceName, "spr"),
+		res.ItemIconTextureCandidates(resourceName),
 	)
-	// The pickup notification shows this item's icon bitmap (inventory,
-	// cart, and storage reuse the same texture); warming it here gives the
-	// fetch the whole walk-to-the-item as lead time.
-	if m.itemIconPrefetch == nil {
-		m.itemIconPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
-	}
-	if m.itemIconPrefetch[key] == nil {
-		m.itemIconPrefetch[key] = manager.Prefetch(res.ItemIconTextureCandidates(resourceName))
-	}
-	// Cards can pop their full illustration from the item info window;
-	// warm that too while the player walks to the drop.
 	if cardResource, ok := manager.ItemCardIllustrationName(int(itemID)); ok {
 		manager.Prefetch(res.CardIllustrationTextureCandidates(cardResource))
 	}
@@ -159,7 +137,7 @@ func (m *WorldMode) applyItemPickupAck(ctx client.Context, ack network.ItemPicku
 		Type:       ack.Type,
 		Location:   ack.Location,
 		Identified: ack.Identified,
-		Amount:     maxInt(1, int(ack.Amount)),
+		Amount:     scene.MaxInt(1, int(ack.Amount)),
 		Equip:      inventoryItemTypeIsEquipment(ack.Type),
 		Damaged:    ack.Damaged,
 		Refine:     ack.Refine,
@@ -200,7 +178,7 @@ func (m *WorldMode) requestPickup(ctx client.Context, item worldstate.FloorItem,
 		m.setWalkCooldown(walkErrorCooldown)
 		return false
 	}
-	playerX, playerY := currentPlayerCell(ctx, time.Now())
+	playerX, playerY := scene.CurrentPlayerCell(ctx, time.Now())
 	if itemWithinPickupRange(playerX, playerY, item.X, item.Y) {
 		return m.sendPickupRequest(ctx, item, source)
 	}
@@ -242,7 +220,7 @@ func (m *WorldMode) updatePendingPickup(ctx client.Context, source string, logOu
 		m.pendingPickup = pickupIntent{}
 		return
 	}
-	playerX, playerY := currentPlayerCell(ctx, now)
+	playerX, playerY := scene.CurrentPlayerCell(ctx, now)
 	if !itemWithinPickupRange(playerX, playerY, item.X, item.Y) {
 		if logOutOfRange {
 			glog.Debugf("%s pending pickup still out of range item=%d player=%d,%d item=%d,%d", source, item.ID, playerX, playerY, item.X, item.Y)
@@ -254,7 +232,7 @@ func (m *WorldMode) updatePendingPickup(ctx client.Context, source string, logOu
 		m.pendingPickup.readyAt = readyAt
 	}
 	if logOutOfRange {
-		glog.Debugf("%s pending pickup scheduled item=%d delay_ms=%d", source, item.ID, maxInt(0, int(m.pendingPickup.readyAt.Sub(now).Milliseconds())))
+		glog.Debugf("%s pending pickup scheduled item=%d delay_ms=%d", source, item.ID, scene.MaxInt(0, int(m.pendingPickup.readyAt.Sub(now).Milliseconds())))
 	}
 }
 
@@ -277,7 +255,7 @@ func (m *WorldMode) processPendingPickup(ctx client.Context) {
 		m.pendingPickup = pickupIntent{}
 		return
 	}
-	playerX, playerY := currentPlayerCell(ctx, now)
+	playerX, playerY := scene.CurrentPlayerCell(ctx, now)
 	if !itemWithinPickupRange(playerX, playerY, item.X, item.Y) {
 		glog.Debugf("pending pickup became out of range item=%d player=%d,%d item=%d,%d", item.ID, playerX, playerY, item.X, item.Y)
 		m.pendingPickup.readyAt = time.Time{}
@@ -290,7 +268,7 @@ func (m *WorldMode) processPendingPickup(ctx client.Context) {
 
 func pendingPickupReadyAt(player worldstate.Actor, now time.Time) time.Time {
 	readyAt := now.Add(60 * time.Millisecond)
-	if actorIsMovingAt(player, now) && player.MoveDuration > 0 {
+	if scene.ActorIsMovingAt(player, now) && player.MoveDuration > 0 {
 		walkReadyAt := player.MoveStarted.Add(player.MoveDuration).Add(60 * time.Millisecond)
 		if walkReadyAt.After(readyAt) {
 			readyAt = walkReadyAt
@@ -315,7 +293,7 @@ func (m *WorldMode) facePlayerTowardItem(ctx client.Context, item worldstate.Flo
 	if ctx.World == nil {
 		return
 	}
-	playerX, playerY := currentPlayerCell(ctx, time.Now())
+	playerX, playerY := scene.CurrentPlayerCell(ctx, time.Now())
 	dir := directionFromDelta(playerX, playerY, item.X, item.Y, ctx.World.Dir)
 	ctx.World.Player.Dir = dir
 	ctx.World.Dir = dir
@@ -325,21 +303,21 @@ func (m *WorldMode) facePlayerTowardItem(ctx client.Context, item worldstate.Flo
 }
 
 func itemWithinPickupRange(playerX, playerY, itemX, itemY int) bool {
-	return maxInt(absInt(playerX-itemX), absInt(playerY-itemY)) <= 1
+	return scene.MaxInt(scene.AbsInt(playerX-itemX), scene.AbsInt(playerY-itemY)) <= 1
 }
 
 func pickupApproachCell(ctx client.Context, item worldstate.FloorItem) (int, int, bool) {
-	if walkTargetInBounds(ctx, item.X, item.Y) {
+	if scene.WalkTargetInBounds(ctx, item.X, item.Y) {
 		return item.X, item.Y, true
 	}
-	playerX, playerY := currentPlayerCell(ctx, time.Now())
+	playerX, playerY := scene.CurrentPlayerCell(ctx, time.Now())
 	bestX, bestY := 0, 0
 	bestDistance := math.Inf(1)
 	found := false
 	for dy := -1; dy <= 1; dy++ {
 		for dx := -1; dx <= 1; dx++ {
 			x, y := item.X+dx, item.Y+dy
-			if !walkTargetInBounds(ctx, x, y) {
+			if !scene.WalkTargetInBounds(ctx, x, y) {
 				continue
 			}
 			dist := float64((playerX-x)*(playerX-x) + (playerY-y)*(playerY-y))
@@ -354,7 +332,7 @@ func pickupApproachCell(ctx client.Context, item worldstate.FloorItem) (int, int
 	return bestX, bestY, found
 }
 
-func (m *WorldMode) drawGroundItems(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time) {
+func (m *WorldMode) drawGroundItems(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time) {
 	items := m.collectSceneItemEntries(screen, ctx, projection, now)
 	for _, entry := range sortedSceneDrawEntries(nil, items) {
 		if entry.itemShadowIndex >= 0 {
@@ -365,7 +343,7 @@ func (m *WorldMode) drawGroundItems(screen *render.Frame, ctx client.Context, pr
 	}
 }
 
-func (m *WorldMode) collectSceneItemEntries(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time) []sceneItemDrawEntry {
+func (m *WorldMode) collectSceneItemEntries(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time) []sceneItemDrawEntry {
 	if ctx.World == nil || len(ctx.World.Items) == 0 {
 		return nil
 	}
@@ -373,20 +351,20 @@ func (m *WorldMode) collectSceneItemEntries(screen *render.Frame, ctx client.Con
 	entries := make([]sceneItemDrawEntry, 0, len(ctx.World.Items))
 	for _, item := range ctx.World.Items {
 		x, y := floorItemWorldPosition(item)
-		worldX, worldY := cellCenter(x), cellCenter(y)
-		groundZ := terrainHeightAt(ctx.World, x, y)
+		worldX, worldY := scene.CellCenter(x), scene.CellCenter(y)
+		groundZ := scene.TerrainHeightAt(ctx.World, x, y)
 		z := floorItemRenderHeight(ctx.World, item, now)
 		point := projection.Project(worldX, worldY, z)
-		if point.x < -48 || point.y < -80 || point.x > float32(width+48) || point.y > float32(height+48) {
+		if point.X < -48 || point.Y < -80 || point.X > float32(width+48) || point.Y > float32(height+48) {
 			continue
 		}
-		scale := actorBillboardScreenScale(projection, worldX, worldY, z) * groundItemScreenScale
-		shadowScale := actorBillboardScreenScale(projection, worldX, worldY, groundZ) * groundItemShadowScale
+		scale := scene.ActorBillboardScreenScale(projection, worldX, worldY, z) * groundItemScreenScale
+		shadowScale := scene.ActorBillboardScreenScale(projection, worldX, worldY, groundZ) * groundItemShadowScale
 		entries = append(entries, sceneItemDrawEntry{
 			item:        item,
 			billboard:   m.itemSpriteBillboard(ctx.Resources, item, now),
-			screenX:     float64(point.x),
-			screenY:     float64(point.y),
+			screenX:     float64(point.X),
+			screenY:     float64(point.Y),
 			worldX:      worldX,
 			worldY:      worldY,
 			worldZ:      z,
@@ -394,7 +372,7 @@ func (m *WorldMode) collectSceneItemEntries(screen *render.Frame, ctx client.Con
 			scale:       scale,
 			shadow:      actorShadowFactor(ctx.World, x, y),
 			shadowScale: shadowScale,
-			shadowDepth: projection.Depth(worldX, worldY, groundZ+actorShadowTerrainLift),
+			shadowDepth: projection.Depth(worldX, worldY, groundZ+scene.ActorShadowTerrainLift),
 			// Sort by the billboard's upper extent, as actors are. Sorting only
 			// at the ground anchor caused the slightly lifted shadow to be
 			// submitted after the item and blend over its lower pixels.
@@ -404,49 +382,49 @@ func (m *WorldMode) collectSceneItemEntries(screen *render.Frame, ctx client.Con
 	return entries
 }
 
-func groundItemBillboardSortDepth(projection sceneProjection, x, y, z float64) float64 {
+func groundItemBillboardSortDepth(projection scene.Projection, x, y, z float64) float64 {
 	footDepth := projection.Depth(x, y, z)
-	topZ := z + float64(itemBillboardHeight)*actorBillboardWorldUnitsPerSourcePixel
+	topZ := z + float64(itemBillboardHeight)*scene.ActorBillboardWorldUnitsPerSourcePixel
 	topDepth := projection.Depth(x, y, topZ)
-	if topDepth <= 0 || !isFinite(topDepth) {
+	if topDepth <= 0 || !scene.IsFinite(topDepth) {
 		return footDepth
 	}
 	return math.Min(footDepth, topDepth)
 }
 
-func (m *WorldMode) drawGroundItemShadowEntry3D(screen *render.Frame, projection sceneProjection, entry sceneItemDrawEntry) bool {
+func (m *WorldMode) drawGroundItemShadowEntry3D(screen *render.Frame, projection scene.Projection, entry sceneItemDrawEntry) bool {
 	if m.shadowView == nil || m.shadowViewMiss || entry.shadowScale <= 0 {
 		return false
 	}
-	billboard, ok := fixedSpriteBillboard(m.shadowView)
+	billboard, ok := sprites.FixedBillboard(m.shadowView)
 	if !ok {
 		return false
 	}
-	return drawSpriteShadowBillboard3D(
+	return sprites.DrawShadow3D(
 		screen,
 		projection,
 		groundItemShadowBillboard(billboard),
 		entry.worldX,
 		entry.worldY,
-		entry.groundZ+actorShadowTerrainLift,
+		entry.groundZ+scene.ActorShadowTerrainLift,
 		entry.shadowScale,
 		1,
 		entry.shadow,
 	)
 }
 
-func groundItemShadowBillboard(billboard *spriteBillboard) *spriteBillboard {
+func groundItemShadowBillboard(billboard *scene.Billboard) *scene.Billboard {
 	if billboard == nil {
 		return nil
 	}
 	out := *billboard
 	// Shift only the rendered copy in screen-oriented sprite space. A world
 	// coordinate offset would rotate around the item with the camera.
-	out.anchorY -= groundItemShadowOffsetY
+	out.AnchorY -= groundItemShadowOffsetY
 	return &out
 }
 
-func (m *WorldMode) drawGroundItemEntry3D(screen *render.Frame, projection sceneProjection, entry sceneItemDrawEntry) {
+func (m *WorldMode) drawGroundItemEntry3D(screen *render.Frame, projection scene.Projection, entry sceneItemDrawEntry) {
 	if entry.billboard != nil {
 		m.drawSpriteBillboardAlpha3D(screen, projection, entry.billboard, entry.worldX, entry.worldY, entry.worldZ, entry.scale, 1, 1)
 		return
@@ -454,7 +432,7 @@ func (m *WorldMode) drawGroundItemEntry3D(screen *render.Frame, projection scene
 	m.drawFallbackGroundItemMarker(screen, entry)
 }
 
-func (m *WorldMode) drawHoveredGroundItemLabel(screen *render.Frame, ctx client.Context, projection sceneProjection, now time.Time) {
+func (m *WorldMode) drawHoveredGroundItemLabel(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time) {
 	if ctx.Input == nil {
 		return
 	}
@@ -465,12 +443,12 @@ func (m *WorldMode) drawHoveredGroundItemLabel(screen *render.Frame, ctx client.
 	label := m.groundItemLabel(ctx, item)
 	x, y := floorItemWorldPosition(item)
 	z := floorItemRenderHeight(ctx.World, item, now)
-	point := projection.Project(cellCenter(x), cellCenter(y), z)
-	scale := actorBillboardScreenScale(projection, cellCenter(x), cellCenter(y), z) * groundItemScreenScale
-	drawGroundItemNameLabel(screen, label, float64(point.x), float64(point.y), scale)
+	point := projection.Project(scene.CellCenter(x), scene.CellCenter(y), z)
+	scale := scene.ActorBillboardScreenScale(projection, scene.CellCenter(x), scene.CellCenter(y), z) * groundItemScreenScale
+	drawGroundItemNameLabel(screen, label, float64(point.X), float64(point.Y), scale)
 }
 
-func clickedGroundItem(ctx client.Context, projection sceneProjection, mouseX, mouseY int, now time.Time) (worldstate.FloorItem, bool) {
+func clickedGroundItem(ctx client.Context, projection scene.Projection, mouseX, mouseY int, now time.Time) (worldstate.FloorItem, bool) {
 	if ctx.World == nil || len(ctx.World.Items) == 0 {
 		return worldstate.FloorItem{}, false
 	}
@@ -479,13 +457,13 @@ func clickedGroundItem(ctx client.Context, projection sceneProjection, mouseX, m
 	for _, item := range ctx.World.Items {
 		x, y := floorItemWorldPosition(item)
 		z := floorItemRenderHeight(ctx.World, item, now)
-		point := projection.Project(cellCenter(x), cellCenter(y), z)
-		scale := actorBillboardScreenScale(projection, cellCenter(x), cellCenter(y), z) * 0.42
-		if !pointInGroundItemPickBounds(float64(mouseX), float64(mouseY), float64(point.x), float64(point.y), scale*inputPickMultiplier(ctx)) {
+		point := projection.Project(scene.CellCenter(x), scene.CellCenter(y), z)
+		scale := scene.ActorBillboardScreenScale(projection, scene.CellCenter(x), scene.CellCenter(y), z) * 0.42
+		if !pointInGroundItemPickBounds(float64(mouseX), float64(mouseY), float64(point.X), float64(point.Y), scale*inputPickMultiplier(ctx)) {
 			continue
 		}
-		dx := float64(point.x) - float64(mouseX)
-		dy := float64(point.y) - float64(mouseY)
+		dx := float64(point.X) - float64(mouseX)
+		dy := float64(point.Y) - float64(mouseY)
 		distance := dx*dx + dy*dy
 		if distance < bestDistance {
 			bestDistance = distance
@@ -517,7 +495,7 @@ func floorItemWorldPosition(item worldstate.FloorItem) (float64, float64) {
 
 func floorItemRenderHeight(world *worldstate.World, item worldstate.FloorItem, now time.Time) float64 {
 	x, y := floorItemWorldPosition(item)
-	ground := terrainHeightAt(world, x, y)
+	ground := scene.TerrainHeightAt(world, x, y)
 	if !item.Falling || item.DroppedAt.IsZero() {
 		return ground
 	}
@@ -546,22 +524,22 @@ func drawGroundItemNameLabel(screen *render.Frame, label string, centerX, baseY,
 	render.DrawCenteredUIOutlinedTextAt(screen, label, centerX, labelY, itemNameLabelForeground, color.RGBA{A: 196})
 }
 
-func (m *WorldMode) itemSpriteBillboard(manager *res.Manager, item worldstate.FloorItem, now time.Time) *spriteBillboard {
+func (m *WorldMode) itemSpriteBillboard(manager *res.Manager, item worldstate.FloorItem, now time.Time) *scene.Billboard {
 	view := m.itemSpriteView(manager, item.ItemID, item.Identified)
-	if view == nil || view.act == nil || len(view.act.Actions) == 0 || len(view.act.Actions[0].Animations) == 0 {
+	if view == nil || view.Act == nil || len(view.Act.Actions) == 0 || len(view.Act.Actions[0].Animations) == 0 {
 		return nil
 	}
-	action := view.act.Actions[0]
-	motion := spriteMotionIndex(action, item.DroppedAt, now, true)
-	key := singleSpriteBillboardKey{actionIndex: 0, motion: motion}
-	if billboard, ok := view.billboards[key]; ok {
+	action := view.Act.Actions[0]
+	motion := sprites.MotionIndex(action, item.DroppedAt, now, true)
+	key := scene.SpriteBillboardKey{ActionIndex: 0, Motion: motion}
+	if billboard, ok := view.Billboards[key]; ok {
 		return billboard
 	}
 	billboard, ok := composeGroundItemBillboard(view, action.Animations[motion])
 	if !ok {
 		return nil
 	}
-	view.billboards[key] = billboard
+	view.Billboards[key] = billboard
 	return billboard
 }
 
@@ -578,7 +556,7 @@ func (m *WorldMode) drawInventoryItemIcon(screen *render.Frame, manager *res.Man
 			var opts render.DrawImageOptions
 			opts.GeoM.Scale(scale, scale)
 			opts.GeoM.Translate(float64(x)+(float64(inventoryIconSize)-dstW)/2, float64(y)+(float64(inventoryIconSize)-dstH)/2)
-			opts.Filter = spriteDrawFilter()
+			opts.Filter = scene.SpriteDrawFilter()
 			screen.DrawImage(icon, &opts)
 			return
 		}
@@ -588,11 +566,11 @@ func (m *WorldMode) drawInventoryItemIcon(screen *render.Frame, manager *res.Man
 		Identified: item.Identified,
 		DroppedAt:  time.Time{},
 	}, time.Now())
-	if billboard == nil || billboard.image == nil {
+	if billboard == nil || billboard.Image == nil {
 		m.drawFallbackInventoryItemIcon(screen, x, y)
 		return
 	}
-	bounds := visibleImageBounds(billboard.image)
+	bounds := visibleImageBounds(billboard.Image)
 	if bounds.Empty() {
 		m.drawFallbackInventoryItemIcon(screen, x, y)
 		return
@@ -614,7 +592,7 @@ func (m *WorldMode) drawInventoryItemIcon(screen *render.Frame, manager *res.Man
 		{DstX: float32(dstX), DstY: float32(dstY + dstH), SrcX: float32(bounds.Min.X), SrcY: float32(bounds.Max.Y), ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 		{DstX: float32(dstX + dstW), DstY: float32(dstY + dstH), SrcX: float32(bounds.Max.X), SrcY: float32(bounds.Max.Y), ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 	}
-	screen.DrawTrianglesOwned(vertices, quadIndices012213, billboard.image, &render.DrawTrianglesOptions{Filter: spriteDrawFilter(), Address: render.AddressClampToZero})
+	screen.DrawTrianglesOwned(vertices, scene.QuadIndices012213, billboard.Image, &render.DrawTrianglesOptions{Filter: scene.SpriteDrawFilter(), Address: render.AddressClampToZero})
 }
 
 func (m *WorldMode) itemIconTexture(manager *res.Manager, itemID uint16, identified bool) *render.Image {
@@ -626,16 +604,16 @@ func (m *WorldMode) itemIconTexture(manager *res.Manager, itemID uint16, identif
 		return nil
 	}
 	key := fmt.Sprintf("__item_icon_%t_%s", identified, resourceName)
-	if m.textures == nil {
-		m.textures = make(map[string]*render.Image)
+	if m.mapScene.Textures == nil {
+		m.mapScene.Textures = make(map[string]*render.Image)
 	}
-	if m.textureMiss == nil {
-		m.textureMiss = make(map[string]struct{})
+	if m.mapScene.TextureMiss == nil {
+		m.mapScene.TextureMiss = make(map[string]struct{})
 	}
-	if texture, ok := m.textures[key]; ok {
+	if texture, ok := m.mapScene.Textures[key]; ok {
 		return texture
 	}
-	if _, ok := m.textureMiss[key]; ok {
+	if _, ok := m.mapScene.TextureMiss[key]; ok {
 		return nil
 	}
 	// Gate the bitmap load behind a background prefetch (usually started
@@ -643,25 +621,13 @@ func (m *WorldMode) itemIconTexture(manager *res.Manager, itemID uint16, identif
 	// draw a blank icon for a few frames rather than fetching on this frame.
 	// Inventory, cart, storage, and pickup notifications all route through
 	// here, so the first sighting anywhere warms it for everywhere.
-	prefetchKey := itemSpriteKey{itemID: itemID, identified: identified}
-	if m.itemIconPrefetch == nil {
-		m.itemIconPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
-	}
-	if handle := m.itemIconPrefetch[prefetchKey]; handle != nil {
-		if !handle.Done() && !handle.Stalled(prefetchStallGrace) {
-			return nil
-		}
-	} else {
-		m.itemIconPrefetch[prefetchKey] = manager.Prefetch(res.ItemIconTextureCandidates(resourceName))
-		return nil
-	}
 	img, _, err := res.LoadImage(manager, res.ItemIconTextureCandidates(resourceName))
 	if err != nil {
-		m.textureMiss[key] = struct{}{}
+		m.mapScene.TextureMiss[key] = struct{}{}
 		return nil
 	}
 	texture := render.NewImageFromImage(img)
-	m.textures[key] = texture
+	m.mapScene.Textures[key] = texture
 	return texture
 }
 
@@ -674,25 +640,25 @@ func (m *WorldMode) itemCollectionTexture(manager *res.Manager, itemID uint16, i
 		return nil
 	}
 	key := fmt.Sprintf("__item_collection_%t_%s", identified, resourceName)
-	if m.textures == nil {
-		m.textures = make(map[string]*render.Image)
+	if m.mapScene.Textures == nil {
+		m.mapScene.Textures = make(map[string]*render.Image)
 	}
-	if m.textureMiss == nil {
-		m.textureMiss = make(map[string]struct{})
+	if m.mapScene.TextureMiss == nil {
+		m.mapScene.TextureMiss = make(map[string]struct{})
 	}
-	if texture, ok := m.textures[key]; ok {
+	if texture, ok := m.mapScene.Textures[key]; ok {
 		return texture
 	}
-	if _, ok := m.textureMiss[key]; ok {
+	if _, ok := m.mapScene.TextureMiss[key]; ok {
 		return nil
 	}
 	img, _, err := res.LoadImage(manager, res.ItemCollectionTextureCandidates(resourceName))
 	if err != nil {
-		m.textureMiss[key] = struct{}{}
+		m.mapScene.TextureMiss[key] = struct{}{}
 		return nil
 	}
 	texture := render.NewImageFromImage(img)
-	m.textures[key] = texture
+	m.mapScene.Textures[key] = texture
 	return texture
 }
 
@@ -709,7 +675,7 @@ func (m *WorldMode) drawSkillIcon(screen *render.Frame, manager *res.Manager, sk
 			var opts render.DrawImageOptions
 			opts.GeoM.Scale(scale, scale)
 			opts.GeoM.Translate(float64(x)+(float64(size)-dstW)/2, float64(y)+(float64(size)-dstH)/2)
-			opts.Filter = spriteDrawFilter()
+			opts.Filter = scene.SpriteDrawFilter()
 			screen.DrawImage(icon, &opts)
 			return
 		}
@@ -725,25 +691,25 @@ func (m *WorldMode) skillIconTexture(manager *res.Manager, skill session.Skill) 
 		resourceName = strings.ToUpper(strings.ReplaceAll(skillLabel(skill), " ", "_"))
 	}
 	key := fmt.Sprintf("__skill_icon_%d_%s", skill.ID, resourceName)
-	if m.textures == nil {
-		m.textures = make(map[string]*render.Image)
+	if m.mapScene.Textures == nil {
+		m.mapScene.Textures = make(map[string]*render.Image)
 	}
-	if m.textureMiss == nil {
-		m.textureMiss = make(map[string]struct{})
+	if m.mapScene.TextureMiss == nil {
+		m.mapScene.TextureMiss = make(map[string]struct{})
 	}
-	if texture, ok := m.textures[key]; ok {
+	if texture, ok := m.mapScene.Textures[key]; ok {
 		return texture
 	}
-	if _, ok := m.textureMiss[key]; ok {
+	if _, ok := m.mapScene.TextureMiss[key]; ok {
 		return nil
 	}
 	img, _, err := res.LoadImage(manager, res.SkillIconTextureCandidates(resourceName, int(skill.ID)))
 	if err != nil {
-		m.textureMiss[key] = struct{}{}
+		m.mapScene.TextureMiss[key] = struct{}{}
 		return nil
 	}
 	texture := render.NewImageFromImage(img)
-	m.textures[key] = texture
+	m.mapScene.Textures[key] = texture
 	return texture
 }
 
@@ -753,11 +719,11 @@ func (m *WorldMode) drawFallbackInventoryItemIcon(screen *render.Frame, x, y int
 		return
 	}
 	bounds := img.Bounds()
-	scale := float64(inventoryIconSize) / float64(maxInt(bounds.Dx(), bounds.Dy()))
+	scale := float64(inventoryIconSize) / float64(scene.MaxInt(bounds.Dx(), bounds.Dy()))
 	var opts render.DrawImageOptions
 	opts.GeoM.Scale(scale, scale)
 	opts.GeoM.Translate(float64(x), float64(y))
-	opts.Filter = spriteDrawFilter()
+	opts.Filter = scene.SpriteDrawFilter()
 	screen.DrawImage(img, &opts)
 }
 
@@ -793,12 +759,12 @@ func visibleImageBounds(img *render.Image) image.Rectangle {
 	return visible.Inset(-1).Intersect(bounds)
 }
 
-func (m *WorldMode) itemSpriteView(manager *res.Manager, itemID uint16, identified bool) *spriteView {
+func (m *WorldMode) itemSpriteView(manager *res.Manager, itemID uint16, identified bool) *scene.SpriteView {
 	if manager == nil || itemID == 0 {
 		return nil
 	}
 	if m.itemViews == nil {
-		m.itemViews = make(map[itemSpriteKey]*spriteView)
+		m.itemViews = make(map[itemSpriteKey]*scene.SpriteView)
 	}
 	if m.itemViewMiss == nil {
 		m.itemViewMiss = make(map[itemSpriteKey]struct{})
@@ -816,25 +782,7 @@ func (m *WorldMode) itemSpriteView(manager *res.Manager, itemID uint16, identifi
 		glog.Warnf("item sprite resource missing item_id=%d identified=%t", itemID, identified)
 		return nil
 	}
-	// Gate the load behind the prefetch started when the drop was announced
-	// (or right here, if this view is reached by another path): draw nothing
-	// until the files are cached, so no frame pays the fetch. The stall
-	// grace falls back to the inline load rather than dropping the sprite.
-	if m.itemViewPrefetch == nil {
-		m.itemViewPrefetch = make(map[itemSpriteKey]*res.PrefetchHandle)
-	}
-	if handle := m.itemViewPrefetch[key]; handle != nil {
-		if !handle.Done() && !handle.Stalled(prefetchStallGrace) {
-			return nil
-		}
-	} else {
-		m.itemViewPrefetch[key] = manager.Prefetch(
-			res.ItemSpriteResourceCandidates(resourceName, "act"),
-			res.ItemSpriteResourceCandidates(resourceName, "spr"),
-		)
-		return nil
-	}
-	view, status := loadSpriteView(
+	view, status := scene.LoadSpriteView(
 		manager,
 		res.ItemSpriteResourceCandidates(resourceName, "act"),
 		res.ItemSpriteResourceCandidates(resourceName, "spr"),
@@ -851,15 +799,15 @@ func (m *WorldMode) itemSpriteView(manager *res.Manager, itemID uint16, identifi
 	return view
 }
 
-func composeGroundItemBillboard(view *spriteView, anim res.ACTAnimation) (*spriteBillboard, bool) {
+func composeGroundItemBillboard(view *scene.SpriteView, anim res.ACTAnimation) (*scene.Billboard, bool) {
 	target := render.NewImage(itemBillboardWidth, itemBillboardHeight)
-	if !drawSpriteAnimation(target, view, anim, itemBillboardAnchorX, itemBillboardAnchorY, 0, 0) {
+	if !sprites.DrawAnimation(target, view, anim, itemBillboardAnchorX, itemBillboardAnchorY, 0, 0) {
 		return nil, false
 	}
-	return &spriteBillboard{
-		image:   target,
-		anchorX: itemBillboardAnchorX,
-		anchorY: itemBillboardAnchorY,
+	return &scene.Billboard{
+		Image:   target,
+		AnchorX: itemBillboardAnchorX,
+		AnchorY: itemBillboardAnchorY,
 	}, true
 }
 
@@ -877,7 +825,7 @@ func (m *WorldMode) drawFallbackGroundItemMarker(screen *render.Frame, entry sce
 	opts.GeoM.Translate(float64(-width)/2, float64(-height)+4)
 	opts.GeoM.Scale(scale, scale)
 	opts.GeoM.Translate(entry.screenX, entry.screenY)
-	opts.Filter = spriteDrawFilter()
+	opts.Filter = scene.SpriteDrawFilter()
 	screen.DrawImage(img, &opts)
 }
 

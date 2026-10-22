@@ -150,8 +150,7 @@ struct VertexOutput {
 	@location(3) fog_enabled: f32,
 }
 
-@vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn billboard_vertex(input: VertexInput, depth_only: bool) -> VertexOutput {
 	var out: VertexOutput;
 	let width = input.params[0];
 	let height = input.params[1];
@@ -164,13 +163,27 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 	let clip_z = clip[2] * 0.5 + clip[3] * 0.5;
 	let depth_z = depth_clip[2] * 0.5 + depth_clip[3] * 0.5;
 	let occlusion_z = min(clip_z, depth_z * clip[3] / max(depth_clip[3], 0.000001));
-	let final_z = max(0.0, occlusion_z - input.depth_bias * clip[3]);
+	var final_z = max(0.0, occlusion_z - input.depth_bias * clip[3]);
+	if (depth_only) {
+		let center = uniforms.c0 * input.center[0] + uniforms.c1 * input.center[1] + uniforms.c2 * input.center[2] + uniforms.c3;
+		final_z = max(0.0, center[2] / max(center[3], 0.000001) * 0.5 + 0.5 - input.depth_bias) * clip[3];
+	}
 	out.clip = vec4<f32>(clip[0], clip[1], final_z, clip[3]);
 	out.uv = input.uv;
 	out.color = input.color;
 	out.fog_depth = max(0.0, clip_z);
 	out.fog_enabled = input.fog_enabled;
 	return out;
+}
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+	return billboard_vertex(input, false);
+}
+
+@vertex
+fn vs_depth_main(input: VertexInput) -> VertexOutput {
+	return billboard_vertex(input, true);
 }
 
 @fragment

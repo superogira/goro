@@ -19,6 +19,7 @@ import (
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
@@ -478,26 +479,27 @@ func TestActorGuildEmblemRequestsFromUninitializedCache(t *testing.T) {
 }
 
 func TestSiegeGuildEmblemEligibilityAndPosition(t *testing.T) {
-	entry := sceneActorDrawEntry{
-		actor:   worldstate.Actor{GuildID: 10, EmblemVersion: 2},
-		screenX: 100,
-		screenY: 200,
-		scale:   1,
+	entry := scene.ActorDrawEntry{
+		Actor:   worldstate.Actor{GuildID: 10, EmblemVersion: 2},
+		ScreenX: 100,
+		ScreenY: 200,
+		Scale:   1,
 	}
 	if !siegeActorShowsGuildEmblem(entry) {
 		t.Fatal("visible guild actor did not qualify for a siege emblem")
 	}
-	entry.stealth = stealthHidden
+	entry.Stealth = scene.StealthHidden
+	entry.Actor.EffectState = db.EffectStateHide
 	if siegeActorShowsGuildEmblem(entry) {
 		t.Fatal("hidden actor qualified for a siege emblem")
 	}
-	entry.stealth = stealthVisible
-	entry.actor.EffectState = db.EffectStateCloak
+	entry.Stealth = scene.StealthVisible
+	entry.Actor.EffectState = db.EffectStateCloak
 	if siegeActorShowsGuildEmblem(entry) {
 		t.Fatal("cloaked actor qualified for a siege emblem")
 	}
-	entry.actor.EffectState = 0
-	x, y := siegeGuildEmblemPosition(entry.screenX, actorSpriteTopY(entry.screenY, entry.scale), 24)
+	entry.Actor.EffectState = 0
+	x, y := siegeGuildEmblemPosition(entry.ScreenX, actorSpriteTopY(entry.ScreenY, entry.Scale), 24)
 	if x != 88 || y != actorSpriteTopY(200, 1)-28 {
 		t.Fatalf("siege emblem position = %.0f,%.0f", x, y)
 	}

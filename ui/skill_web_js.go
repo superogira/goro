@@ -101,7 +101,7 @@ func (w *SkillWindow) webSkillIcon(ctx Context, skillID uint16) string {
 		return ""
 	}
 	skill, _ := shortcutSkillByID(ctx.Session, skillID)
-	return hotbarWebIcon(fmt.Sprintf("skill:%d", skillID), w.assets.SkillIconImage(ctx.Resources, skill, 24))
+	return hotbarWebIcon(fmt.Sprintf("skill:%d", skillID), w.assets.SkillIconImage(ctx.Resources, skill))
 }
 
 // handleSkillWebAction services one drained "skill:" action from the page.

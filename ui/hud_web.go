@@ -600,7 +600,7 @@ func (b *ShortcutBar) hotbarWebSync(ctx Context) {
 				skill = session.Skill{ID: b.slots[i].skillID, Level: b.slots[i].skillLevel}
 			}
 			if b.assets != nil {
-				icon = hotbarWebIcon(fmt.Sprintf("skill:%d", skill.ID), b.assets.SkillIconImage(ctx.Resources, skill, 24))
+				icon = hotbarWebIcon(fmt.Sprintf("skill:%d", skill.ID), b.assets.SkillIconImage(ctx.Resources, skill))
 			}
 			if skill.Level > 0 {
 				label = "Lv" + strconv.Itoa(maxInt(1, skill.Level))

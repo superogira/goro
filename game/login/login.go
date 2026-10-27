@@ -1052,3 +1052,15 @@ func (m *Screen) ReportMapError(mapName string) {
 	m.autoCharAttempted = true
 	m.mapError = fmt.Sprintf("Cannot load map:\n%s\nCheck your game data.\nPlease log in again.", mapName)
 }
+
+// PhaseName reports the current login phase as a page-friendly string.
+func (m *Screen) PhaseName() string {
+	switch m.phase {
+	case loginPhaseCharacter:
+		return "character"
+	case loginPhaseCreate:
+		return "create"
+	default:
+		return "account"
+	}
+}

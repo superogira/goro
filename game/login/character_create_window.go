@@ -1,6 +1,7 @@
 package login
 
 import (
+	"strconv"
 	"fmt"
 	"image"
 	"strings"
@@ -288,3 +289,35 @@ func describeMakeCharacterRefuse(code uint8) string {
 		return fmt.Sprintf("character creation refused (%d)", code)
 	}
 }
+
+// ChangeCreateHairStyle steps the character-creation hairstyle (web bridge).
+func (m *Screen) ChangeCreateHairStyle(delta int) {
+	m.changeCreateHairStyle(delta)
+}
+
+// CreateWebAction services one character-creation DOM action (web bridge).
+func (m *Screen) CreateWebAction(ctx client.Context, action string) {
+	switch {
+	case action == "create:hairprev":
+		m.changeCreateHairStyle(-1)
+	case action == "create:hairnext":
+		m.changeCreateHairStyle(1)
+	case action == "create:haircolor":
+		m.changeCreateHairColor()
+	case action == "create:submit":
+		m.submitCharacterCreate(ctx)
+	case action == "create:cancel":
+		m.cancelCharacterCreate(time.Now())
+	default:
+		if stat, err := strconv.Atoi(strings.TrimPrefix(action, "create:stat:")); err == nil {
+			if !bumpCreateStat(&m.create.stats, stat) {
+				m.status = "stat limit reached"
+			}
+		} else if strings.HasPrefix(action, "create:name:") {
+			m.create.name = appendCharacterNameInput("", strings.TrimPrefix(action, "create:name:"), charCreateNameMaxBytes)
+		}
+	}
+}
+
+// ChangeCreateHairColor cycles the hair colour (web bridge).
+func (m *Screen) ChangeCreateHairColor() { m.changeCreateHairColor() }

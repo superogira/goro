@@ -82,11 +82,11 @@ func TestPartyFooterShowsInviteForLeader(t *testing.T) {
 }
 
 func TestEmptyFriendsListExpandsAndCentersText(t *testing.T) {
-	assertEmptyListExpandsAndCenters(t, friendsList(nil), "No friends")
+	assertEmptyListExpandsAndCenters(t, (&FriendsWindow{}).friendsList(nil), "No friends")
 }
 
 func TestEmptyPartyListExpandsAndCentersText(t *testing.T) {
-	assertEmptyListExpandsAndCenters(t, partyList(session.Party{}), "No party")
+	assertEmptyListExpandsAndCenters(t, (&FriendsWindow{}).partyList(session.Party{}), "No party")
 }
 
 func TestFriendsWindowListStartsBelowTabs(t *testing.T) {
@@ -150,7 +150,7 @@ func TestPartyRowRightClickOpensContextMenu(t *testing.T) {
 		ScreenH: 600,
 	}
 	member := session.PartyMember{AccountID: 11, Name: "Alice"}
-	row := window.partyRow(window.ctx, member, 0)
+	row := window.partyRow(member, 0)
 
 	row.Event(widget.NewContext(), event.NewMouseEvent(
 		event.MousePress,

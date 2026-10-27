@@ -33,25 +33,25 @@ func (m *WorldMode) npcCutinTexture(manager *res.Manager, resource string) (*ren
 		return nil, fmt.Errorf("invalid cut-in resource %q", resource)
 	}
 	key := "__npc_cutin_" + strings.ToLower(strings.ReplaceAll(candidates[0], "\\", "/"))
-	if m.textures == nil {
-		m.textures = make(map[string]*render.Image)
+	if m.mapScene.Textures == nil {
+		m.mapScene.Textures = make(map[string]*render.Image)
 	}
-	if m.textureMiss == nil {
-		m.textureMiss = make(map[string]struct{})
+	if m.mapScene.TextureMiss == nil {
+		m.mapScene.TextureMiss = make(map[string]struct{})
 	}
-	if texture := m.textures[key]; texture != nil {
+	if texture := m.mapScene.Textures[key]; texture != nil {
 		return texture, nil
 	}
-	if _, missed := m.textureMiss[key]; missed {
+	if _, missed := m.mapScene.TextureMiss[key]; missed {
 		return nil, nil
 	}
 	img, _, err := res.LoadImage(manager, candidates)
 	if err != nil {
-		m.textureMiss[key] = struct{}{}
+		m.mapScene.TextureMiss[key] = struct{}{}
 		return nil, err
 	}
 	texture := render.NewImageFromImage(img)
-	m.textures[key] = texture
+	m.mapScene.Textures[key] = texture
 	return texture, nil
 }
 

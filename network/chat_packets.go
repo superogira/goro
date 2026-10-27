@@ -10,35 +10,36 @@ import (
 )
 
 const (
-	PacketCZRequestChatLegacy uint16 = 0x008C
-	PacketCZRequestChat       uint16 = 0x00F3
-	PacketCZWhisper           uint16 = 0x0096
-	PacketCZWhisperIgnore     uint16 = 0x00CF
-	PacketCZWhisperIgnoreAll  uint16 = 0x00D0
-	PacketCZCreateChatRoom    uint16 = 0x00D5
-	PacketCZEnterChatRoom     uint16 = 0x00D9
-	PacketCZExitChatRoom      uint16 = 0x00E3
-	PacketZCNotifyChat        uint16 = 0x008D
-	PacketZCNotifyPlayerChat  uint16 = 0x008E
-	PacketZCWhisper           uint16 = 0x0097
-	PacketZCAckWhisper        uint16 = 0x0098
-	PacketZCWhisperIgnoreAck  uint16 = 0x00D1
-	PacketZCWhisperAllAck     uint16 = 0x00D2
-	PacketZCAckCreateChatRoom uint16 = 0x00D6
-	PacketZCChatRoomBoard     uint16 = 0x00D7
-	PacketZCDestroyChatRoom   uint16 = 0x00D8
-	PacketZCChatRoomChanged   uint16 = 0x00DF
-	PacketZCChatRoomEnter     uint16 = 0x00DB
-	PacketZCChatRoomJoin      uint16 = 0x00DC
-	PacketZCChatRoomLeave     uint16 = 0x00DD
-	PacketZCChatRoomRole      uint16 = 0x00E1
-	PacketZCBroadcast         uint16 = 0x009A
-	PacketZCBroadcast2        uint16 = 0x01C3
-	PacketZCNPCChat           uint16 = 0x02C1
-	PacketZCMsg               uint16 = 0x0291
-	PacketZCMsgValue          uint16 = 0x07E2
-	PacketZCMsgSkill          uint16 = 0x07E6
-	PacketZCMsgColor          uint16 = 0x09CD
+	PacketZCTalkBoxChatContents uint16 = 0x0191
+	PacketCZRequestChatLegacy   uint16 = 0x008C
+	PacketCZRequestChat         uint16 = 0x00F3
+	PacketCZWhisper             uint16 = 0x0096
+	PacketCZWhisperIgnore       uint16 = 0x00CF
+	PacketCZWhisperIgnoreAll    uint16 = 0x00D0
+	PacketCZCreateChatRoom      uint16 = 0x00D5
+	PacketCZEnterChatRoom       uint16 = 0x00D9
+	PacketCZExitChatRoom        uint16 = 0x00E3
+	PacketZCNotifyChat          uint16 = 0x008D
+	PacketZCNotifyPlayerChat    uint16 = 0x008E
+	PacketZCWhisper             uint16 = 0x0097
+	PacketZCAckWhisper          uint16 = 0x0098
+	PacketZCWhisperIgnoreAck    uint16 = 0x00D1
+	PacketZCWhisperAllAck       uint16 = 0x00D2
+	PacketZCAckCreateChatRoom   uint16 = 0x00D6
+	PacketZCChatRoomBoard       uint16 = 0x00D7
+	PacketZCDestroyChatRoom     uint16 = 0x00D8
+	PacketZCChatRoomChanged     uint16 = 0x00DF
+	PacketZCChatRoomEnter       uint16 = 0x00DB
+	PacketZCChatRoomJoin        uint16 = 0x00DC
+	PacketZCChatRoomLeave       uint16 = 0x00DD
+	PacketZCChatRoomRole        uint16 = 0x00E1
+	PacketZCBroadcast           uint16 = 0x009A
+	PacketZCBroadcast2          uint16 = 0x01C3
+	PacketZCNPCChat             uint16 = 0x02C1
+	PacketZCMsg                 uint16 = 0x0291
+	PacketZCMsgValue            uint16 = 0x07E2
+	PacketZCMsgSkill            uint16 = 0x07E6
+	PacketZCMsgColor            uint16 = 0x09CD
 )
 
 type ChatMessage struct {
@@ -226,6 +227,16 @@ func whisperAllowByte(allow bool) byte {
 		return 1
 	}
 	return 0
+}
+
+func ParseTalkBoxChatContents(packet Packet) (ChatMessage, bool, error) {
+	if packet.ID != PacketZCTalkBoxChatContents {
+		return ChatMessage{}, false, nil
+	}
+	if len(packet.Data) < 86 {
+		return ChatMessage{}, false, fmt.Errorf("ZC_TALKBOX_CHATCONTENTS too short: %d", len(packet.Data))
+	}
+	return ChatMessage{GID: binary.LittleEndian.Uint32(packet.Data[2:6]), Text: packetCString(packet.Data[6:86])}, true, nil
 }
 
 func ParseChatMessage(packet Packet) (ChatMessage, bool, error) {

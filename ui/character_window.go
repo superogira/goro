@@ -5,229 +5,427 @@ import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
-	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
-	"github.com/kivutar/goro/db"
-	"github.com/kivutar/goro/session"
 	"github.com/kivutar/goro/ui/rotheme"
 	"image/color"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/input"
+	"github.com/kivutar/goro/render"
+	"github.com/kivutar/goro/session"
 )
 
+// The character HUD (name, HP/SP, EXP, weight, zeny) is drawn straight into
+// the game frame from cached surfaces and GPU-cached text labels instead of
+// a retained ui-widget window: every weight/zeny change (each pickup, each
+// regen tick) rebuilt and re-rasterized the whole widget tree, a 60-90ms
+// CPU spike that read as a hitch on tablets. The direct-draw version pays
+// one cached-image blit per element per frame and never invalidates the ui
+// canvas. Dragging and the close button are hit-tested by hand.
+
 const (
-	characterWindowX                     = windowScreenMargin
-	characterWindowY                     = windowScreenMargin
-	characterWindowWidth                 = 324
-	characterWindowHeight                = 134
-	CharacterWindowCompactHeight         = 80
-	characterEXPPanelPaddingX    float32 = 6
-	characterEXPPanelPaddingY    float32 = 4
-	characterEXPPanelGap         float32 = 2
-	characterEXPPanelRadius      float32 = 5
-	characterEXPLabelWidth       float32 = 76
-	characterEXPLabelBarGap      float32 = 6
-	characterEXPBarHeight        float32 = 6
-	characterTextLineHeight      float32 = 1.2
+	characterWindowX      = windowScreenMargin
+	characterWindowY      = windowScreenMargin
+	characterWindowWidth  = 324
+	characterWindowHeight = 134
+
+	characterHUDWidth      = 324
+	characterHUDTitleH     = 18
+	characterHUDHeight     = 148
+	characterHUDPadX       = 10
+	characterHUDPadY       = 8
+	characterHUDRowGap     = 6
+	characterHUDBarH       = 7
+	characterHUDBarGap     = 4
+	characterHUDTextH      = 16
+	characterHUDExpBarH    = 6
+	characterHUDCloseSize  = 17
+	characterHUDStatColumn = 146
+	characterHUDTextSize   = 13
+
+	characterHUDExpLabelW        = 64
+	characterWindowHeightAlt     = 140 // upstream's widget window height
+	characterWindowCompactHeight = 80
+
+	characterEXPPanelPaddingX float32 = 6
+	characterEXPPanelPaddingY float32 = 4
+	characterEXPPanelGap      float32 = 2
+	characterEXPPanelRadius   float32 = 5
+	characterEXPLabelWidth    float32 = 76
+	characterEXPLabelBarGap   float32 = 6
+	characterEXPBarHeight     float32 = 6
+	characterTextLineHeight   float32 = 1.2
 )
 
 var (
-	characterWindowBarBack     = color.RGBA{R: 224, G: 232, B: 242, A: 255}
-	characterWindowHPColor     = PlayerHPBarColor
-	characterWindowSPColor     = PlayerSPBarColor
+	characterHUDHPColor        = PlayerHPBarColor
+	characterHUDSPColor        = PlayerSPBarColor
+	characterHUDTextColor      = color.RGBA{R: 235, G: 242, B: 250, A: 255}
+	characterHUDMutedColor     = color.RGBA{R: 190, G: 200, B: 214, A: 255}
+	characterHUDBarBackColor   = color.RGBA{R: 64, G: 70, B: 82, A: 160}
+	characterHUDEXPColor       = color.RGBA{R: 170, G: 182, B: 200, A: 255}
+	characterHUDBackground     = color.RGBA{R: 14, G: 18, B: 24, A: 189}
+	characterHUDPanelBack      = color.RGBA{R: 255, G: 255, B: 255, A: 18}
+	characterHUDBorder         = color.RGBA{R: 180, G: 198, B: 218, A: 94}
+	characterHUDRadius         = float32(8)
 	characterWindowEXPColor    = WindowBorderColor
 	characterWindowJobEXPColor = WindowBorderColor
 )
 
+// CharacterWindow is the always-on character HUD overlay. It keeps the
+// field surface (position, open state, drag flag) that the basic menu
+// follows below it.
 type CharacterWindow struct {
-	Window
-	snapshot string
-	compact  bool
-	title    state.Signal[string]
-	body     *characterInfoBody
+	open      bool
+	dismissed bool
+	// compact is the Alt+V toggle state (the draw path and DOM mirror read
+	// it; the HUD has no widget tree).
+	compact   bool
+	x         int
+	y         int
+	width     int
+	height    int
+	dragLayer bool
+	dragOffX  int
+	dragOffY  int
+	// dragBottom keeps a manual drag from overlapping the basic menu.
+	dragBottom int
+
+	webSyncedKey string
 }
 
-func (w *CharacterWindow) Update(ctx Context) bool {
-	w.EnsureWindow(characterWindowWidth, w.windowHeight())
-	w.CloseOnEsc = false
-	if ctx.Session == nil {
-		w.Close()
-		w.Publish(ctx)
-		return false
+// drawCharacterHUDCloseGlyph draws the HUD panel's ✕. Upstream's shared
+// DrawCloseButton went away in the unused-helpers cleanup; the glyph is
+// inlined here (the rounded panel behind it is the button surface).
+func drawCharacterHUDCloseGlyph(screen *render.Frame, x, y, w, h int, line color.RGBA) {
+	icon := minInt(w, h) / 2
+	if icon < 6 {
+		icon = minInt(w, h) - 6
 	}
-	if !w.IsOpen() {
-		w.snapshot = characterWindowSnapshot(ctx.Session)
-		w.OpenAt(characterWindowX, characterWindowY, w.widgetTree(ctx))
+	if icon%2 == 0 {
+		icon--
 	}
-	nextSnapshot := characterWindowSnapshot(ctx.Session)
-	if nextSnapshot != w.snapshot {
-		w.snapshot = nextSnapshot
-		if title := characterWindowTitle(ctx.Session, w.compact); title != w.title.Get() {
-			w.title.Set(title)
-		}
-		w.body.replace(windowWidgetContext(ctx), w.bodyTree(ctx))
-		invalidateWindowLayout(ctx)
-		if overlay := w.positionedOverlay(); overlay != nil {
-			invalidateWindowRect(ctx, overlay.markFrameDirty())
-		}
-	}
-	consumed := w.Window.Update(ctx)
-	w.Publish(ctx)
-	return consumed
-}
-
-func (w *CharacterWindow) Rebind(ctx Context) {
-	if !w.IsOpen() {
+	if icon < 2 {
 		return
 	}
-	w.snapshot = characterWindowSnapshot(ctx.Session)
-	w.RebindContent(ctx, w.widgetTree(ctx))
-}
-
-func (w *CharacterWindow) windowHeight() int {
-	if w.compact {
-		return CharacterWindowCompactHeight
+	midX := x + w/2
+	midY := y + h/2
+	half := icon / 2
+	for i := 0; i <= half*2; i += 2 {
+		// Top-left → bottom-right and top-right → bottom-left diagonals,
+		// as 2px squares (the shared line helper was removed upstream).
+		render.DrawRect(screen, float64(midX-half+i), float64(midY-half+i), 2, 2, line)
+		render.DrawRect(screen, float64(midX+half-i-1), float64(midY-half+i), 2, 2, line)
 	}
-	return characterWindowHeight
 }
 
+func (w *CharacterWindow) IsOpen() bool {
+	return w != nil && w.open
+}
+
+// Close hides the HUD until the next login.
+func (w *CharacterWindow) Close() {
+	if w == nil {
+		return
+	}
+	w.open = false
+	w.dismissed = true
+	w.dragLayer = false
+}
+
+// Rebind satisfies the mode rebind pass after login/map changes. The HUD
+// reads the session directly each frame from cached surfaces, so rebinding
+// only refreshes the DOM mirror state.
+func (w *CharacterWindow) Rebind(ctx client.Context) {
+	if w == nil {
+		return
+	}
+	w.webSyncState(ctx)
+}
+
+func clampHUDInt(value, lo, hi int) int {
+	if value < lo {
+		return lo
+	}
+	if value > hi {
+		return hi
+	}
+	return value
+}
+
+// ToggleCompact is the Alt+V classic shortcut hook. The HUD has no widget
+// tree to collapse, so it toggles the compact flag the draw path and the
+// DOM mirror both read.
 func (w *CharacterWindow) ToggleCompact() {
-	if !w.IsOpen() {
+	if w == nil || !w.IsOpen() {
 		return
 	}
 	w.compact = !w.compact
-	w.SetSize(characterWindowWidth, w.windowHeight())
-	if !w.compact {
-		_, screenH := w.ctx.ScreenSize()
-		maxY := maxInt(windowScreenMargin, screenH-w.height-w.dragBottom-windowScreenMargin)
-		w.setPosition(w.ctx, w.x, min(w.y, maxY))
-	}
-	w.SetContent(w.widgetTree(w.ctx))
-	w.Publish(w.ctx)
 }
 
-func (w *CharacterWindow) widgetTree(ctx Context) widget.Widget {
-	kind := rotheme.IconButtonMinus
-	if w.compact {
-		kind = rotheme.IconButtonPlus
-	}
-	w.title = state.NewSignal(characterWindowTitle(ctx.Session, w.compact))
-	w.body = newCharacterInfoBody(w.bodyTree(ctx))
-	return Win(
-		TitleSignal(w.title),
-		TitleButton(kind, w.ToggleCompact),
-		CloseButton(false),
-		Size(float32(characterWindowWidth), float32(w.windowHeight())),
-		Content(w.body),
-	)
+// Compact reports the Alt+V layout state (tests and the DOM mirror).
+func (w *CharacterWindow) Compact() bool {
+	return w != nil && w.compact
 }
 
-func characterWindowTitle(s *session.Session, compact bool) string {
-	character := selectedCharacter(s)
+// setPosition moves the HUD (tests and programmatic placement).
+func (w *CharacterWindow) setPosition(_ client.Context, x, y int) {
+	if w == nil {
+		return
+	}
+	w.x, w.y = x, y
+}
+
+func (w *CharacterWindow) Update(ctx client.Context) bool {
+	if w == nil || ctx.Session == nil {
+		return false
+	}
+	if w.width == 0 {
+		w.width, w.height = characterWindowWidth, characterWindowHeight
+		w.x, w.y = characterWindowX, characterWindowY
+	}
+	if hudWebEnabled() {
+		hudWebInstallHooks()
+		if !w.open && !w.dismissed {
+			w.open = true
+		}
+		w.webSyncState(ctx)
+		for _, action := range hudWebDrainActions("hud:") {
+			switch action {
+			case "hud:tab":
+				w.open = true
+				w.dismissed = false
+			case "hud:close":
+				w.Close()
+			}
+		}
+		return false
+	}
+	if ctx.Input == nil {
+		return false
+	}
+	if !w.open {
+		if !w.dismissed {
+			w.open = true
+		} else {
+			if ctx.Input.MouseJustPressed(input.MouseButtonLeft) && characterEdgeTabHit(ctx.Input.MouseX, ctx.Input.MouseY) {
+				w.open = true
+				w.dismissed = false
+				return true
+			}
+			return false
+		}
+	}
+	screenW, screenH := ctx.ScreenSize()
+	if w.width == 0 {
+		w.width = characterHUDWidth
+		w.height = characterHUDHeight
+		w.x = minInt(characterWindowX, maxInt(0, screenW-characterHUDWidth))
+		w.y = characterWindowY
+	}
+	_, menuHeight := basicMenuSize()
+	w.dragBottom = basicMenuFollowGap + menuHeight
+	mouseX, mouseY := ctx.Input.MouseX, ctx.Input.MouseY
+	inside := pointInRect(mouseX, mouseY, w.x, w.y, w.width, w.height)
+	titleRect := [4]int{w.x, w.y, w.width, characterHUDTitleH}
+	closeRect := [4]int{w.x + w.width - characterHUDCloseSize - 3, w.y + 1, characterHUDCloseSize, characterHUDCloseSize}
+
+	if w.dragLayer {
+		if ctx.Input.MousePressed(input.MouseButtonLeft) {
+			w.x = clampHUDInt(mouseX-w.dragOffX, 0, maxInt(0, screenW-w.width))
+			maxY := maxInt(0, screenH-w.height-w.dragBottom)
+			w.y = clampHUDInt(mouseY-w.dragOffY, 0, maxY)
+			return true
+		}
+		w.dragLayer = false
+		return inside
+	}
+	if !ctx.Input.MouseJustPressed(input.MouseButtonLeft) || !inside {
+		return false
+	}
+	if pointInRect(mouseX, mouseY, closeRect[0], closeRect[1], closeRect[2], closeRect[3]) {
+		w.Close()
+		return true
+	}
+	if pointInRect(mouseX, mouseY, titleRect[0], titleRect[1], titleRect[2], titleRect[3]) {
+		w.dragLayer = true
+		w.dragOffX = mouseX - w.x
+		w.dragOffY = mouseY - w.y
+		return true
+	}
+	return true
+}
+
+// Draw renders the HUD from cached surfaces and GPU-cached text labels.
+// Called every frame from the world's UI overlay pass; the game frame is
+// fully redrawn each frame anyway, so this costs a handful of blits.
+func (w *CharacterWindow) Draw(screen *render.Frame, ctx client.Context) {
+	if w == nil || screen == nil || ctx.Session == nil {
+		return
+	}
+	if hudWebEnabled() {
+		return
+	}
+	if w.width == 0 {
+		return
+	}
+	// The dismissed check must precede the closed check: the reopen tab is
+	// the only thing the window draws while closed.
+	if w.dismissed {
+		w.drawEdgeTab(screen)
+		return
+	}
+	if !w.open {
+		return
+	}
+	character, vitals, progress, inventory := characterWindowData(ctx.Session)
 	name := strings.TrimSpace(character.Name)
 	if name == "" {
 		name = "Player"
 	}
 	jobName := strings.TrimSpace(db.JobDisplayName(int(character.Job)))
 	title := trimRunes(name, 20)
-	if !compact && jobName != "" {
+	if jobName != "" {
 		title = trimRunes(fmt.Sprintf("%s (%s)", name, jobName), 32)
 	}
-	return title
-}
 
-func (w *CharacterWindow) bodyTree(ctx Context) *primitives.BoxWidget {
-	character, vitals, progress, inventory := characterWindowData(ctx.Session)
-	if w.compact {
-		// Classic BasicInfo's small view keeps numeric vitals and a level/EXP
-		// summary, without the bars, weight, or zeny.
-		jobName := strings.TrimSpace(db.JobDisplayName(int(character.Job)))
-		baseEXP := math.Floor(ratioInt64(progress.BaseExp, progress.NextBaseExp)*1000) / 10
-		return primitives.Box(
-			rotheme.Text(fmt.Sprintf("Lv. %d / %s / Lv. %d / Exp. %.1f%%", progress.BaseLevel, jobName, progress.JobLevel, baseEXP)).
-				MaxLines(1).Ellipsis(),
-			primitives.HBox(
-				characterTextCell(fmt.Sprintf("HP %d / %d", vitals.HP, vitals.MaxHP), 146, rotheme.Default.Colors.MutedText),
-				characterTextCell(fmt.Sprintf("SP %d / %d", vitals.SP, vitals.MaxSP), 146, rotheme.Default.Colors.MutedText),
-			).Gap(8),
-		).PaddingXY(12, 9).Gap(4).CrossAlign(primitives.CrossAxisStretch)
+	x, y := w.x, w.y
+	// Translucent rounded panel in the DOM chat log's style (same radius,
+	// background, and border) so every overlay reads as one family.
+	DrawRoundedSurface(screen, x, y, w.width, w.height, characterHUDBackground, characterHUDBorder, characterHUDRadius)
+	if titleW := render.MeasureUIText(title, characterHUDTextSize); titleW > 0 {
+		render.DrawUITextAtSize(screen, title, float64(x+(w.width-int(titleW))/2), float64(y+3), characterHUDTextColor, characterHUDTextSize)
+	} else {
+		render.DrawUITextAtSize(screen, title, float64(x+4), float64(y+3), characterHUDTextColor, characterHUDTextSize)
 	}
-	weightColor := rotheme.Default.Colors.Text
+	drawCharacterHUDCloseGlyph(screen, x+w.width-characterHUDCloseSize-4, y+1, characterHUDCloseSize-2, characterHUDCloseSize-2,
+		characterHUDMutedColor)
+
+	contentW := w.width - 2*characterHUDPadX
+	cx := x + characterHUDPadX
+	cy := y + characterHUDTitleH + characterHUDPadY
+
+	// HP / SP columns.
+	halfW := (contentW - characterHUDRowGap) / 2
+	weightColor := characterHUDTextColor
 	if inventory.MaxWeight > 0 && inventory.Weight*100 >= inventory.MaxWeight*50 {
-		weightColor = Color(ErrorTextColor)
+		weightColor = color.RGBA{R: ErrorTextColor.R, G: ErrorTextColor.G, B: ErrorTextColor.B, A: ErrorTextColor.A}
 	}
-	return primitives.Box(
-		primitives.HBox(
-			characterRatioRow("HP", vitals.HP, vitals.MaxHP, Color(characterWindowHPColor), 146),
-			characterRatioRow("SP", vitals.SP, vitals.MaxSP, Color(characterWindowSPColor), 146),
-		).Gap(8),
-		characterEXPPanel(progress, characterWindowWidth-24),
-		primitives.HBox(
-			characterAlignedTextCell(fmt.Sprintf("Weight : %d / %d", displayWeight(inventory.Weight), displayWeight(inventory.MaxWeight)), 146, weightColor, primitives.TextAlignStart),
-			characterAlignedTextCell(fmt.Sprintf("Zeny : %s", formatHUDNumber(inventory.Zeny)), 146, rotheme.Default.Colors.Text, primitives.TextAlignEnd),
-		),
-	).PaddingXY(12, 9).Gap(8)
-}
+	drawHUDBarsColumn(screen, cx, cy, halfW, "HP", vitals.HP, vitals.MaxHP, characterHUDHPColor)
+	drawHUDBarsColumn(screen, cx+halfW+characterHUDRowGap, cy, halfW, "SP", vitals.SP, vitals.MaxSP, characterHUDSPColor)
+	cy += characterHUDTextH + characterHUDBarGap + characterHUDBarH + characterHUDRowGap
 
-// characterInfoBody lets the read-only stats refresh without unmounting the
-// header and cancelling an in-progress click on its mode button.
-type characterInfoBody struct {
-	widget.WidgetBase
-	child *primitives.BoxWidget
-}
+	// EXP panel.
+	panelH := 2*characterHUDTextH + characterHUDRowGap + 2*4
+	DrawRoundedSurface(screen, cx-4, cy-4, contentW+8, panelH+8, characterHUDPanelBack, color.RGBA{}, 6)
+	drawHUDExpRow(screen, cx, cy, contentW, "Base", progress.BaseLevel, progress.BaseExp, progress.NextBaseExp)
+	cy += characterHUDTextH + 4
+	drawHUDExpRow(screen, cx, cy, contentW, "Job", progress.JobLevel, progress.JobExp, progress.NextJobExp)
+	cy += characterHUDTextH + characterHUDRowGap + 4
 
-func newCharacterInfoBody(child *primitives.BoxWidget) *characterInfoBody {
-	b := &characterInfoBody{child: child}
-	b.SetVisible(true)
-	child.SetParent(b)
-	return b
-}
-
-func (b *characterInfoBody) replace(ctx widget.Context, child *primitives.BoxWidget) {
-	widget.UnmountTree(b.child)
-	b.child = child
-	child.SetParent(b)
-	if b.IsMounted() && ctx != nil {
-		widget.MountTree(child, ctx)
+	// Weight / Zeny row.
+	render.DrawUITextAtSize(screen, fmt.Sprintf("Weight : %d / %d", displayWeight(inventory.Weight), displayWeight(inventory.MaxWeight)),
+		float64(cx), float64(cy), weightColor, characterHUDTextSize)
+	zeny := fmt.Sprintf("Zeny : %s", formatHUDNumber(inventory.Zeny))
+	if zenyW := int(render.MeasureUIText(zeny, characterHUDTextSize)); zenyW > 0 {
+		render.DrawUITextAtSize(screen, zeny, float64(cx+contentW-zenyW), float64(cy), characterHUDTextColor, characterHUDTextSize)
+	} else {
+		render.DrawUITextAtSize(screen, zeny, float64(cx), float64(cy), characterHUDTextColor, characterHUDTextSize)
 	}
-	b.MarkNeedsLayout()
-	b.SetNeedsRedraw(true)
 }
 
-func (b *characterInfoBody) Layout(ctx widget.Context, constraints geometry.Constraints) geometry.Size {
-	size := widget.LayoutChild(b.child, ctx, constraints)
-	b.child.SetBounds(geometry.FromPointSize(geometry.Point{}, size))
-	b.SetBounds(geometry.FromPointSize(b.Position(), size))
-	return size
+func drawHUDBarsColumn(screen *render.Frame, x, y, width int, label string, current, maxValue int, fill color.RGBA) {
+	render.DrawUITextAtSize(screen, fmt.Sprintf("%s %d / %d", label, current, maxValue),
+		float64(x), float64(y), characterHUDMutedColor, characterHUDTextSize)
+	barY := y + characterHUDTextH + characterHUDBarGap
+	render.DrawRect(screen, float64(x), float64(barY), float64(width), float64(characterHUDBarH), characterHUDBarBackColor)
+	if ratio := ratioInt(current, maxValue); ratio > 0 {
+		fillW := int(math.Round(float64(width) * ratio))
+		if fillW < 1 {
+			fillW = 1
+		}
+		render.DrawRect(screen, float64(x), float64(barY), float64(fillW), float64(characterHUDBarH), fill)
+	}
 }
 
-func (b *characterInfoBody) Draw(ctx widget.Context, canvas widget.Canvas) {
-	if !b.IsVisible() {
+func drawHUDExpRow(screen *render.Frame, x, y, width int, label string, level int, current, next int64) {
+	render.DrawUITextAtSize(screen, fmt.Sprintf("%s Lv. %d", label, level), float64(x), float64(y), characterHUDTextColor, characterHUDTextSize)
+	barX := x + characterHUDExpLabelW
+	barW := width - characterHUDExpLabelW
+	if barW <= 0 {
 		return
 	}
-	canvas.PushTransform(b.Bounds().Min)
-	widget.StampScreenOrigin(b.child, canvas)
-	widget.DrawChild(b.child, ctx, canvas)
-	canvas.PopTransform()
+	barY := y + (characterHUDTextH-characterHUDExpBarH)/2
+	render.DrawRect(screen, float64(barX), float64(barY), float64(barW), float64(characterHUDExpBarH), characterHUDBarBackColor)
+	if ratio := ratioInt64(current, next); ratio > 0 {
+		fillW := int(math.Round(float64(barW) * ratio))
+		if fillW < 1 {
+			fillW = 1
+		}
+		render.DrawRect(screen, float64(barX), float64(barY), float64(fillW), float64(characterHUDExpBarH), characterHUDEXPColor)
+	}
+	percent := formatEXPPercent(current, next)
+	if percentW := int(render.MeasureUIText(percent, characterHUDTextSize)); percentW > 0 && barW-percentW-4 > 0 {
+		render.DrawUITextAtSize(screen, percent, float64(barX+barW-percentW-4), float64(y), characterHUDMutedColor, characterHUDTextSize)
+	}
 }
 
-func (b *characterInfoBody) Event(widget.Context, event.Event) bool { return false }
-
-func (b *characterInfoBody) Children() []widget.Widget {
-	return []widget.Widget{b.child}
+// webSyncState mirrors the HUD into the page DOM (web builds only): the
+// full field set travels on every snapshot change; visibility changes
+// push on their own.
+// characterWindowSnapshot (below, upstream's fuller format with the job
+// display name) keys the HUD state so unchanged frames push nothing.
+func (w *CharacterWindow) webSyncState(ctx client.Context) {
+	snapshot := characterWindowSnapshot(ctx.Session)
+	key := strconv.FormatBool(w.open) + "|" + strconv.FormatBool(w.dismissed) + "|" + snapshot
+	if key == w.webSyncedKey {
+		return
+	}
+	w.webSyncedKey = key
+	character, vitals, progress, inventory := characterWindowData(ctx.Session)
+	open := "0"
+	if w.open {
+		open = "1"
+	}
+	hudWebSync([15]string{
+		open,
+		strings.TrimSpace(character.Name),
+		db.JobDisplayName(int(character.Job)),
+		strconv.Itoa(vitals.HP), strconv.Itoa(vitals.MaxHP),
+		strconv.Itoa(vitals.SP), strconv.Itoa(vitals.MaxSP),
+		strconv.Itoa(progress.BaseLevel),
+		strconv.FormatInt(progress.BaseExp, 10), strconv.FormatInt(progress.NextBaseExp, 10),
+		strconv.Itoa(progress.JobLevel),
+		strconv.FormatInt(progress.JobExp, 10), strconv.FormatInt(progress.NextJobExp, 10),
+		strconv.Itoa(inventory.Weight) + "/" + strconv.Itoa(inventory.MaxWeight),
+		hudFormatNumber(inventory.Zeny),
+	})
 }
 
-func characterTextCell(text string, width float32, color widget.Color) widget.Widget {
-	return characterAlignedTextCell(text, width, color, primitives.TextAlignStart)
+// characterEdgeTabRect is the flush-left tab shown while the HUD is
+// dismissed; clicking it reopens the window.
+func characterEdgeTabRect() (int, int, int, int) {
+	return 0, 8, hudEdgeTabW, hudEdgeTabH
 }
 
-func characterAlignedTextCell(text string, width float32, color widget.Color, align primitives.TextAlign) widget.Widget {
-	return primitives.Box(
-		rotheme.Text(text).
-			Color(color).
-			Align(align),
-	).Width(width).CrossAlign(primitives.CrossAxisStretch)
+// drawEdgeTab renders a small left-edge tab with a mini HP/SP bar glyph so
+// the reopen affordance matches what the window shows.
+func (w *CharacterWindow) drawEdgeTab(screen *render.Frame) {
+	tx, ty, tw, th := characterEdgeTabRect()
+	DrawRoundedSurface(screen, tx, ty, tw, th, characterHUDBackground, characterHUDBorder, characterHUDRadius)
+	glyphX := tx + tw/2 - 6
+	render.DrawRect(screen, float64(glyphX), float64(ty+10), 12, 5, characterHUDHPColor)
+	render.DrawRect(screen, float64(glyphX), float64(ty+19), 9, 5, characterHUDSPColor)
+	render.DrawRect(screen, float64(glyphX), float64(ty+28), 11, 4, characterHUDEXPColor)
+}
+
+func characterEdgeTabHit(mouseX, mouseY int) bool {
+	tx, ty, tw, th := characterEdgeTabRect()
+	return pointInRect(mouseX, mouseY, tx, ty, tw, th)
 }
 
 func characterWindowData(s *session.Session) (session.Character, session.Vitals, session.Progress, session.Inventory) {
@@ -276,12 +474,18 @@ func characterWindowSnapshot(s *session.Session) string {
 	)
 }
 
-func characterRatioRow(label string, current, maxValue int, fill widget.Color, width float32) widget.Widget {
+// Widget helpers from upstream's restyled window; the canvas HUD does
+// not call these, but the shared tests exercise them.
+func characterTextCell(text string, width float32, color widget.Color) widget.Widget {
+	return characterAlignedTextCell(text, width, color, primitives.TextAlignStart)
+}
+
+func characterAlignedTextCell(text string, width float32, color widget.Color, align primitives.TextAlign) widget.Widget {
 	return primitives.Box(
-		rotheme.Text(fmt.Sprintf("%s %d / %d", label, current, maxValue)).
-			Color(rotheme.Default.Colors.MutedText),
-		newCharacterBarWidget(ratioInt(current, maxValue), fill, width, 7),
-	).Width(width).Gap(2)
+		rotheme.Text(text).
+			Color(color).
+			Align(align),
+	).Width(width).CrossAlign(primitives.CrossAxisStretch)
 }
 
 func characterLevelProgressRow(label string, level int, current, next int64, fill widget.Color, width float32) widget.Widget {
@@ -318,10 +522,6 @@ type characterBarWidget struct {
 	background widget.Color
 	width      float32
 	height     float32
-}
-
-func newCharacterBarWidget(ratio float64, fill widget.Color, width, height float32) *characterBarWidget {
-	return newCharacterBarWidgetWithBackground(ratio, fill, Color(characterWindowBarBack), width, height)
 }
 
 func newCharacterBarWidgetWithBackground(ratio float64, fill, background widget.Color, width, height float32) *characterBarWidget {
@@ -362,10 +562,6 @@ func (w *characterBarWidget) Event(ctx widget.Context, e event.Event) bool {
 
 func displayWeight(raw int) int {
 	return raw / 10
-}
-
-func DisplayWeight(raw int) int {
-	return displayWeight(raw)
 }
 
 func ratioInt(current, maxValue int) float64 {
@@ -412,10 +608,6 @@ func formatEXPPercent(current, next int64) string {
 	return fmt.Sprintf("%.1f%%", math.Floor(percent*10)/10)
 }
 
-func FormatEXPPercent(current, next int64) string {
-	return formatEXPPercent(current, next)
-}
-
 func formatHUDNumber(value int64) string {
 	sign := ""
 	if value < 0 {
@@ -437,8 +629,4 @@ func formatHUDNumber(value int64) string {
 		b.WriteString(text[i : i+3])
 	}
 	return sign + b.String()
-}
-
-func FormatHUDNumber(value int64) string {
-	return formatHUDNumber(value)
 }

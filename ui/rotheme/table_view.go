@@ -47,7 +47,6 @@ type tableViewConfig struct {
 	onRowEvent      func(int, event.Event) bool
 	onRowEventCtx   func(widget.Context, int, event.Event) bool
 
-	invalidateHover      bool
 	dispatchHoverToCells bool
 }
 
@@ -60,7 +59,6 @@ type TableViewWidget struct {
 	body   *tableViewBody
 
 	width               float32
-	height              float32
 	bodyHeight          float32
 	colWidths           []float32
 	contentW            float32
@@ -77,7 +75,6 @@ func TableView(opts ...TableViewOption) *TableViewWidget {
 		headerHeight:         Default.Typography.TextSize + TableHeaderPadY*2,
 		showHeader:           true,
 		emptyText:            "No rows",
-		invalidateHover:      true,
 		dispatchHoverToCells: true,
 	}
 	for _, opt := range opts {
@@ -170,10 +167,6 @@ func TableViewOnRowEventWithContext(onEvent func(widget.Context, int, event.Even
 	return func(c *tableViewConfig) { c.onRowEventCtx = onEvent }
 }
 
-func TableViewInvalidateHover(invalidate bool) TableViewOption {
-	return func(c *tableViewConfig) { c.invalidateHover = invalidate }
-}
-
 func TableViewDispatchHoverToCells(dispatch bool) TableViewOption {
 	return func(c *tableViewConfig) { c.dispatchHoverToCells = dispatch }
 }
@@ -194,7 +187,6 @@ func (w *TableViewWidget) Layout(ctx widget.Context, constraints geometry.Constr
 	}
 
 	w.width = size.Width
-	w.height = size.Height
 	w.bodyHeight = size.Height - w.headerHeight()
 	if w.bodyHeight < 0 {
 		w.bodyHeight = 0
@@ -766,7 +758,6 @@ func (b *tableViewBody) ensureSimpleRow(row int) *tableViewSimpleRowWidget {
 	}
 	child := &tableViewSimpleRowWidget{
 		table: b.table,
-		row:   row,
 	}
 	child.SetVisible(true)
 	child.SetEnabled(true)
@@ -846,7 +837,6 @@ func (b *tableViewBody) shouldDrawBackground(canvas widget.Canvas, bounds geomet
 type tableViewSimpleRowWidget struct {
 	widget.WidgetBase
 	table *TableViewWidget
-	row   int
 }
 
 func (r *tableViewSimpleRowWidget) Layout(_ widget.Context, constraints geometry.Constraints) geometry.Size {
@@ -1091,9 +1081,6 @@ func (w *TableViewWidget) setHoveredRow(ctx widget.Context, row int) {
 	}
 	previous := w.hoveredRow
 	w.hoveredRow = row
-	if !w.cfg.invalidateHover {
-		return
-	}
 	w.invalidateRow(ctx, previous)
 	w.invalidateRow(ctx, row)
 }

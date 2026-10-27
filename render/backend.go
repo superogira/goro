@@ -319,7 +319,6 @@ type runner struct {
 	lastUIDirtyRegions  int
 	lastUIFullRepaint   bool
 	lastUIDirtyUnion    geometry.Rect
-	lastUIDrawStats     widget.DrawStats
 	uiProfile           uiProfileStats
 }
 
@@ -1289,7 +1288,6 @@ func (r *runner) resetUIDrawMeasurement() {
 	r.lastUIDirtyRegions = 0
 	r.lastUIFullRepaint = false
 	r.lastUIDirtyUnion = geometry.Rect{}
-	r.lastUIDrawStats = widget.DrawStats{}
 }
 
 func (r *runner) drawUI(screen *Frame, width, height int, deviceScale float64) error {
@@ -1396,7 +1394,6 @@ func (r *runner) drawUISync(screen *Frame, width, height int, deviceScale float6
 		r.lastUIDirtyRegions = win.DirtyRegionCount()
 		r.lastUIFullRepaint = win.WasFullRepaint()
 		r.lastUIDirtyUnion = win.LastDirtyUnion()
-		r.lastUIDrawStats = win.LastDrawStats()
 		if uiDur > 16*time.Millisecond {
 			union := win.LastDirtyUnion()
 			glog.Errorf(
@@ -1453,7 +1450,6 @@ func (r *runner) drawUIAsync(screen *Frame, width, height int, deviceScale float
 		r.lastUIDirtyRegions = win.DirtyRegionCount()
 		r.lastUIFullRepaint = win.WasFullRepaint()
 		r.lastUIDirtyUnion = win.LastDirtyUnion()
-		r.lastUIDrawStats = win.LastDrawStats()
 		if uiDur > 16*time.Millisecond {
 			union := win.LastDirtyUnion()
 			glog.Errorf(

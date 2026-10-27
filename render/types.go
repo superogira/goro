@@ -79,6 +79,8 @@ type DrawTrianglesOptions struct {
 	DepthWrite bool
 	DepthBias  float32
 	DisableFog bool
+	// Draw translucent world geometry after sprites, testing against their silhouettes.
+	AfterBillboards bool
 }
 
 type DrawImageOptions struct {

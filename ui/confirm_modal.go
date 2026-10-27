@@ -28,7 +28,6 @@ type ConfirmModal struct {
 	onOK        func()
 	onCancel    func()
 	okOnly      bool
-	ctx         client.Context
 	openedFrame uint64
 	// webOpen marks the DOM twin as the active presentation (web build).
 	webOpen bool
@@ -53,7 +52,6 @@ func (m *ConfirmModal) OpenAlert(ctx client.Context, title, message string, onOK
 }
 
 func (m *ConfirmModal) openPrompt(ctx client.Context) {
-	m.ctx = ctx
 	m.openedFrame = 0
 	if ctx.Input != nil {
 		m.openedFrame = ctx.Input.FrameID()
@@ -71,7 +69,6 @@ func (m *ConfirmModal) openPrompt(ctx client.Context) {
 }
 
 func (m *ConfirmModal) Update(ctx client.Context) bool {
-	m.ctx = ctx
 	if !m.Window.IsOpen() {
 		return false
 	}

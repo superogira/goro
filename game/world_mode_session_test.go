@@ -2,16 +2,24 @@ package game
 
 import (
 	"encoding/binary"
+	"image"
 	"image/color"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/internal/testutil"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
+	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 	gameui "github.com/kivutar/goro/ui"
@@ -412,7 +420,7 @@ func TestHandleMapChangeSameLoadedMapReusesModeAndSnapsCamera(t *testing.T) {
 func TestMapCellUpdateChangesGATWalkability(t *testing.T) {
 	world := worldstate.New()
 	world.MapName = "geffen"
-	world.GAT = testPathGAT(3, 3, nil)
+	world.GAT = testutil.PathGAT(3, 3, nil)
 	mode := &WorldMode{hoveredWalk: hoveredWalkCellCache{valid: true}}
 
 	mode.applyMapCellUpdate(client.Context{World: world}, network.MapCellUpdate{MapName: "geffen", X: 1, Y: 2, RawType: 5})
@@ -462,12 +470,12 @@ func TestActorDisplayLabelsIncludeGuildNameOnSecondLine(t *testing.T) {
 		t.Fatalf("local labels = %#v, want Kivutar / Knights", labels)
 	}
 
-	labels = actorDisplayLabels(ctx, worldstate.Actor{ID: 300, Name: "Alice", GuildName: "Knights", HasObjectType: true, ObjectType: actorObjectTypePC}, false)
+	labels = actorDisplayLabels(ctx, worldstate.Actor{ID: 300, Name: "Alice", GuildName: "Knights", HasObjectType: true, ObjectType: scene.ActorObjectTypePC}, false)
 	if len(labels) != 2 || labels[0] != "Alice" || labels[1] != "Knights" {
 		t.Fatalf("actor labels = %#v, want Alice / Knights", labels)
 	}
 
-	labels = actorDisplayLabels(ctx, worldstate.Actor{Name: "Poring", GuildName: "Knights", HasObjectType: true, ObjectType: actorObjectTypeMob}, false)
+	labels = actorDisplayLabels(ctx, worldstate.Actor{Name: "Poring", GuildName: "Knights", HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}, false)
 	if len(labels) != 1 || labels[0] != "Poring" {
 		t.Fatalf("mob labels = %#v, want Poring only", labels)
 	}
@@ -639,8 +647,8 @@ func TestActorDisplayNameDoesNotLabelUnnamedPlayerJob(t *testing.T) {
 
 func TestHoverActorServerNameLookupIncludesCompanions(t *testing.T) {
 	for _, actor := range []worldstate.Actor{
-		{HasObjectType: true, ObjectType: actorObjectTypeHomunculus},
-		{HasObjectType: true, ObjectType: actorObjectTypeMercenary},
+		{HasObjectType: true, ObjectType: scene.ActorObjectTypeHomunculus},
+		{HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary},
 	} {
 		if !shouldUseServerNameForHoverActor(actor) {
 			t.Fatalf("companion actor should request server name: %+v", actor)
@@ -653,7 +661,7 @@ func TestHoveredActorDisplayNameUsesServerNameForNPC(t *testing.T) {
 	mode := &WorldMode{}
 	actor := worldstate.Actor{
 		Job:           84,
-		ObjectType:    actorObjectTypeNPC,
+		ObjectType:    scene.ActorObjectTypeNPC,
 		HasObjectType: true,
 	}
 
@@ -671,7 +679,7 @@ func TestHoveredActorDisplayNameUsesServerNameForMonster(t *testing.T) {
 	mode := &WorldMode{}
 	actor := worldstate.Actor{
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	}
 
@@ -820,7 +828,7 @@ func TestFormatPickupConsoleMessageFallback(t *testing.T) {
 
 func TestActorDisplayNameDoesNotLabelWarpPortal(t *testing.T) {
 	ctx := client.Context{Resources: &res.Manager{}}
-	for _, job := range []int16{actorJobWarpPortal, actorJobWarpPortalActive, actorJobWarpPortalWaiting} {
+	for _, job := range []int16{scene.ActorJobWarpPortal, scene.ActorJobWarpPortalActive, scene.ActorJobWarpPortalWaiting} {
 		actor := worldstate.Actor{Job: job}
 
 		if got := actorDisplayName(ctx, actor, false); got != "" {
@@ -829,36 +837,6 @@ func TestActorDisplayNameDoesNotLabelWarpPortal(t *testing.T) {
 		if !isWarpActor(actor) {
 			t.Fatalf("job %d expected warp actor classification", job)
 		}
-	}
-}
-
-func TestMapFadeAlphaTransitionsThroughBlack(t *testing.T) {
-	start := time.Unix(100, 0)
-	mode := &WorldMode{}
-	mode.startMapFadeOut(network.MapChange{MapName: "geffen"}, start)
-
-	if got := mode.mapFadeAlpha(start); got != 0 {
-		t.Fatalf("fade-out start alpha = %d, want 0", got)
-	}
-	if got := mode.mapFadeAlpha(start.Add(mapFadeOutDuration)); got != 255 {
-		t.Fatalf("fade-out end alpha = %d, want 255", got)
-	}
-
-	mode.mapFade = mapFadeState{phase: mapFadeHold, started: start}
-	if got := mode.mapFadeAlpha(start.Add(time.Second)); got != 255 {
-		t.Fatalf("hold alpha = %d, want 255", got)
-	}
-	mode.startMapPrewarm()
-	if got := mode.mapFadeAlpha(start.Add(time.Second)); got != 255 {
-		t.Fatalf("prewarm alpha = %d, want 255", got)
-	}
-
-	mode.startMapFadeIn(start)
-	if got := mode.mapFadeAlpha(start); got != 255 {
-		t.Fatalf("fade-in start alpha = %d, want 255", got)
-	}
-	if got := mode.mapFadeAlpha(start.Add(mapFadeInDuration)); got != 0 {
-		t.Fatalf("fade-in end alpha = %d, want 0", got)
 	}
 }
 
@@ -873,14 +851,14 @@ func TestCharacterSelectTransitionFadesOutAndIn(t *testing.T) {
 	}
 	mode := NewWorldMode()
 	mode.startCharacterSelectFadeOut(time.Now())
-	if mode.mapFade.phase != mapFadeOut || !mode.mapFade.characterSelect {
+	if mode.mapFade.Phase != maps.FadeOut || !mode.mapFade.CharacterSelect {
 		t.Fatalf("world exit fade = %+v, want character-select fade-out", mode.mapFade)
 	}
 	if next, err := mode.Update(ctx); err != nil || next != nil {
 		t.Fatalf("mode switched before world fade reached black: next=%T err=%v", next, err)
 	}
 
-	mode.mapFade.started = time.Now().Add(-mapFadeOutDuration)
+	mode.mapFade.Started = time.Now().Add(-maps.FadeOutDuration)
 	next, err := mode.Update(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -888,10 +866,10 @@ func TestCharacterSelectTransitionFadesOutAndIn(t *testing.T) {
 	if next != nil {
 		t.Fatalf("mode switched before an opaque frame was presented: %T", next)
 	}
-	if mode.mapFade.phase != mapFadeHold {
-		t.Fatalf("world fade phase = %d, want opaque hold", mode.mapFade.phase)
+	if mode.mapFade.Phase != maps.FadeHold {
+		t.Fatalf("world fade phase = %d, want opaque hold", mode.mapFade.Phase)
 	}
-	mode.recordCoveredMapFrame()
+	mode.mapFade.RecordCoveredFrame()
 	next, err = mode.Update(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -903,59 +881,23 @@ func TestCharacterSelectTransitionFadesOutAndIn(t *testing.T) {
 	if ctx.Session.Playing {
 		t.Fatal("session remained in playing state after world fade-out")
 	}
-	if login.fade.phase != loginFadeIn || !login.fade.started.IsZero() {
-		t.Fatalf("pending character-select fade = %+v, want unstarted fade-in", login.fade)
-	}
-
 	login.Enter(ctx)
-	if login.fade.started.IsZero() {
-		t.Fatal("character-select fade-in did not start after Enter")
-	}
-	if got := login.fadeAlpha(login.fade.started); got != 255 {
-		t.Fatalf("character-select fade alpha after Enter = %d, want 255", got)
-	}
-}
-
-func TestMapPrewarmCompletesBeforeFadeInStarts(t *testing.T) {
-	start := time.Unix(200, 0)
-	mode := NewWorldMode()
-	mode.startMapPrewarm()
-
-	mode.advanceMapPrewarm(start)
-	if mode.mapFade.phase != mapFadePrewarm {
-		t.Fatalf("fade phase without a rendered frame = %d, want prewarm", mode.mapFade.phase)
-	}
-
-	mode.recordCoveredMapFrame()
-	mode.advanceMapPrewarm(start)
-	if mode.mapFade.phase != mapFadePrewarm {
-		t.Fatalf("fade phase after one rendered frame = %d, want prewarm", mode.mapFade.phase)
-	}
-
-	mode.recordCoveredMapFrame()
-	mode.advanceMapPrewarm(start)
-	if mode.mapFade.phase != mapFadeIn {
-		t.Fatalf("fade phase after prewarming = %d, want fade-in", mode.mapFade.phase)
-	}
-	if !mode.mapFade.started.Equal(start) {
-		t.Fatalf("fade-in started = %s, want %s", mode.mapFade.started, start)
-	}
 }
 
 func TestMapChangeDuringPrewarmRemainsCovered(t *testing.T) {
 	mode := NewWorldMode()
-	mode.startMapPrewarm()
+	mode.mapFade.StartPrewarm()
 	change := network.MapChange{MapName: "geffen"}
 
 	mode.startMapFadeOut(change, time.Unix(300, 0))
 
-	if mode.mapFade.phase != mapFadeHold || !mode.mapFade.hasChange {
+	if mode.mapFade.Phase != maps.FadeHold || !mode.mapFade.HasChange {
 		t.Fatalf("fade after chained map change = %+v, want covered handoff", mode.mapFade)
 	}
-	if mode.mapFade.change.MapName != change.MapName {
-		t.Fatalf("pending map = %q, want %q", mode.mapFade.change.MapName, change.MapName)
+	if mode.mapFade.Change.MapName != change.MapName {
+		t.Fatalf("pending map = %q, want %q", mode.mapFade.Change.MapName, change.MapName)
 	}
-	if got := mode.mapFadeAlpha(time.Now()); got != 255 {
+	if got := mode.mapFade.Alpha(time.Now()); got != 255 {
 		t.Fatalf("chained map change alpha = %d, want 255", got)
 	}
 }
@@ -1136,10 +1078,10 @@ func TestUseItemAckAddsItemUseEffect(t *testing.T) {
 	ctx := client.Context{Session: sessionState, World: world}
 
 	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 501, AID: 2000000, Amount: 2, Result: 1})
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.actorID != 2000000 || effect.effectID != effectPotionRed || effect.x != 10 || effect.y != 20 {
+	if effect := mode.effects().Active[0]; effect.ActorID != 2000000 || effect.EffectID != effects.PotionRed || effect.X != 10 || effect.Y != 20 {
 		t.Fatalf("effect = %+v", effect)
 	}
 }
@@ -1152,10 +1094,10 @@ func TestUseItemAckYellowPotionSchedulesHealSound(t *testing.T) {
 	ctx := client.Context{Session: sessionState, World: world}
 
 	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 503, AID: 2000000, Amount: 2, Result: 1})
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.actorID != 2000000 || effect.effectID != effectPotionYellow || effect.x != 10 || effect.y != 20 {
+	if effect := mode.effects().Active[0]; effect.ActorID != 2000000 || effect.EffectID != effects.PotionYellow || effect.X != 10 || effect.Y != 20 {
 		t.Fatalf("effect = %+v", effect)
 	}
 	if len(mode.scheduledSounds) != 1 {
@@ -1178,10 +1120,10 @@ func TestUseItemAckStatFoodSchedulesHealSound(t *testing.T) {
 	ctx := client.Context{Session: sessionState, World: world}
 
 	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12041, AID: 2000000, Amount: 2, Result: 1})
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.actorID != 2000000 || effect.effectID != effectStatFoodSTR || effect.x != 10 || effect.y != 20 {
+	if effect := mode.effects().Active[0]; effect.ActorID != 2000000 || effect.EffectID != effects.StatFoodSTR || effect.X != 10 || effect.Y != 20 {
 		t.Fatalf("effect = %+v", effect)
 	}
 	if len(mode.scheduledSounds) != 1 {
@@ -1202,17 +1144,17 @@ func TestMercenaryPotionItemEffectsTargetVisibleMercenary(t *testing.T) {
 		itemID   uint16
 		effectID int
 	}{
-		{"red", 12184, effectFood},
-		{"blue", 12185, effectFood},
-		{"concentration", 12241, effectItemFast},
-		{"awakening", 12242, effectItemFast2},
-		{"berserk", 12243, effectItemFast3},
+		{"red", 12184, effects.Food},
+		{"blue", 12185, effects.Food},
+		{"concentration", 12241, effects.ItemFast},
+		{"awakening", 12242, effects.ItemFast2},
+		{"berserk", 12243, effects.ItemFast3},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			world := worldstate.New()
 			world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-			world.UpsertActor(worldstate.Actor{ID: 400, X: 13, Y: 24, HasObjectType: true, ObjectType: actorObjectTypeMercenary})
+			world.UpsertActor(worldstate.Actor{ID: 400, X: 13, Y: 24, HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary})
 			sessionState := &session.Session{
 				AccountID: 2000000,
 				Mercenary: session.Companion{
@@ -1225,10 +1167,10 @@ func TestMercenaryPotionItemEffectsTargetVisibleMercenary(t *testing.T) {
 
 			mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: tc.itemID, AID: 2000000, Amount: 2, Result: 1})
 
-			if len(mode.worldEffects) != 1 {
-				t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+			if len(mode.effects().Active) != 1 {
+				t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 			}
-			if effect := mode.worldEffects[0]; effect.actorID != 400 || effect.effectID != tc.effectID || effect.x != 13 || effect.y != 24 {
+			if effect := mode.effects().Active[0]; effect.ActorID != 400 || effect.EffectID != tc.effectID || effect.X != 13 || effect.Y != 24 {
 				t.Fatalf("effect = %+v", effect)
 			}
 		})
@@ -1244,10 +1186,10 @@ func TestMercenaryPotionItemEffectsFallbackToAckActorWithoutMercenary(t *testing
 
 	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12184, AID: 2000000, Amount: 2, Result: 1})
 
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.actorID != 2000000 || effect.effectID != effectFood || effect.x != 10 || effect.y != 20 {
+	if effect := mode.effects().Active[0]; effect.ActorID != 2000000 || effect.EffectID != effects.Food || effect.X != 10 || effect.Y != 20 {
 		t.Fatalf("effect = %+v", effect)
 	}
 }
@@ -1255,7 +1197,7 @@ func TestMercenaryPotionItemEffectsFallbackToAckActorWithoutMercenary(t *testing
 func TestRemoteMercenaryPotionItemEffectKeepsAckActor(t *testing.T) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.UpsertActor(worldstate.Actor{ID: 400, X: 13, Y: 24, HasObjectType: true, ObjectType: actorObjectTypeMercenary})
+	world.UpsertActor(worldstate.Actor{ID: 400, X: 13, Y: 24, HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary})
 	world.UpsertActor(worldstate.Actor{ID: 1100, X: 30, Y: 40})
 	sessionState := &session.Session{
 		AccountID: 2000000,
@@ -1269,10 +1211,10 @@ func TestRemoteMercenaryPotionItemEffectKeepsAckActor(t *testing.T) {
 
 	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12184, AID: 1100, Amount: 2, Result: 1})
 
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.actorID != 1100 || effect.effectID != effectFood || effect.x != 30 || effect.y != 40 {
+	if effect := mode.effects().Active[0]; effect.ActorID != 1100 || effect.EffectID != effects.Food || effect.X != 30 || effect.Y != 40 {
 		t.Fatalf("effect = %+v", effect)
 	}
 }
@@ -1280,8 +1222,8 @@ func TestRemoteMercenaryPotionItemEffectKeepsAckActor(t *testing.T) {
 func TestUseItemAckDispatchesAllMappedItemEffectArrays(t *testing.T) {
 	const itemID uint16 = 65000
 	itemEffectSpecs[itemID] = itemEffectSpec{
-		effectIDs:         []int{effectPotionRed, effectBlessing},
-		effectIDsOnCaster: []int{effectEndure},
+		effectIDs:         []int{effects.PotionRed, effects.Blessing},
+		effectIDsOnCaster: []int{effects.Endure},
 	}
 	defer delete(itemEffectSpecs, itemID)
 
@@ -1299,16 +1241,16 @@ func TestUseItemAckDispatchesAllMappedItemEffectArrays(t *testing.T) {
 		x        int
 		y        int
 	}{
-		{effectPotionRed, 1100, 12, 22},
-		{effectBlessing, 1100, 12, 22},
-		{effectEndure, 1100, 12, 22},
+		{effects.PotionRed, 1100, 12, 22},
+		{effects.Blessing, 1100, 12, 22},
+		{effects.Endure, 1100, 12, 22},
 	}
-	if len(mode.worldEffects) != len(want) {
-		t.Fatalf("world effects = %d, want %d: %+v", len(mode.worldEffects), len(want), mode.worldEffects)
+	if len(mode.effects().Active) != len(want) {
+		t.Fatalf("world effects = %d, want %d: %+v", len(mode.effects().Active), len(want), mode.effects().Active)
 	}
 	for i, wantEffect := range want {
-		got := mode.worldEffects[i]
-		if got.effectID != wantEffect.effectID || got.actorID != wantEffect.actorID || got.x != wantEffect.x || got.y != wantEffect.y {
+		got := mode.effects().Active[i]
+		if got.EffectID != wantEffect.effectID || got.ActorID != wantEffect.actorID || got.X != wantEffect.x || got.Y != wantEffect.y {
 			t.Fatalf("effect %d = %+v, want %+v", i, got, wantEffect)
 		}
 	}
@@ -1325,10 +1267,178 @@ func TestButterflyWingEffectIsPinnedAtUsePosition(t *testing.T) {
 	world.Player.X = 30
 	world.Player.Y = 40
 
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.actorID != 0 || effect.effectID != effectTeleportation || effect.x != 10 || effect.y != 20 {
+	if effect := mode.effects().Active[0]; effect.ActorID != 0 || effect.EffectID != effects.Teleportation || effect.X != 10 || effect.Y != 20 {
 		t.Fatalf("effect = %+v", effect)
 	}
+}
+
+func TestMapTextureUploadsWaitForSubmissionBeforeFade(t *testing.T) {
+	m, ctx := mapTextureFixture(t)
+	m.mapScene.PreloadTextures(ctx)
+	m.mapFade.StartPrewarm()
+	f := render.NewFrame(100, 100)
+	now := time.Now()
+	for retry := 0; retry < 2; retry++ {
+		f.BeginFrame()
+		if !m.mapScene.Images.PrepareUploads(f) || m.mapScene.Images.UploadBatch != maps.TextureUploadCount {
+			t.Fatal("did not request the bounded first batch")
+		}
+		m.mapFade.AdvancePrewarm(now, len(m.mapScene.Images.Uploads) != 0)
+		if m.mapFade.Phase != maps.FadePrewarm || len(m.mapScene.Images.Uploads) != 35 {
+			t.Fatal("skipped submission advanced loading")
+		}
+	}
+	m.FrameSubmitted()
+	if len(m.mapScene.Images.Uploads) != 3 || m.mapFade.CoveredFrames != 0 {
+		t.Fatal("upload counted as a rendered scene frame")
+	}
+	f.BeginFrame()
+	m.mapScene.Images.PrepareUploads(f)
+	m.FrameSubmitted()
+	if len(m.mapScene.Images.Uploads) != 0 || m.mapFade.CoveredFrames != 0 {
+		t.Fatal("last upload did not finish before scene warmup")
+	}
+	for i := 0; i < maps.FadePrewarmFrames; i++ {
+		m.mapFade.AdvancePrewarm(now, len(m.mapScene.Images.Uploads) != 0)
+		if m.mapFade.Phase != maps.FadePrewarm {
+			t.Fatal("fade started before scene warmup finished")
+		}
+		m.FrameSubmitted()
+	}
+	m.mapFade.AdvancePrewarm(now, len(m.mapScene.Images.Uploads) != 0)
+	if m.mapFade.Phase != maps.FadeIn {
+		t.Fatal("fade did not start after all uploads and scene frames")
+	}
+}
+
+func TestLeavingWorldReleasesMapTextures(t *testing.T) {
+	m, ctx := mapTextureFixture(t)
+	m.mapScene.PreloadTextures(ctx)
+	old := append([]*render.Image(nil), m.mapScene.Images.Uploads...)
+	manager := &Manager{ctx: ctx, mode: m}
+	manager.enter(&mapTextureExitMode{})
+	for _, img := range old {
+		if img.RGBA() != nil {
+			t.Fatal("mode change kept old map pixels alive")
+		}
+	}
+	if m.mapScene.Images.Images != nil || len(m.mapScene.Images.Uploads) != 0 {
+		t.Fatal("mode change did not cancel pending uploads")
+	}
+}
+
+type mapTextureExitMode struct{}
+
+func (*mapTextureExitMode) Name() string { return "test" }
+
+func (*mapTextureExitMode) Enter(client.Context) Mode { return nil }
+
+func (*mapTextureExitMode) Update(client.Context) (Mode, error) { return nil, nil }
+
+func (*mapTextureExitMode) Draw(client.Context, *render.Frame) {}
+
+func TestSpriteUpscalingCachesAndReleasesOnMapChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := &WorldMode{}
+		defer m.Leave()
+		source := render.NewImage(13, 9)
+		if m.spriteTexture(source) != source || m.spriteUpscaler != nil {
+			t.Fatal("disabled upscaling started work")
+		}
+		m.mapScene.UpscaleTextures = true
+		if m.spriteTexture(source) != source {
+			t.Fatal("first draw must use the original immediately")
+		}
+		synctest.Wait()
+		upscaled := m.spriteTexture(source)
+		if upscaled == source || upscaled.Bounds() != image.Rect(0, 0, 26, 18) {
+			t.Fatal("background result was not adopted")
+		}
+		if m.spriteTexture(source) != upscaled {
+			t.Fatal("repeated draws did not reuse the same texture")
+		}
+		m.Leave()
+		synctest.Wait()
+		if m.spriteUpscaler != nil || !upscaled.Bounds().Empty() || source.Bounds().Empty() {
+			t.Fatal("map exit must release upscaled images without changing the originals")
+		}
+		// A new map can reuse an original image without reusing a released result.
+		m.spriteTexture(source)
+		synctest.Wait()
+		if next := m.spriteTexture(source); next == upscaled || next.Bounds().Empty() {
+			t.Fatal("new map reused a released texture")
+		}
+	})
+}
+
+func TestManagerCloseReleasesSpriteUpscaling(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		world := &WorldMode{mapScene: maps.System{UpscaleTextures: true}}
+		defer world.Leave()
+		source := render.NewImage(16, 16)
+		world.spriteTexture(source)
+		synctest.Wait()
+		upscaled := world.spriteTexture(source)
+		if upscaled == source {
+			t.Fatal("upscaled frame was not ready")
+		}
+		manager := &Manager{mode: world}
+		manager.Close() // Game.Close uses this path when Android recreates a surface.
+		manager.Close() // Closing twice must not close the worker's channel twice.
+		synctest.Wait()
+		if !upscaled.Bounds().Empty() || source.Bounds().Empty() {
+			t.Fatal("closing must release upscaled pixels without modifying the source")
+		}
+		if manager.mode != nil || world.spriteUpscaler != nil || world.mapScene.Images.Images != nil {
+			t.Fatal("closing retained the mode or its texture cache")
+		}
+	})
+}
+
+func TestSpriteUpscalingChangesTextureWithoutMovingBillboard(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := &WorldMode{mapScene: maps.System{UpscaleTextures: true}}
+		defer m.Leave()
+		base := &scene.Billboard{Image: render.NewImage(31, 23), AnchorX: 12.5, AnchorY: 19}
+		billboard := cartOffsetBillboard(base, 7, -3)
+		projection := testutil.Projection(800, 600, 10.5, 20.5, 3)
+		draw := func() reflect.Value {
+			frame := render.NewFrame(800, 600)
+			m.drawActorSpriteBillboardTintAlpha3D(frame, projection, billboard, 10.5, 20.5, 3, 1.7, 0.6, 0.8, color.RGBA{R: 90, G: 160, B: 255, A: 200}, render.BlendSourceOver)
+			commands := reflect.ValueOf(frame).Elem().FieldByName("worldBillboards")
+			if commands.Len() != 1 {
+				t.Fatal("missing billboard command")
+			}
+			return commands.Index(0)
+		}
+		original := draw()
+		synctest.Wait()
+		upscaled := draw()
+		if original.FieldByName("Texture").Pointer() == upscaled.FieldByName("Texture").Pointer() {
+			t.Fatal("render command did not use the upscaled texture")
+		}
+		for _, name := range []string{"Width", "Height", "AnchorX", "AnchorY", "ColorR", "ColorG", "ColorB", "ColorA", "DepthBias"} {
+			if original.FieldByName(name).Float() != upscaled.FieldByName(name).Float() {
+				t.Errorf("upscaling changed %s", name)
+			}
+		}
+		for _, name := range []string{"Center", "RightAxis", "UpAxis", "DepthUpAxis"} {
+			for i := range 3 {
+				if original.FieldByName(name).Index(i).Float() != upscaled.FieldByName(name).Index(i).Float() {
+					t.Errorf("upscaling changed %s[%d]", name, i)
+				}
+			}
+		}
+		if got := m.spriteTexture(base.Image); got != m.spriteTexture(billboard.Image) {
+			t.Fatal("anchor offsets duplicated the processed texture")
+		}
+	})
+}
+
+func mapTextureFixture(t *testing.T) (*WorldMode, client.Context) {
+	t.Helper()
+	return &WorldMode{mapScene: maps.System{Textures: make(map[string]*render.Image), TextureMiss: make(map[string]struct{})}}, testutil.MapTextureContext(t)
 }

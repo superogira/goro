@@ -1,8 +1,6 @@
 package game
 
 import (
-	"fmt"
-
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/session"
@@ -25,9 +23,6 @@ func newMapErrorMode(ctx client.Context, loadErr error, console gameui.ChatConso
 	m := NewLoginMode()
 	m.console = console
 	m.console.AddErrorMessage("%s", loadErr.Error())
-	// Let the player fix their game data or explicitly log in again.
-	m.autoAttempted = true
-	m.autoCharAttempted = true
-	m.mapError = fmt.Sprintf("Cannot load map:\n%s\nCheck your game data.\nPlease log in again.", ctx.World.MapName)
+	m.ReportMapError(ctx.World.MapName)
 	return m
 }

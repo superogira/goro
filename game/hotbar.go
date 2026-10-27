@@ -1,6 +1,7 @@
 package game
 
 import (
+	"github.com/kivutar/goro/game/scene"
 	"fmt"
 	"image/color"
 	"time"
@@ -307,7 +308,7 @@ func (m *WorldMode) pushHotbarSlot(ctx client.Context, slot int) {
 		if ctx.Session != nil {
 			for _, skill := range ctx.Session.Skills.List {
 				if skill.ID == entry.skillID {
-					level = uint16(maxInt(0, int(skill.Level)))
+					level = uint16(scene.MaxInt(0, int(skill.Level)))
 					break
 				}
 			}

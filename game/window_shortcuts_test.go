@@ -24,8 +24,8 @@ func TestWindowShortcutsToggle(t *testing.T) {
 		{"cart", gpucontext.KeyW, false, func(m *WorldMode) *gameui.Window { return &m.ui.cartWindow.Window }},
 		{"chat room", gpucontext.KeyC, false, func(m *WorldMode) *gameui.Window { return &m.ui.chatRoomCreate.Window }},
 		{"pet", gpucontext.KeyJ, false, func(m *WorldMode) *gameui.Window { return &m.ui.petInfoWindow.Window }},
-		{"homunculus", gpucontext.KeyR, false, func(m *WorldMode) *gameui.Window { return &m.ui.homunculusInfo.Window }},
-		{"mercenary", gpucontext.KeyR, true, func(m *WorldMode) *gameui.Window { return &m.ui.mercenaryInfo.Window }},
+		{"homunculus", gpucontext.KeyR, false, func(m *WorldMode) *gameui.Window { return &m.ui.companions.HomunculusInfo.Window }},
+		{"mercenary", gpucontext.KeyR, true, func(m *WorldMode) *gameui.Window { return &m.ui.companions.MercenaryInfo.Window }},
 		{"settings", gpucontext.KeyO, false, func(m *WorldMode) *gameui.Window { return &m.ui.settingsWindow.Window }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestWindowShortcutsWithoutCartOrCompanion(t *testing.T) {
 		t.Fatal("unavailable mercenary shortcut was not consumed")
 	}
 	if m.ui.cartWindow.IsOpen() || ctx.Session.Cart.Open || m.ui.petInfoWindow.IsOpen() ||
-		m.petInfoRequested || m.ui.homunculusInfo.IsOpen() || m.ui.mercenaryInfo.IsOpen() {
+		m.petInfoRequested || m.ui.companions.HomunculusInfo.IsOpen() || m.ui.companions.MercenaryInfo.IsOpen() {
 		t.Fatal("opened an unavailable cart or companion window")
 	}
 }

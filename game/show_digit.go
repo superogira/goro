@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
@@ -123,17 +124,17 @@ func (m *WorldMode) drawShowDigit(screen *render.Frame, ctx client.Context, now 
 			continue
 		}
 		var opts render.DrawImageOptions
-		opts.GeoM.Translate(startX+float64(index)*showDigitStep-billboard.anchorX, showDigitTop-billboard.anchorY)
+		opts.GeoM.Translate(startX+float64(index)*showDigitStep-billboard.AnchorX, showDigitTop-billboard.AnchorY)
 		opts.Filter = render.FilterNearest
-		screen.DrawImage(billboard.image, &opts)
+		screen.DrawImage(billboard.Image, &opts)
 	}
 }
 
-func (m *WorldMode) timeFontSprite(ctx client.Context) *spriteView {
+func (m *WorldMode) timeFontSprite(ctx client.Context) *scene.SpriteView {
 	if m.timeFontView != nil || m.timeFontMiss || ctx.Resources == nil {
 		return m.timeFontView
 	}
-	view, status := loadSpriteView(ctx.Resources,
+	view, status := scene.LoadSpriteView(ctx.Resources,
 		[]string{timeFontACT, strings.ReplaceAll(timeFontACT, "\\", "/")},
 		[]string{timeFontSPR, strings.ReplaceAll(timeFontSPR, "\\", "/")},
 		nil,
@@ -149,6 +150,11 @@ func (m *WorldMode) timeFontSprite(ctx client.Context) *spriteView {
 	return view
 }
 
+// prefetchStallGrace bounds how long a draw path waits on a background
+// prefetch before falling back to the old synchronous load, so a wedged
+// fetch can never make a sprite permanently invisible.
+const prefetchStallGrace = 5 * time.Second
+
 // serverDigitSpritePrefetchGroups lists the timefont candidates for
 // background warming at map enter: server-driven digit displays (WoE
 // countdowns and friends) can start at any moment, and the first frame
@@ -160,23 +166,23 @@ func serverDigitSpritePrefetchGroups() [][]string {
 	}
 }
 
-func spriteBillboardForAction(view *spriteView, actionIndex int) (*spriteBillboard, bool) {
-	if view == nil || view.act == nil || actionIndex < 0 || actionIndex >= len(view.act.Actions) {
+func spriteBillboardForAction(view *scene.SpriteView, actionIndex int) (*scene.Billboard, bool) {
+	if view == nil || view.Act == nil || actionIndex < 0 || actionIndex >= len(view.Act.Actions) {
 		return nil, false
 	}
-	action := view.act.Actions[actionIndex]
+	action := view.Act.Actions[actionIndex]
 	if len(action.Animations) == 0 {
 		return nil, false
 	}
-	key := singleSpriteBillboardKey{actionIndex: actionIndex, motion: 0}
-	if billboard, ok := view.billboards[key]; ok {
+	key := scene.SpriteBillboardKey{ActionIndex: actionIndex, Motion: 0}
+	if billboard, ok := view.Billboards[key]; ok {
 		return billboard, true
 	}
-	billboard, ok := composeSingleSpriteBillboard(view, action.Animations[0])
+	billboard, ok := scene.ComposeSingleSpriteBillboard(view, action.Animations[0])
 	if !ok {
 		return nil, false
 	}
-	view.billboards[key] = billboard
+	view.Billboards[key] = billboard
 	return billboard, true
 }
 

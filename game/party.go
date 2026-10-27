@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -377,7 +378,7 @@ func localPartyHP(s *session.Session) (int, int) {
 }
 
 func partyMemberLifeForDisplay(ctx client.Context, actor worldstate.Actor) (actorLife, bool) {
-	if ctx.Session == nil || actor.ID == 0 || !actor.HasObjectType || actor.ObjectType != actorObjectTypePC {
+	if ctx.Session == nil || actor.ID == 0 || !actor.HasObjectType || actor.ObjectType != scene.ActorObjectTypePC {
 		return actorLife{}, false
 	}
 	for _, member := range ctx.Session.Party.Members {

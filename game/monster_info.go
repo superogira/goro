@@ -7,6 +7,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	gameui "github.com/kivutar/goro/ui"
@@ -44,7 +45,6 @@ func (m *WorldMode) applyMonsterInfo(ctx client.Context, info network.MonsterInf
 		if life, ok := m.monsterLifeForSense(actor.ID); ok && life.maxHP >= int(info.HP) {
 			maximumHP = uint32(life.maxHP)
 			life.hp = int(info.HP)
-			life.updatedAt = now
 			m.actorLife[actor.ID] = life
 		}
 	}
@@ -67,7 +67,7 @@ func (m *WorldMode) senseActor(ctx client.Context, class uint16, now time.Time) 
 	}
 	request := m.senseRequest
 	if request.targetID != 0 && now.Sub(request.requestedAt) <= senseResponseTimeout {
-		if actor, ok := ctx.World.Actors[request.targetID]; ok && uint16(actor.Job) == class && isMonsterLikeHoverActor(actor) {
+		if actor, ok := ctx.World.Actors[request.targetID]; ok && uint16(actor.Job) == class && scene.IsMonsterLikeHoverActor(actor) {
 			m.senseRequest = senseRequest{}
 			if actor.ID == 0 {
 				actor.ID = request.targetID
@@ -82,7 +82,7 @@ func (m *WorldMode) senseActor(ctx client.Context, class uint16, now time.Time) 
 
 func monsterInfoDisplayName(ctx client.Context, actor worldstate.Actor, matched bool, class uint16) string {
 	if matched {
-		if name := sanitizeActorName(actor.Name); name != "" {
+		if name := scene.SanitizeActorName(actor.Name); name != "" {
 			return name
 		}
 	}

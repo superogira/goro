@@ -123,8 +123,8 @@ func TestPrimaryStatBonusesUpdateFromServer(t *testing.T) {
 
 func TestLoginAcceptsPrimaryStatBonuses(t *testing.T) {
 	ctx := client.Context{Session: &session.Session{}}
-	mode := &LoginMode{}
-	if !mode.applyLoginParameterChange(ctx, coupleStatusPacket(uint32(network.StatusStr), 10, 2)) {
+	mode := NewLoginMode()
+	if handled, err := applyLoginWorldPacket(ctx, coupleStatusPacket(uint32(network.StatusStr), 10, 2), &mode.console); !handled || err != nil {
 		t.Fatal("login did not handle ZC_COUPLESTATUS")
 	}
 	if ctx.Session.Stats.Str != 10 || ctx.Session.Stats.StrBonus != 2 {

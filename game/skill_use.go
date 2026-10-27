@@ -2,15 +2,17 @@ package game
 
 import (
 	"fmt"
-	"github.com/kivutar/goro/glog"
-	"github.com/kivutar/goro/input"
 	"math"
 	"time"
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/companion"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/glog"
+	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
-	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
 	gameui "github.com/kivutar/goro/ui"
 	worldstate "github.com/kivutar/goro/world"
@@ -57,70 +59,16 @@ func skillLabel(skill session.Skill) string {
 	return fmt.Sprintf("Skill %d", skill.ID)
 }
 
-func knownSkillMaxLevel(skill session.Skill) int {
-	if maxLevel, ok := db.SkillMaxLevel(skill.ID); ok {
-		return maxLevel
-	}
-	if skill.MaxLevel > 0 {
-		return skill.MaxLevel
-	}
-	return 0
-}
-
-func normalizeSessionSkillLevelCap(skill session.Skill) session.Skill {
-	maxLevel := knownSkillMaxLevel(skill)
-	if maxLevel <= 0 {
-		return skill
-	}
-	skill.MaxLevel = maxLevel
-	if skill.Level > maxLevel {
-		skill.Level = maxLevel
-	}
-	return skill
-}
-
 func skillUseMaxLevel(skill session.Skill) int {
-	if maxLevel := knownSkillMaxLevel(skill); maxLevel > 0 {
+	if maxLevel := scene.KnownSkillMaxLevel(skill); maxLevel > 0 {
 		return maxLevel
 	}
-	return maxInt(1, skill.Level)
+	return scene.MaxInt(1, skill.Level)
 }
 
 func skillUseLevel(skill session.Skill) uint16 {
-	skill = normalizeSessionSkillLevelCap(skill)
-	return uint16(maxInt(1, skill.Level))
-}
-
-func sessionSkillFromNetwork(skill network.SkillInfo) session.Skill {
-	return normalizeSessionSkillLevelCap(session.Skill{
-		ID:         skill.ID,
-		Type:       skill.Type,
-		Level:      skill.Level,
-		SPCost:     skill.SPCost,
-		Range:      skill.Range,
-		Name:       skill.Name,
-		Upgradable: skill.Upgradable,
-	})
-}
-
-func sessionSkillFromNetworkWithResources(manager *res.Manager, skill network.SkillInfo) session.Skill {
-	out := sessionSkillFromNetwork(skill)
-	if manager != nil {
-		if maxLevel, ok := manager.SkillMaxLevel(int(skill.ID)); ok {
-			out.MaxLevel = maxLevel
-		}
-	}
-	return normalizeSessionSkillLevelCap(out)
-}
-
-func localSkillTarget(ctx client.Context) uint32 {
-	if ctx.Session == nil {
-		return 0
-	}
-	if ctx.Session.AccountID != 0 {
-		return ctx.Session.AccountID
-	}
-	return ctx.Session.CharID
+	skill = scene.NormalizeSessionSkillLevelCap(skill)
+	return uint16(scene.MaxInt(1, skill.Level))
 }
 
 func isGroundTargetSkill(skill session.Skill) bool {
@@ -165,9 +113,9 @@ func skillCasterForSkill(ctx client.Context, skill session.Skill) (skillCaster, 
 		}
 		id := ctx.Session.Homunculus.ID
 		if id == 0 {
-			id = findCompanionActorID(ctx, actorObjectTypeHomunculus)
+			id = companion.FindActorID(ctx, scene.ActorObjectTypeHomunculus)
 		}
-		actor, ok := companionActorByID(ctx, id)
+		actor, ok := companion.ActorByID(ctx, id)
 		if !ok {
 			return skillCaster{}, false
 		}
@@ -178,9 +126,9 @@ func skillCasterForSkill(ctx client.Context, skill session.Skill) (skillCaster, 
 		}
 		id := ctx.Session.Mercenary.ID
 		if id == 0 {
-			id = findCompanionActorID(ctx, actorObjectTypeMercenary)
+			id = companion.FindActorID(ctx, scene.ActorObjectTypeMercenary)
 		}
-		actor, ok := companionActorByID(ctx, id)
+		actor, ok := companion.ActorByID(ctx, id)
 		if !ok {
 			return skillCaster{}, false
 		}
@@ -188,7 +136,7 @@ func skillCasterForSkill(ctx client.Context, skill session.Skill) (skillCaster, 
 	default:
 		actor := ctx.World.Player
 		if actor.ID == 0 {
-			actor.ID = localSkillTarget(ctx)
+			actor.ID = scene.LocalSkillTarget(ctx)
 		}
 		return skillCaster{kind: kind, id: actor.ID, actor: actor}, true
 	}
@@ -196,10 +144,10 @@ func skillCasterForSkill(ctx client.Context, skill session.Skill) (skillCaster, 
 
 func skillCasterCell(caster skillCaster, now time.Time) (int, int) {
 	if caster.kind == skillCasterPlayer {
-		x, y := actorRenderPosition(caster.actor, now)
+		x, y := scene.ActorRenderPosition(caster.actor, now)
 		return int(math.Round(x)), int(math.Round(y))
 	}
-	return companionActorRenderCell(caster.actor, now)
+	return companion.ActorRenderCell(caster.actor, now)
 }
 
 func skillTargetRangeForCaster(caster skillCaster, skill session.Skill) int {
@@ -207,7 +155,7 @@ func skillTargetRangeForCaster(caster skillCaster, skill session.Skill) int {
 		if skill.Range > 0 {
 			return skill.Range
 		}
-		level := maxInt(1, skill.Level)
+		level := scene.MaxInt(1, skill.Level)
 		if attackRange, ok := db.SkillAttackRange(skill.ID, level); ok {
 			return attackRange
 		}
@@ -238,6 +186,7 @@ const (
 )
 
 const skillChangeCart = 154
+
 const skillGroundTextMaxBytes = 79
 
 func (c skillController) Use(ctx client.Context, skill session.Skill, source string) error {
@@ -250,7 +199,7 @@ func (c skillController) Use(ctx client.Context, skill session.Skill, source str
 	if skill.ID == 0 || skill.Level <= 0 {
 		return fmt.Errorf("skill is not learned")
 	}
-	skill = normalizeSessionSkillLevelCap(skill)
+	skill = scene.NormalizeSessionSkillLevelCap(skill)
 	if skill.Type == 0 || skillForcesPassive(skill.ID) {
 		return fmt.Errorf("passive skill")
 	}
@@ -258,7 +207,7 @@ func (c skillController) Use(ctx client.Context, skill session.Skill, source str
 		if c.mode == nil {
 			return fmt.Errorf("missing world mode")
 		}
-		target := localSkillTarget(ctx)
+		target := scene.LocalSkillTarget(ctx)
 		if target == 0 {
 			return fmt.Errorf("missing skill target")
 		}
@@ -273,7 +222,7 @@ func (c skillController) Use(ctx client.Context, skill session.Skill, source str
 		return nil
 	}
 	if isSelfTargetSkill(skill) {
-		target := localSkillTarget(ctx)
+		target := scene.LocalSkillTarget(ctx)
 		if target == 0 {
 			return fmt.Errorf("missing skill target")
 		}
@@ -284,7 +233,7 @@ func (c skillController) Use(ctx client.Context, skill session.Skill, source str
 		glog.Debugf("%s skill target pending skill=%d level=%d range=%d", source, skill.ID, skill.Level, skill.Range)
 		return nil
 	}
-	target := localSkillTarget(ctx)
+	target := scene.LocalSkillTarget(ctx)
 	if target == 0 {
 		return fmt.Errorf("missing skill target")
 	}
@@ -338,7 +287,7 @@ func (c skillController) SendToGround(ctx client.Context, skill session.Skill, x
 	if skill.ID == 0 || skill.Level <= 0 {
 		return fmt.Errorf("skill is not learned")
 	}
-	if !walkTargetInBounds(ctx, x, y) {
+	if !scene.WalkTargetInBounds(ctx, x, y) {
 		return fmt.Errorf("invalid ground target %d,%d", x, y)
 	}
 	level := skillUseLevel(skill)
@@ -359,7 +308,7 @@ func (c skillController) SendToGroundWithText(ctx client.Context, skill session.
 	if skill.ID == 0 || skill.Level <= 0 {
 		return fmt.Errorf("skill is not learned")
 	}
-	if !walkTargetInBounds(ctx, x, y) {
+	if !scene.WalkTargetInBounds(ctx, x, y) {
 		return fmt.Errorf("invalid ground target %d,%d", x, y)
 	}
 	level := skillUseLevel(skill)
@@ -398,7 +347,7 @@ func (c skillController) AdjustPendingLevelFromWheel(ctx client.Context) bool {
 		return false
 	}
 	maxLevel := pending.maxLevel
-	if knownMax := knownSkillMaxLevel(pending.skill); knownMax > 0 && (maxLevel <= 0 || knownMax < maxLevel) {
+	if knownMax := scene.KnownSkillMaxLevel(pending.skill); knownMax > 0 && (maxLevel <= 0 || knownMax < maxLevel) {
 		maxLevel = knownMax
 	}
 	if maxLevel <= 0 {
@@ -414,7 +363,7 @@ func (c skillController) AdjustPendingLevelFromWheel(ctx client.Context) bool {
 	} else {
 		level -= step
 	}
-	level = clampInt(level, 1, maxLevel)
+	level = scene.ClampInt(level, 1, maxLevel)
 	ctx.Input.WheelY = 0
 	if level == pending.skill.Level {
 		return true
@@ -425,13 +374,13 @@ func (c skillController) AdjustPendingLevelFromWheel(ctx client.Context) bool {
 	return true
 }
 
-func (c skillController) HandleClick(ctx client.Context, projection sceneProjection, now time.Time) {
+func (c skillController) HandleClick(ctx client.Context, projection scene.Projection, now time.Time) {
 	skill := c.mode.pendingSkill.skill
 	if skill.ID == 0 {
 		return
 	}
 	if isGroundTargetSkill(skill) {
-		targetX, targetY, ok := clickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY)
+		targetX, targetY, ok := maps.ClickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY)
 		if !ok {
 			glog.Debugf("skill ground target miss skill=%d mouse=%d,%d", skill.ID, ctx.Input.MouseX, ctx.Input.MouseY)
 			return
@@ -448,9 +397,9 @@ func (c skillController) HandleClick(ctx client.Context, projection sceneProject
 		}
 		return
 	}
-	actor, ok := clickedSkillTarget(ctx, projection, skill, ctx.Input.MouseX, ctx.Input.MouseY, now, c.mode.actorDeaths)
+	actor, ok := c.mode.clickedSkillTarget(ctx, projection, skill, ctx.Input.MouseX, ctx.Input.MouseY, now)
 	if !ok {
-		if x, y, groundOK := clickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); groundOK {
+		if x, y, groundOK := maps.ClickedWalkTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY); groundOK {
 			glog.Debugf("skill target canceled by ground click skill=%d mouse=%d,%d target=%d,%d", skill.ID, ctx.Input.MouseX, ctx.Input.MouseY, x, y)
 			c.Cancel("ground-click")
 			return
@@ -470,7 +419,7 @@ func (c skillController) UseTarget(ctx client.Context, skill session.Skill, acto
 	if skill.ID == 0 || skill.Level <= 0 {
 		return fmt.Errorf("skill is not learned")
 	}
-	skill = normalizeSessionSkillLevelCap(skill)
+	skill = scene.NormalizeSessionSkillLevelCap(skill)
 	if skill.Type == 0 || skillForcesPassive(skill.ID) {
 		return fmt.Errorf("passive skill")
 	}
@@ -499,11 +448,11 @@ func (c skillController) UseGround(ctx client.Context, skill session.Skill, x, y
 	if skill.ID == 0 || skill.Level <= 0 {
 		return fmt.Errorf("skill is not learned")
 	}
-	skill = normalizeSessionSkillLevelCap(skill)
+	skill = scene.NormalizeSessionSkillLevelCap(skill)
 	if skill.Type == 0 || skillForcesPassive(skill.ID) || !isGroundTargetSkill(skill) {
 		return fmt.Errorf("not a ground target skill")
 	}
-	if !walkTargetInBounds(ctx, x, y) {
+	if !scene.WalkTargetInBounds(ctx, x, y) {
 		return fmt.Errorf("invalid ground target %d,%d", x, y)
 	}
 	if ctx.Network == nil {
@@ -524,15 +473,19 @@ func (pending pendingSkillTarget) hasTarget() bool {
 	return pending.ground || pending.targetID != 0
 }
 
-func (pending pendingSkillTarget) targetCell(ctx client.Context, now time.Time) (int, int, bool) {
+func (c skillController) targetCell(ctx client.Context, pending pendingSkillTarget, now time.Time) (int, int, bool) {
 	if pending.ground {
-		return pending.x, pending.y, walkTargetInBounds(ctx, pending.x, pending.y)
+		return pending.x, pending.y, scene.WalkTargetInBounds(ctx, pending.x, pending.y)
+	}
+	if pending.skill.Type&skillTargetTrap != 0 {
+		unit, ok := c.mode.skillUnitModels[pending.targetID]
+		return unit.x, unit.y, ok
 	}
 	actor, ok := ctx.World.Actors[pending.targetID]
 	if !ok {
 		return 0, 0, false
 	}
-	x, y := actorCurrentCell(actor, now)
+	x, y := scene.ActorCurrentCell(actor, now)
 	return x, y, true
 }
 
@@ -547,7 +500,7 @@ func (c skillController) sendTarget(ctx client.Context, pending pendingSkillTarg
 }
 
 func (c skillController) chaseTargetIfNeeded(ctx client.Context, skill session.Skill, actor worldstate.Actor, source string) bool {
-	x, y := actorCurrentCell(actor, time.Now())
+	x, y := scene.ActorCurrentCell(actor, time.Now())
 	return c.chaseSkillTargetIfNeeded(ctx, pendingSkillTarget{skill: skill, targetID: actor.ID}, x, y, source)
 }
 
@@ -613,7 +566,7 @@ func (c skillController) requestSkillCasterMove(ctx client.Context, caster skill
 		glog.Warnf("%s companion move failed caster=%s caster_id=%d target=%d,%d: not connected", source, skillCasterKindName(caster.kind), caster.id, targetX, targetY)
 		return
 	}
-	if !walkTargetInBounds(ctx, targetX, targetY) {
+	if !scene.WalkTargetInBounds(ctx, targetX, targetY) {
 		glog.Warnf("%s companion move blocked caster=%s caster_id=%d target=%d,%d", source, skillCasterKindName(caster.kind), caster.id, targetX, targetY)
 		return
 	}
@@ -637,7 +590,7 @@ func (c skillController) UpdatePendingTarget(ctx client.Context, source string, 
 		c.mode.pendingSkill = pendingSkillTarget{}
 		return
 	}
-	targetX, targetY, ok := pending.targetCell(ctx, now)
+	targetX, targetY, ok := c.targetCell(ctx, pending, now)
 	if !ok {
 		glog.Debugf("%s pending skill target vanished skill=%d target=%d", source, pending.skill.ID, pending.targetID)
 		c.mode.pendingSkill = pendingSkillTarget{}
@@ -670,7 +623,7 @@ func (c skillController) UpdatePendingTarget(ctx client.Context, source string, 
 	}
 	c.mode.pendingSkill = pending
 	if logOutOfRange {
-		glog.Debugf("%s pending skill scheduled skill=%d caster=%s caster_id=%d target=%d delay_ms=%d", source, pending.skill.ID, skillCasterKindName(caster.kind), caster.id, pending.targetID, maxInt(0, int(pending.readyAt.Sub(now).Milliseconds())))
+		glog.Debugf("%s pending skill scheduled skill=%d caster=%s caster_id=%d target=%d delay_ms=%d", source, pending.skill.ID, skillCasterKindName(caster.kind), caster.id, pending.targetID, scene.MaxInt(0, int(pending.readyAt.Sub(now).Milliseconds())))
 	}
 }
 
@@ -688,7 +641,7 @@ func (c skillController) ProcessPendingTarget(ctx client.Context) {
 	if now.Before(pending.readyAt) {
 		return
 	}
-	targetX, targetY, ok := pending.targetCell(ctx, now)
+	targetX, targetY, ok := c.targetCell(ctx, pending, now)
 	if !ok {
 		glog.Debugf("pending skill target vanished skill=%d target=%d", pending.skill.ID, pending.targetID)
 		c.mode.pendingSkill = pendingSkillTarget{}
@@ -718,7 +671,7 @@ func (c skillController) ProcessPendingTarget(ctx client.Context) {
 }
 
 func (c skillController) ApplyAutoRun(ctx client.Context, auto network.AutoRunSkill) {
-	skill := sessionSkillFromNetwork(auto.Skill)
+	skill := scene.SessionSkillFromNetwork(auto.Skill)
 	glog.Debugf("auto-run skill received skill=%d level=%d type=%d range=%d name=%q", skill.ID, skill.Level, skill.Type, skill.Range, skill.Name)
 	if err := c.Use(ctx, skill, "auto"); err != nil {
 		glog.Warnf("auto-run skill use failed skill=%d: %v", skill.ID, err)
@@ -733,12 +686,7 @@ func skillTargetOverrideActive(ctx client.Context) bool {
 func targetSkillRange(skill session.Skill) int {
 	// robr approaches player skill targets within a circle of server range + 1.
 	// This fits rAthena's truncated client distance without using square corners.
-	return maxInt(1, skill.Range+1)
-}
-
-func targetSkillWithinRangeFrom(sourceX, sourceY, skillRange int, actor worldstate.Actor) bool {
-	targetX, targetY := actorCurrentCell(actor, time.Now())
-	return targetSkillWithinRangeCells(sourceX, sourceY, targetX, targetY, skillRange)
+	return scene.MaxInt(1, skill.Range+1)
 }
 
 func targetSkillWithinRangeCells(sourceX, sourceY, targetX, targetY, skillRange int) bool {

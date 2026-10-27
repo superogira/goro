@@ -20,7 +20,8 @@ type WorldCommand struct {
 }
 
 type WorldBillboardCommand struct {
-	Texture     *Image
+	Texture *Image
+	// DepthWrite stamps a flat silhouette after sprite colours, for translucent geometry.
 	Options     DrawTrianglesOptions
 	Center      [3]float32
 	RightAxis   [3]float32

@@ -6,6 +6,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
@@ -16,7 +17,7 @@ func TestPvPMapAllowsPlayerAttackAndEnemySkillTargets(t *testing.T) {
 	world.MapProperty = worldstate.MapPropertyFreePvPZone
 	actor := worldstate.Actor{
 		ID:            300,
-		ObjectType:    actorObjectTypePC,
+		ObjectType:    scene.ActorObjectTypePC,
 		HasObjectType: true,
 	}
 	ctx := client.Context{
@@ -58,16 +59,16 @@ func TestPvPTargetsLegacyPlayerEntryWithoutObjectType(t *testing.T) {
 
 	explicitMob := legacyPlayer
 	explicitMob.HasObjectType = true
-	explicitMob.ObjectType = actorObjectTypeMob
+	explicitMob.ObjectType = scene.ActorObjectTypeMob
 	if !actorCanBeAttackClicked(ctx, explicitMob) {
 		t.Fatal("explicit mob stopped being attackable")
 	}
-	if actorRepresentsPlayer(explicitMob) {
+	if scene.ActorRepresentsPlayer(explicitMob) {
 		t.Fatal("explicit mob was classified as a player from its job value")
 	}
 
 	moveOnly := worldstate.Actor{ID: 400, Job: db.JobNovice}
-	if actorRepresentsPlayer(moveOnly) || actorCanBeAttackClicked(ctx, moveOnly) {
+	if scene.ActorRepresentsPlayer(moveOnly) || actorCanBeAttackClicked(ctx, moveOnly) {
 		t.Fatal("movement-only actor was classified as a player from its zero-value job")
 	}
 }
@@ -79,9 +80,9 @@ func TestWoETargetingUsesGuildRelationship(t *testing.T) {
 		Session: &session.Session{AccountID: 100, CharID: 200, Guild: session.Guild{ID: 10}},
 		World:   world,
 	}
-	enemy := worldstate.Actor{ID: 300, GuildID: 20, ObjectType: actorObjectTypePC, HasObjectType: true}
-	guildless := worldstate.Actor{ID: 301, ObjectType: actorObjectTypePC, HasObjectType: true}
-	mate := worldstate.Actor{ID: 302, GuildID: 10, ObjectType: actorObjectTypePC, HasObjectType: true}
+	enemy := worldstate.Actor{ID: 300, GuildID: 20, ObjectType: scene.ActorObjectTypePC, HasObjectType: true}
+	guildless := worldstate.Actor{ID: 301, ObjectType: scene.ActorObjectTypePC, HasObjectType: true}
+	mate := worldstate.Actor{ID: 302, GuildID: 10, ObjectType: scene.ActorObjectTypePC, HasObjectType: true}
 
 	for _, actor := range []worldstate.Actor{enemy, guildless} {
 		if !actorCanBeAttackClicked(ctx, actor) || !actorCanBeSkillTargeted(ctx, session.Skill{Type: skillTargetEnemy}, actor) {
@@ -110,8 +111,8 @@ func TestWoETargetingIncludesEnemyCompanions(t *testing.T) {
 		ownID      uint32
 		enemyID    uint32
 	}{
-		{name: "homunculus", objectType: actorObjectTypeHomunculus, ownID: 400, enemyID: 401},
-		{name: "mercenary", objectType: actorObjectTypeMercenary, ownID: 500, enemyID: 501},
+		{name: "homunculus", objectType: scene.ActorObjectTypeHomunculus, ownID: 400, enemyID: 401},
+		{name: "mercenary", objectType: scene.ActorObjectTypeMercenary, ownID: 500, enemyID: 501},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			enemy := worldstate.Actor{ID: tc.enemyID, GuildID: 20, ObjectType: tc.objectType, HasObjectType: true}
@@ -134,7 +135,7 @@ func TestWoETargetingIncludesEnemyCompanions(t *testing.T) {
 func TestWoEShowsPlayerNameLabels(t *testing.T) {
 	state := worldstate.New()
 	ctx := client.Context{World: state}
-	actor := worldstate.Actor{Name: "Enemy", ObjectType: actorObjectTypePC, HasObjectType: true}
+	actor := worldstate.Actor{Name: "Enemy", ObjectType: scene.ActorObjectTypePC, HasObjectType: true}
 	mode := &WorldMode{}
 	if labels := mode.hoveredActorDisplayLabels(ctx, actor, time.Time{}); len(labels) == 0 || labels[0] != "Enemy" {
 		t.Fatalf("ordinary-map player labels = %q", labels)

@@ -8,22 +8,25 @@ import (
 	"github.com/gogpu/ui/primitives"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/internal/testutil"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
-	gameui "github.com/kivutar/goro/ui"
 	worldstate "github.com/kivutar/goro/world"
 )
 
-func cursorHoverTestContext(actor worldstate.Actor) (client.Context, sceneProjection) {
+func cursorHoverTestContext(actor worldstate.Actor) (client.Context, scene.Projection) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 200, X: 10, Y: 20}
 	world.UpsertActor(actor)
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
-	point := projection.Project(cellCenter(float64(actor.X)), cellCenter(float64(actor.Y)), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
+	point := projection.Project(scene.CellCenter(float64(actor.X)), scene.CellCenter(float64(actor.Y)), 0)
 	inputState := input.NewState()
-	inputState.SetMousePosition(int(point.x), int(point.y))
+	inputState.SetMousePosition(int(point.X), int(point.Y))
 	return client.Context{
 		Input:   inputState,
 		Session: &session.Session{AccountID: 100, CharID: 200},
@@ -40,22 +43,22 @@ func TestClickedSkillTargetUsesRobrowserTargetFlags(t *testing.T) {
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypePC,
+		ObjectType:    scene.ActorObjectTypePC,
 		HasObjectType: true,
 	})
 	ctx := client.Context{
 		Session: &session.Session{AccountID: 100, CharID: 200},
 		World:   world,
 	}
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
-	playerPoint := projection.Project(cellCenter(10), cellCenter(20), 0)
-	pcPoint := projection.Project(cellCenter(11), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
+	playerPoint := projection.Project(scene.CellCenter(10), scene.CellCenter(20), 0)
+	pcPoint := projection.Project(scene.CellCenter(11), scene.CellCenter(20), 0)
 
-	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 6, Type: skillTargetEnemy}, int(playerPoint.x), int(playerPoint.y), now, nil); ok {
+	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 6, Type: skillTargetEnemy}, int(playerPoint.X), int(playerPoint.Y), now, nil); ok {
 		t.Fatalf("enemy skill should not self-target: %+v", actor)
 	}
 
-	actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 28, Type: skillTargetFriend}, int(playerPoint.x), int(playerPoint.y), now, nil)
+	actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 28, Type: skillTargetFriend}, int(playerPoint.X), int(playerPoint.Y), now, nil)
 	if !ok {
 		t.Fatal("expected friend skill to target local player")
 	}
@@ -63,11 +66,11 @@ func TestClickedSkillTargetUsesRobrowserTargetFlags(t *testing.T) {
 		t.Fatalf("target id = %d, want local account id 100", actor.ID)
 	}
 
-	actor, ok = clickedSkillTarget(ctx, projection, session.Skill{ID: 29, Type: skillTargetFriend}, int(pcPoint.x), int(pcPoint.y), now, nil)
+	actor, ok = clickedSkillTarget(ctx, projection, session.Skill{ID: 29, Type: skillTargetFriend}, int(pcPoint.X), int(pcPoint.Y), now, nil)
 	if !ok || actor.ID != 300 {
 		t.Fatalf("friend skill target = %+v ok=%t, want pc 300", actor, ok)
 	}
-	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 13, Type: skillTargetEnemy}, int(pcPoint.x), int(pcPoint.y), now, nil); ok {
+	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 13, Type: skillTargetEnemy}, int(pcPoint.X), int(pcPoint.Y), now, nil); ok {
 		t.Fatalf("enemy skill should not target pc outside pvp: %+v", actor)
 	}
 
@@ -77,18 +80,18 @@ func TestClickedSkillTargetUsesRobrowserTargetFlags(t *testing.T) {
 		ID:            400,
 		X:             12,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	ctx.World = world
-	projection = newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
-	mobPoint := projection.Project(cellCenter(12), cellCenter(20), 0)
+	projection = testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
+	mobPoint := projection.Project(scene.CellCenter(12), scene.CellCenter(20), 0)
 
-	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 29, Type: skillTargetFriend}, int(mobPoint.x), int(mobPoint.y), now, nil); ok {
+	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 29, Type: skillTargetFriend}, int(mobPoint.X), int(mobPoint.Y), now, nil); ok {
 		t.Fatalf("friend skill should not target mob without noshift: %+v", actor)
 	}
 
-	actor, ok = clickedSkillTarget(ctx, projection, session.Skill{ID: 13, Type: skillTargetEnemy}, int(mobPoint.x), int(mobPoint.y), now, nil)
+	actor, ok = clickedSkillTarget(ctx, projection, session.Skill{ID: 13, Type: skillTargetEnemy}, int(mobPoint.X), int(mobPoint.Y), now, nil)
 	if !ok || actor.ID != 400 {
 		t.Fatalf("enemy skill target = %+v ok=%t, want mob 400", actor, ok)
 	}
@@ -102,17 +105,17 @@ func TestClickedSkillTargetNoShiftAllowsSupportOnEnemies(t *testing.T) {
 		ID:            400,
 		X:             12,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	ctx := client.Context{
 		Session: &session.Session{AccountID: 100, CharID: 200, NoShift: true},
 		World:   world,
 	}
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
-	mobPoint := projection.Project(cellCenter(12), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
+	mobPoint := projection.Project(scene.CellCenter(12), scene.CellCenter(20), 0)
 
-	actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 28, Type: skillTargetFriend}, int(mobPoint.x), int(mobPoint.y), now, nil)
+	actor, ok := clickedSkillTarget(ctx, projection, session.Skill{ID: 28, Type: skillTargetFriend}, int(mobPoint.X), int(mobPoint.Y), now, nil)
 	if !ok || actor.ID != 400 {
 		t.Fatalf("noshift friend skill target = %+v ok=%t, want mob 400", actor, ok)
 	}
@@ -126,7 +129,7 @@ func TestResurrectionCanTargetDeadPlayer(t *testing.T) {
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypePC,
+		ObjectType:    scene.ActorObjectTypePC,
 		HasObjectType: true,
 	}
 	world.UpsertActor(deadPlayer)
@@ -134,19 +137,19 @@ func TestResurrectionCanTargetDeadPlayer(t *testing.T) {
 		Session: &session.Session{AccountID: 100, CharID: 200},
 		World:   world,
 	}
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
-	point := projection.Project(cellCenter(11), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
+	point := projection.Project(scene.CellCenter(11), scene.CellCenter(20), 0)
 	deaths := map[uint32]time.Time{deadPlayer.ID: {}}
 
 	actor, ok := clickedSkillTarget(ctx, projection, session.Skill{
 		ID: db.SkillALLResurrection, Type: skillTargetFriend,
-	}, int(point.x), int(point.y), now, deaths)
+	}, int(point.X), int(point.Y), now, deaths)
 	if !ok || actor.ID != deadPlayer.ID {
 		t.Fatalf("Resurrection target = %+v ok=%t, want dead player %d", actor, ok, deadPlayer.ID)
 	}
 	if actor, ok := clickedSkillTarget(ctx, projection, session.Skill{
 		ID: db.SkillALHeal, Type: skillTargetFriend,
-	}, int(point.x), int(point.y), now, deaths); ok && actor.ID == deadPlayer.ID {
+	}, int(point.X), int(point.Y), now, deaths); ok && actor.ID == deadPlayer.ID {
 		t.Fatalf("ordinary support skill targeted dead player: %+v", actor)
 	}
 }
@@ -197,7 +200,7 @@ func TestNormalAttackRangeUsesMovingActorCurrentCell(t *testing.T) {
 		},
 	}
 
-	targetX, targetY := actorCurrentCell(target, now)
+	targetX, targetY := scene.ActorCurrentCell(target, now)
 	if !normalAttackTargetWithinRange(11, 10, targetX, targetY, 9) {
 		t.Fatal("moving target should be in range at its current rendered cell")
 	}
@@ -220,7 +223,7 @@ func TestAttackApproachCellChoosesClosestWalkableNeighbor(t *testing.T) {
 	ctx := client.Context{World: world}
 	actor := worldstate.Actor{ID: 300, X: 116, Y: 303}
 
-	x, y, ok := attackApproachCell(ctx, actor, 1)
+	x, y, ok := normalAttackApproachCellFromTarget(ctx, ctx.World.Player.X, ctx.World.Player.Y, actor.X, actor.Y, 1)
 	if !ok {
 		t.Fatal("expected approach cell")
 	}
@@ -229,7 +232,7 @@ func TestAttackApproachCellChoosesClosestWalkableNeighbor(t *testing.T) {
 	}
 
 	world.GAT.Cells[302*world.GAT.Width+115] = res.GATCell{}
-	x, y, ok = attackApproachCell(ctx, actor, 1)
+	x, y, ok = normalAttackApproachCellFromTarget(ctx, ctx.World.Player.X, ctx.World.Player.Y, actor.X, actor.Y, 1)
 	if !ok {
 		t.Fatal("expected fallback approach cell")
 	}
@@ -252,11 +255,11 @@ func TestAttackApproachCellUsesRangedAttackRange(t *testing.T) {
 	ctx := client.Context{World: world}
 	actor := worldstate.Actor{ID: 300, X: 120, Y: 302}
 
-	x, y, ok := attackApproachCell(ctx, actor, 5)
+	x, y, ok := normalAttackApproachCellFromTarget(ctx, ctx.World.Player.X, ctx.World.Player.Y, actor.X, actor.Y, 5)
 	if !ok {
 		t.Fatal("expected ranged approach cell")
 	}
-	targetDistance := maxInt(absInt(x-actor.X), absInt(y-actor.Y))
+	targetDistance := scene.MaxInt(scene.AbsInt(x-actor.X), scene.AbsInt(y-actor.Y))
 	if targetDistance > 5 {
 		t.Fatalf("ranged approach = %d,%d, distance %d from target, want within 5", x, y, targetDistance)
 	}
@@ -267,7 +270,7 @@ func TestAttackApproachCellUsesRangedAttackRange(t *testing.T) {
 
 func TestNormalAttackApproachCellAvoidsRejectedRangedCorner(t *testing.T) {
 	world := worldstate.New()
-	world.GAT = flatWalkableGAT(200, 100)
+	world.GAT = testutil.FlatWalkableGAT(200, 100)
 	ctx := client.Context{World: world}
 
 	x, y, ok := normalAttackApproachCellFromTarget(ctx, 123, 71, 129, 75, 5)
@@ -287,7 +290,7 @@ func TestNormalAttackApproachCellAvoidsRejectedRangedCorner(t *testing.T) {
 
 func TestRangedAttackApproachCellRequiresReachablePath(t *testing.T) {
 	world := worldstate.New()
-	world.GAT = flatWalkableGAT(12, 5)
+	world.GAT = testutil.FlatWalkableGAT(12, 5)
 	for y := 0; y < world.GAT.Height; y++ {
 		world.GAT.SetCellRawType(4, y, 1)
 	}
@@ -300,20 +303,20 @@ func TestRangedAttackApproachCellRequiresReachablePath(t *testing.T) {
 
 func TestSquareRangeApproachChoosesNearestCellInEveryDirection(t *testing.T) {
 	world := worldstate.New()
-	world.GAT = flatWalkableGAT(64, 64)
+	world.GAT = testutil.FlatWalkableGAT(64, 64)
 	ctx := client.Context{World: world}
 	const sourceX, sourceY, skillRange = 20, 20, 9
 	for _, dx := range []int{-11, -2, 0, 2, 11} {
 		for _, dy := range []int{-11, -2, 0, 2, 11} {
-			if maxInt(absInt(dx), absInt(dy)) <= skillRange {
+			if scene.MaxInt(scene.AbsInt(dx), scene.AbsInt(dy)) <= skillRange {
 				continue
 			}
 			t.Run(fmt.Sprintf("offset_%d_%d", dx, dy), func(t *testing.T) {
 				targetX, targetY := sourceX+dx, sourceY+dy
 				x, y, ok := attackApproachCellFromTarget(ctx, sourceX, sourceY, targetX, targetY, skillRange)
 				// On open ground, only move along axes that are out of range.
-				wantX := clampInt(sourceX, targetX-skillRange, targetX+skillRange)
-				wantY := clampInt(sourceY, targetY-skillRange, targetY+skillRange)
+				wantX := scene.ClampInt(sourceX, targetX-skillRange, targetX+skillRange)
+				wantY := scene.ClampInt(sourceY, targetY-skillRange, targetY+skillRange)
 				if !ok || x != wantX || y != wantY {
 					t.Fatalf("approach = %d,%d ok=%t, want nearest in-range cell %d,%d", x, y, ok, wantX, wantY)
 				}
@@ -324,7 +327,7 @@ func TestSquareRangeApproachChoosesNearestCellInEveryDirection(t *testing.T) {
 
 func TestRangedAttackApproachCellSkipsUnreachablePreferredCell(t *testing.T) {
 	world := worldstate.New()
-	world.GAT = flatWalkableGAT(12, 5)
+	world.GAT = testutil.FlatWalkableGAT(12, 5)
 	for _, cell := range [][2]int{
 		{4, 1}, {4, 2}, {4, 3},
 		{5, 1}, {5, 3},
@@ -362,7 +365,7 @@ func TestCurrentNormalAttackRangeUsesEquippedBowAndVultureEye(t *testing.T) {
 func TestClassSpecificBowViewIDAddsArrowProjectileEffect(t *testing.T) {
 	actor := worldstate.Actor{Job: db.JobArcher, Weapon: 73}
 	effectID, ok := normalAttackBeforeHitEffectID(nil, actor)
-	if !ok || effectID != effectArrowShot {
+	if !ok || effectID != effects.ArrowShot {
 		t.Fatalf("class-specific bow effect = %d ok=%t, want arrow projectile", effectID, ok)
 	}
 }
@@ -398,7 +401,7 @@ func TestContinuePendingAttackSchedulesDelayedAction(t *testing.T) {
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{
@@ -432,7 +435,7 @@ func TestUpdatePendingAttackDoesNotKeepDelayingScheduledAction(t *testing.T) {
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	readyAt := time.Now().Add(10 * time.Millisecond)
@@ -458,12 +461,12 @@ func TestUpdatePendingAttackDoesNotKeepDelayingScheduledAction(t *testing.T) {
 func TestGroundClickCancelsPendingAttackChase(t *testing.T) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.GAT = flatWalkableGAT(64, 64)
+	world.GAT = testutil.FlatWalkableGAT(64, 64)
 	world.UpsertActor(worldstate.Actor{
 		ID:            300,
 		X:             30,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 
@@ -490,8 +493,8 @@ func TestGroundClickCancelsPendingAttackChase(t *testing.T) {
 		ScreenH: 600,
 	}
 	projection := mode.sceneProjection(ctx, ctx.ScreenW, ctx.ScreenH, now)
-	point := projection.Project(cellCenter(12), cellCenter(20), 0)
-	inputState.SetMousePosition(int(point.x), int(point.y))
+	point := projection.Project(scene.CellCenter(12), scene.CellCenter(20), 0)
+	inputState.SetMousePosition(int(point.X), int(point.Y))
 	inputState.SetMouseButton(input.MouseButtonLeft, true)
 
 	if _, err := mode.Update(ctx); err != nil {
@@ -515,12 +518,12 @@ func TestNPCClickIgnoresWalkCooldown(t *testing.T) {
 
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.GAT = flatWalkableGAT(64, 64)
+	world.GAT = testutil.FlatWalkableGAT(64, 64)
 	npc := worldstate.Actor{
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypeNPC,
+		ObjectType:    scene.ActorObjectTypeNPC,
 		HasObjectType: true,
 	}
 	world.UpsertActor(npc)
@@ -538,8 +541,8 @@ func TestNPCClickIgnoresWalkCooldown(t *testing.T) {
 		ScreenH: 600,
 	}
 	projection := mode.sceneProjection(ctx, ctx.ScreenW, ctx.ScreenH, time.Now())
-	point := projection.Project(cellCenter(float64(npc.X)), cellCenter(float64(npc.Y)), 0)
-	inputState.SetMousePosition(int(point.x), int(point.y))
+	point := projection.Project(scene.CellCenter(float64(npc.X)), scene.CellCenter(float64(npc.Y)), 0)
+	inputState.SetMousePosition(int(point.X), int(point.Y))
 	inputState.SetMouseButton(input.MouseButtonLeft, true)
 
 	if _, err := mode.Update(ctx); err != nil {
@@ -552,10 +555,10 @@ func TestNPCClickAfterKeyboardFocusLoss(t *testing.T) {
 	networkClient, serverConn := newBotTestConnection(t, 20080910)
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.GAT = flatWalkableGAT(64, 64)
+	world.GAT = testutil.FlatWalkableGAT(64, 64)
 	npc := worldstate.Actor{
 		ID: 300, X: 11, Y: 20,
-		ObjectType: actorObjectTypeNPC, HasObjectType: true,
+		ObjectType: scene.ActorObjectTypeNPC, HasObjectType: true,
 	}
 	world.UpsertActor(npc)
 	ctx := client.Context{
@@ -565,8 +568,8 @@ func TestNPCClickAfterKeyboardFocusLoss(t *testing.T) {
 	}
 	mode := NewWorldMode()
 	projection := mode.sceneProjection(ctx, ctx.ScreenW, ctx.ScreenH, time.Now())
-	point := projection.Project(cellCenter(float64(npc.X)), cellCenter(float64(npc.Y)), 0)
-	ctx.Input.SetMousePosition(int(point.x), int(point.y))
+	point := projection.Project(scene.CellCenter(float64(npc.X)), scene.CellCenter(float64(npc.Y)), 0)
+	ctx.Input.SetMousePosition(int(point.X), int(point.Y))
 	ctx.Input.SetKey(input.KeyAlt, true)
 	ctx.Input.EndFrame()
 	ctx.Input.SetMouseButton(input.MouseButtonLeft, true)
@@ -593,7 +596,7 @@ func TestNPCClickAfterKeyboardFocusLoss(t *testing.T) {
 func TestGroundClickRespectsWalkCooldown(t *testing.T) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.GAT = flatWalkableGAT(64, 64)
+	world.GAT = testutil.FlatWalkableGAT(64, 64)
 
 	inputState := input.NewState()
 	networkClient := network.NewClient(20080910, false)
@@ -609,8 +612,8 @@ func TestGroundClickRespectsWalkCooldown(t *testing.T) {
 		ScreenH: 600,
 	}
 	projection := mode.sceneProjection(ctx, ctx.ScreenW, ctx.ScreenH, time.Now())
-	point := projection.Project(cellCenter(12), cellCenter(20), 0)
-	inputState.SetMousePosition(int(point.x), int(point.y))
+	point := projection.Project(scene.CellCenter(12), scene.CellCenter(20), 0)
+	inputState.SetMousePosition(int(point.X), int(point.Y))
 	inputState.SetMouseButton(input.MouseButtonLeft, true)
 
 	if _, err := mode.Update(ctx); err != nil {
@@ -670,7 +673,7 @@ func TestContinuePendingTargetSkillSchedulesAfterEnteringRange(t *testing.T) {
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{
@@ -705,7 +708,7 @@ func TestUpdatePendingTargetSkillDoesNotKeepDelayingScheduledAction(t *testing.T
 		ID:            300,
 		X:             11,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	readyAt := time.Now().Add(10 * time.Millisecond)
@@ -736,7 +739,7 @@ func TestContinuePendingTargetSkillWaitsWhileOutOfRange(t *testing.T) {
 		ID:            300,
 		X:             15,
 		Y:             20,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{
@@ -1054,34 +1057,10 @@ func TestSelectCharacterSeedsInventoryZeny(t *testing.T) {
 	}
 }
 
-func TestFormatHUDNumberGroupsThousands(t *testing.T) {
-	if got := gameui.FormatHUDNumber(123456789); got != "123,456,789" {
-		t.Fatalf("formatted number = %q", got)
-	}
-}
-
 func TestSessionProgressFromCharacterUsesBaseLevel(t *testing.T) {
 	progress := session.ProgressFromCharacter(session.Character{Level: 12, JobLevel: 7})
 	if progress.BaseLevel != 12 || progress.JobLevel != 7 {
 		t.Fatalf("progress = %+v", progress)
-	}
-}
-
-func TestFormatEXPPercent(t *testing.T) {
-	if got := gameui.FormatEXPPercent(123, 1000); got != "12.3%" {
-		t.Fatalf("formatted exp percent = %q", got)
-	}
-	if got := gameui.FormatEXPPercent(12, 0); got != "--" {
-		t.Fatalf("formatted exp percent without next = %q", got)
-	}
-	if got := gameui.FormatEXPPercent(1001, 1000); got != "100.0%" {
-		t.Fatalf("formatted capped exp percent = %q", got)
-	}
-}
-
-func TestDisplayWeightUsesROVisibleUnits(t *testing.T) {
-	if got := gameui.DisplayWeight(240); got != 24 {
-		t.Fatalf("display weight = %d, want 24", got)
 	}
 }
 
@@ -1093,7 +1072,7 @@ func TestApplyActorActionNotifySchedulesAttackAndHitAnimations(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{}
@@ -1121,23 +1100,23 @@ func TestApplyActorActionNotifySchedulesAttackAndHitAnimations(t *testing.T) {
 	if !ok {
 		t.Fatal("local character animation missing")
 	}
-	if sourceAnim.actionFamily != spriteActionPCAttack3 {
-		t.Fatalf("source action = %d, want %d", sourceAnim.actionFamily, spriteActionPCAttack3)
+	if sourceAnim.actionFamily != sprites.ActionPCAttack3 {
+		t.Fatalf("source action = %d, want %d", sourceAnim.actionFamily, sprites.ActionPCAttack3)
 	}
 	earlyAnim, ok := mode.actorAnimation(150000, sourceAnim.started.Add(sourceAnim.duration-time.Millisecond))
-	if !ok || earlyAnim.actionFamily != spriteActionPCAttack3 {
+	if !ok || earlyAnim.actionFamily != sprites.ActionPCAttack3 {
 		t.Fatalf("early source animation = %+v ok=%t, want attack until it finishes", earlyAnim, ok)
 	}
 	readyAnim, ok := mode.actorAnimation(150000, sourceAnim.started.Add(sourceAnim.duration))
-	if !ok || readyAnim.actionFamily != spriteActionPCReadyFight || !readyAnim.loop {
+	if !ok || readyAnim.actionFamily != sprites.ActionPCReadyFight || !readyAnim.loop {
 		t.Fatalf("post-attack animation = %+v ok=%t, want looping READYFIGHT after attack", readyAnim, ok)
 	}
 	targetAnim, ok := mode.actorAnims[300]
 	if !ok {
 		t.Fatal("target animation missing")
 	}
-	if targetAnim.actionFamily != spriteActionNonPCHurt {
-		t.Fatalf("target action = %d, want %d", targetAnim.actionFamily, spriteActionNonPCHurt)
+	if targetAnim.actionFamily != sprites.ActionNonPCHurt {
+		t.Fatalf("target action = %d, want %d", targetAnim.actionFamily, sprites.ActionNonPCHurt)
 	}
 	if targetAnim.started.Sub(sourceAnim.started) != 580*time.Millisecond {
 		t.Fatalf("hit delay = %s, want 580ms", targetAnim.started.Sub(sourceAnim.started))
@@ -1148,11 +1127,11 @@ func TestApplyActorActionNotifySchedulesAttackAndHitAnimations(t *testing.T) {
 	if len(mode.damageFloaters) != 1 || !mode.damageFloaters[0].starts.Equal(targetAnim.started) {
 		t.Fatalf("damage floater = %+v targetStarted=%s", mode.damageFloaters, targetAnim.started)
 	}
-	if len(mode.worldEffects) != 1 {
-		t.Fatalf("world effects = %d, want regular hit effect", len(mode.worldEffects))
+	if len(mode.effects().Active) != 1 {
+		t.Fatalf("world effects = %d, want regular hit effect", len(mode.effects().Active))
 	}
-	hitEffect := mode.worldEffects[0]
-	if hitEffect.effectID != effectHit1 || hitEffect.actorID != 300 || !hitEffect.starts.Equal(targetAnim.started) {
+	hitEffect := mode.effects().Active[0]
+	if hitEffect.EffectID != effects.Hit1 || hitEffect.ActorID != 300 || !hitEffect.Starts.Equal(targetAnim.started) {
 		t.Fatalf("regular hit effect = %+v targetStarted=%s", hitEffect, targetAnim.started)
 	}
 	if _, ok := mode.actorLife[300]; ok {
@@ -1174,7 +1153,7 @@ func TestApplyActorActionNotifyAddsCriticalNormalHitEffect(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{}
@@ -1202,13 +1181,13 @@ func TestApplyActorActionNotifyAddsCriticalNormalHitEffect(t *testing.T) {
 	if !ok {
 		t.Fatal("target animation missing")
 	}
-	if len(mode.worldEffects) != 2 {
-		t.Fatalf("world effects = %+v, want regular and critical hit effects", mode.worldEffects)
+	if len(mode.effects().Active) != 2 {
+		t.Fatalf("world effects = %+v, want regular and critical hit effects", mode.effects().Active)
 	}
-	if effect := mode.worldEffects[0]; effect.effectID != effectHit1 || effect.actorID != 300 || !effect.starts.Equal(targetAnim.started) {
+	if effect := mode.effects().Active[0]; effect.EffectID != effects.Hit1 || effect.ActorID != 300 || !effect.Starts.Equal(targetAnim.started) {
 		t.Fatalf("regular hit effect = %+v targetStarted=%s", effect, targetAnim.started)
 	}
-	if effect := mode.worldEffects[1]; effect.effectID != effectBashHit || effect.actorID != 300 || !effect.starts.Equal(targetAnim.started) {
+	if effect := mode.effects().Active[1]; effect.EffectID != effects.BashHit || effect.ActorID != 300 || !effect.Starts.Equal(targetAnim.started) {
 		t.Fatalf("critical hit effect = %+v targetStarted=%s", effect, targetAnim.started)
 	}
 	if len(mode.damageFloaters) != 1 || mode.damageFloaters[0].kind != damageFloaterCritical {
@@ -1224,7 +1203,7 @@ func TestApplyActorActionNotifyAddsBashHitEffect(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{}
@@ -1245,17 +1224,17 @@ func TestApplyActorActionNotifyAddsBashHitEffect(t *testing.T) {
 		Action:      6,
 	})
 
-	if len(mode.worldEffects) != 2 {
-		t.Fatalf("world effects = %d, want begin and hit effects", len(mode.worldEffects))
+	if len(mode.effects().Active) != 2 {
+		t.Fatalf("world effects = %d, want begin and hit effects", len(mode.effects().Active))
 	}
-	if effect := mode.worldEffects[0]; effect.effectID != effectBashBegin || effect.actorID != 2000000 {
+	if effect := mode.effects().Active[0]; effect.EffectID != effects.BashBegin || effect.ActorID != 2000000 {
 		t.Fatalf("begin effect = %+v", effect)
 	}
-	effect := mode.worldEffects[1]
-	if effect.effectID != effectBashHit || effect.actorID != 300 || effect.x != 11 || effect.y != 20 {
+	effect := mode.effects().Active[1]
+	if effect.EffectID != effects.BashHit || effect.ActorID != 300 || effect.X != 11 || effect.Y != 20 {
 		t.Fatalf("effect = %+v", effect)
 	}
-	if delay := effect.starts.Sub(mode.actorAnims[150000].started); delay != 580*time.Millisecond {
+	if delay := effect.Starts.Sub(mode.actorAnims[150000].started); delay != 580*time.Millisecond {
 		t.Fatalf("effect delay = %s, want 580ms", delay)
 	}
 }
@@ -1281,7 +1260,7 @@ func TestApplyActorActionNotifyChainsPlayerHurtToReadyFight(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{}
@@ -1300,8 +1279,8 @@ func TestApplyActorActionNotifyChainsPlayerHurtToReadyFight(t *testing.T) {
 	if !ok {
 		t.Fatal("target hurt animation missing")
 	}
-	if hurtAnim.actionFamily != spriteActionPCHurt {
-		t.Fatalf("target action = %d, want %d", hurtAnim.actionFamily, spriteActionPCHurt)
+	if hurtAnim.actionFamily != sprites.ActionPCHurt {
+		t.Fatalf("target action = %d, want %d", hurtAnim.actionFamily, sprites.ActionPCHurt)
 	}
 	if actor := world.Actors[300]; !actor.Moving {
 		t.Fatal("target should keep moving before scheduled hit time")
@@ -1315,7 +1294,7 @@ func TestApplyActorActionNotifyChainsPlayerHurtToReadyFight(t *testing.T) {
 		t.Fatalf("target stopped at destination, want interpolated hit position: %+v", actor)
 	}
 	readyAnim, ok := mode.actorAnimation(300, hurtAnim.started.Add(hurtAnim.duration))
-	if !ok || readyAnim.actionFamily != spriteActionPCReadyFight || !readyAnim.loop {
+	if !ok || readyAnim.actionFamily != sprites.ActionPCReadyFight || !readyAnim.loop {
 		t.Fatalf("post-hurt animation = %+v ok=%t, want looping READYFIGHT", readyAnim, ok)
 	}
 }
@@ -1340,7 +1319,7 @@ func TestApplyActorActionNotifyStopsLocalPlayerMovementOnHit(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{}
@@ -1385,7 +1364,7 @@ func TestApplyActorActionNotifyClearsLocalCastBarOnHit(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{}
@@ -1436,7 +1415,7 @@ func TestApplyActorActionNotifyResumesFocusedLocalWalkAfterHurt(t *testing.T) {
 		X:             11,
 		Y:             20,
 		Job:           1002,
-		ObjectType:    actorObjectTypeMob,
+		ObjectType:    scene.ActorObjectTypeMob,
 		HasObjectType: true,
 	})
 	mode := &WorldMode{lockedAttackID: 400}
@@ -1486,7 +1465,7 @@ func TestMovingActorPacketClearsReadyFightAction(t *testing.T) {
 	world.UpsertActor(worldstate.Actor{ID: 300, X: 10, Y: 20, Job: 1, Speed: 150})
 	mode := &WorldMode{actorAnims: map[uint32]actorAnimation{
 		300: {
-			actionFamily: spriteActionPCReadyFight,
+			actionFamily: sprites.ActionPCReadyFight,
 			loop:         true,
 			play:         true,
 			hasPlay:      true,
@@ -1535,7 +1514,7 @@ func TestSetActorActionStopsMovingActor(t *testing.T) {
 	mode := &WorldMode{}
 	ctx := client.Context{World: world}
 
-	mode.startCombatAnimation(ctx, 300, spriteActionPCAttack2, time.Now(), defaultAttackAnimationDuration)
+	mode.startCombatAnimation(ctx, 300, sprites.ActionPCAttack2, time.Now(), scene.DefaultAttackAnimationDuration)
 
 	actor := world.Actors[300]
 	if actor.Moving || actor.MovePath != nil {
@@ -1550,11 +1529,11 @@ func TestActorAnimationHonorsDelayedNextAction(t *testing.T) {
 	started := time.Now()
 	mode := &WorldMode{actorAnims: map[uint32]actorAnimation{
 		300: {
-			actionFamily: spriteActionPCSkill,
+			actionFamily: sprites.ActionPCSkill,
 			started:      started,
 			duration:     100 * time.Millisecond,
 			next: &actorAnimation{
-				actionFamily: spriteActionPCReadyFight,
+				actionFamily: sprites.ActionPCReadyFight,
 				startDelay:   50 * time.Millisecond,
 				loop:         true,
 				play:         true,
@@ -1567,7 +1546,7 @@ func TestActorAnimationHonorsDelayedNextAction(t *testing.T) {
 		t.Fatalf("actorAnimation before delayed next = %+v, want inactive gap", anim)
 	}
 	anim, ok := mode.actorAnimation(300, started.Add(150*time.Millisecond))
-	if !ok || anim.actionFamily != spriteActionPCReadyFight || !anim.loop {
+	if !ok || anim.actionFamily != sprites.ActionPCReadyFight || !anim.loop {
 		t.Fatalf("actorAnimation delayed next = %+v ok=%t, want ready fight loop", anim, ok)
 	}
 	if got := anim.started.Sub(started); got != 150*time.Millisecond {
@@ -1583,26 +1562,26 @@ func TestBodyMotionHonorsRobrowserActionMetadata(t *testing.T) {
 		},
 	}
 	started := time.Now()
-	state := spriteState{
-		started:        started,
-		actionFamily:   spriteActionPCSkill,
-		frameOffset:    1,
-		hasFrameOffset: true,
-		length:         3,
-		hasLength:      true,
-		speed:          50 * time.Millisecond,
-		hasSpeed:       true,
+	state := sprites.State{
+		Started:        started,
+		ActionFamily:   sprites.ActionPCSkill,
+		FrameOffset:    1,
+		HasFrameOffset: true,
+		Length:         3,
+		HasLength:      true,
+		Speed:          50 * time.Millisecond,
+		HasSpeed:       true,
 	}
 
-	if got := bodyMotionForState(action, state, started, started.Add(25*time.Millisecond)); got != 1 {
+	if got := sprites.BodyMotionForState(action, state, started, started.Add(25*time.Millisecond)); got != 1 {
 		t.Fatalf("initial offset motion = %d, want 1", got)
 	}
-	if got := bodyMotionForState(action, state, started, started.Add(125*time.Millisecond)); got != 3 {
+	if got := sprites.BodyMotionForState(action, state, started, started.Add(125*time.Millisecond)); got != 3 {
 		t.Fatalf("length-limited motion = %d, want 3", got)
 	}
-	state.play = false
-	state.hasPlay = true
-	if got := bodyMotionForState(action, state, started, started.Add(time.Second)); got != 1 {
+	state.Play = false
+	state.HasPlay = true
+	if got := sprites.BodyMotionForState(action, state, started, started.Add(time.Second)); got != 1 {
 		t.Fatalf("play=false motion = %d, want fixed frame offset 1", got)
 	}
 }

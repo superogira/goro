@@ -300,6 +300,7 @@ func (w *LoginWindow) widgetTree() widget.Widget {
 	)
 }
 
+
 func (w *LoginWindow) fieldFocus() (bool, bool) {
 	// Enter on the username (or the OS keyboard's "Next" key) advances to
 	// the password instead of submitting with an empty one — soft keyboards

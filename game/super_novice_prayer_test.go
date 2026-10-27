@@ -8,6 +8,8 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/session"
@@ -103,18 +105,18 @@ func TestSuperNovicePrayerResetsOnMapEntry(t *testing.T) {
 
 func TestSuperNovicePrayerUsesServerFuryStatus(t *testing.T) {
 	for _, job := range []int16{db.JobSuperNovice, db.JobSuperNoviceB} {
-		ctx := monkEffectContext()
+		ctx := testutil.MonkEffectContext()
 		ctx.Session.Selected.Job = job
 		ctx.World.Player.Job = job
 		m := &WorldMode{}
 		change := network.StatusEffectChange{ActorID: ctx.Session.AccountID, StatusID: db.StatusExplosionspirits, Active: true}
 		m.applyStatusEffectChange(ctx, change)
-		if !m.hasActiveWorldEffect(effectGumgang, ctx.Session.AccountID, time.Now().Add(time.Hour)) {
+		if !m.effects().HasActive(effects.Gumgang, ctx.Session.AccountID, time.Now().Add(time.Hour)) {
 			t.Fatalf("job %d did not get persistent Fury lightning", job)
 		}
 		change.Active = false
 		m.applyStatusEffectChange(ctx, change)
-		if m.hasActiveWorldEffect(effectGumgang, ctx.Session.AccountID, time.Now()) {
+		if m.effects().HasActive(effects.Gumgang, ctx.Session.AccountID, time.Now()) {
 			t.Fatalf("job %d kept Fury lightning after the server cleared it", job)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/render"
 )
@@ -24,11 +25,11 @@ var (
 	damageFloaterRed    = color.RGBA{R: 255, G: 64, B: 64, A: 255}
 )
 
-func (m *WorldMode) damageNumberSprite(ctx client.Context) *spriteView {
+func (m *WorldMode) damageNumberSprite(ctx client.Context) *scene.SpriteView {
 	if m.damageNumberView != nil || m.damageNumberMiss || ctx.Resources == nil {
 		return m.damageNumberView
 	}
-	view, status := loadSpriteView(ctx.Resources,
+	view, status := scene.LoadSpriteView(ctx.Resources,
 		[]string{damageNumberACT, strings.ReplaceAll(damageNumberACT, "\\", "/")},
 		[]string{damageNumberSPR, strings.ReplaceAll(damageNumberSPR, "\\", "/")},
 		nil,
@@ -44,12 +45,12 @@ func (m *WorldMode) damageNumberSprite(ctx client.Context) *spriteView {
 	return view
 }
 
-func (m *WorldMode) damageNumberBillboard(ctx client.Context, text string) (*spriteBillboard, bool) {
+func (m *WorldMode) damageNumberBillboard(ctx client.Context, text string) (*scene.Billboard, bool) {
 	if text == "" || !allASCIIDigits(text) {
 		return nil, false
 	}
 	if m.damageNumbers == nil {
-		m.damageNumbers = make(map[string]*spriteBillboard)
+		m.damageNumbers = make(map[string]*scene.Billboard)
 	}
 	if billboard, ok := m.damageNumbers[text]; ok {
 		return billboard, true
@@ -66,11 +67,11 @@ func (m *WorldMode) damageNumberBillboard(ctx client.Context, text string) (*spr
 	return billboard, true
 }
 
-func (m *WorldMode) damageMessageSprite(ctx client.Context) *spriteView {
+func (m *WorldMode) damageMessageSprite(ctx client.Context) *scene.SpriteView {
 	if m.damageMsgView != nil || m.damageMsgMiss || ctx.Resources == nil {
 		return m.damageMsgView
 	}
-	view, status := loadSpriteView(ctx.Resources,
+	view, status := scene.LoadSpriteView(ctx.Resources,
 		[]string{damageMsgACT, strings.ReplaceAll(damageMsgACT, "\\", "/")},
 		[]string{damageMsgSPR, strings.ReplaceAll(damageMsgSPR, "\\", "/")},
 		nil,
@@ -86,33 +87,33 @@ func (m *WorldMode) damageMessageSprite(ctx client.Context) *spriteView {
 	return view
 }
 
-func (m *WorldMode) damageMessageBillboard(ctx client.Context, actionIndex, motion int) (*spriteBillboard, bool) {
+func (m *WorldMode) damageMessageBillboard(ctx client.Context, actionIndex, motion int) (*scene.Billboard, bool) {
 	view := m.damageMessageSprite(ctx)
-	if view == nil || view.act == nil {
+	if view == nil || view.Act == nil {
 		return nil, false
 	}
-	if actionIndex < 0 || actionIndex >= len(view.act.Actions) {
+	if actionIndex < 0 || actionIndex >= len(view.Act.Actions) {
 		return nil, false
 	}
-	action := view.act.Actions[actionIndex]
+	action := view.Act.Actions[actionIndex]
 	if motion < 0 || motion >= len(action.Animations) {
 		return nil, false
 	}
-	key := singleSpriteBillboardKey{actionIndex: actionIndex, motion: motion}
-	if billboard, ok := view.billboards[key]; ok {
+	key := scene.SpriteBillboardKey{ActionIndex: actionIndex, Motion: motion}
+	if billboard, ok := view.Billboards[key]; ok {
 		return billboard, true
 	}
-	billboard, ok := composeSingleSpriteBillboard(view, action.Animations[motion])
+	billboard, ok := scene.ComposeSingleSpriteBillboard(view, action.Animations[motion])
 	if !ok {
 		return nil, false
 	}
-	view.billboards[key] = billboard
+	view.Billboards[key] = billboard
 	return billboard, true
 }
 
-func composeDamageNumberBillboard(view *spriteView, text string) (*spriteBillboard, bool) {
+func composeDamageNumberBillboard(view *scene.SpriteView, text string) (*scene.Billboard, bool) {
 	const digitGap = 2
-	digits := make([]*spriteBillboard, 0, len(text))
+	digits := make([]*scene.Billboard, 0, len(text))
 	totalWidth := 0
 	maxHeight := 0
 	for _, ch := range text {
@@ -121,12 +122,12 @@ func composeDamageNumberBillboard(view *spriteView, text string) (*spriteBillboa
 		if !ok {
 			return nil, false
 		}
-		bounds := billboard.image.Bounds()
+		bounds := billboard.Image.Bounds()
 		if len(digits) > 0 {
 			totalWidth += digitGap
 		}
 		totalWidth += bounds.Dx()
-		maxHeight = maxInt(maxHeight, bounds.Dy())
+		maxHeight = scene.MaxInt(maxHeight, bounds.Dy())
 		digits = append(digits, billboard)
 	}
 	if totalWidth <= 0 || maxHeight <= 0 {
@@ -138,37 +139,37 @@ func composeDamageNumberBillboard(view *spriteView, text string) (*spriteBillboa
 		if index > 0 {
 			x += digitGap
 		}
-		bounds := digit.image.Bounds()
+		bounds := digit.Image.Bounds()
 		var opts render.DrawImageOptions
 		opts.GeoM.Translate(float64(x), float64((maxHeight-bounds.Dy())/2))
-		opts.Filter = spriteCompositionFilter()
-		target.DrawImage(digit.image, &opts)
+		opts.Filter = scene.SpriteCompositionFilter()
+		target.DrawImage(digit.Image, &opts)
 		x += bounds.Dx()
 	}
-	return &spriteBillboard{
-		image:   target,
-		anchorX: float64(totalWidth) * 0.5,
-		anchorY: float64(maxHeight) * 0.5,
+	return &scene.Billboard{
+		Image:   target,
+		AnchorX: float64(totalWidth) * 0.5,
+		AnchorY: float64(maxHeight) * 0.5,
 	}, true
 }
 
-func damageDigitBillboard(view *spriteView, digit int) (*spriteBillboard, bool) {
-	if view == nil || view.act == nil || len(view.act.Actions) == 0 || digit < 0 || digit > 9 {
+func damageDigitBillboard(view *scene.SpriteView, digit int) (*scene.Billboard, bool) {
+	if view == nil || view.Act == nil || len(view.Act.Actions) == 0 || digit < 0 || digit > 9 {
 		return nil, false
 	}
-	action := view.act.Actions[0]
+	action := view.Act.Actions[0]
 	if digit >= len(action.Animations) {
 		return nil, false
 	}
-	key := singleSpriteBillboardKey{actionIndex: 0, motion: digit}
-	if billboard, ok := view.billboards[key]; ok {
+	key := scene.SpriteBillboardKey{ActionIndex: 0, Motion: digit}
+	if billboard, ok := view.Billboards[key]; ok {
 		return billboard, true
 	}
-	billboard, ok := composeSingleSpriteBillboard(view, action.Animations[digit])
+	billboard, ok := scene.ComposeSingleSpriteBillboard(view, action.Animations[digit])
 	if !ok {
 		return nil, false
 	}
-	view.billboards[key] = billboard
+	view.Billboards[key] = billboard
 	return billboard, true
 }
 
@@ -185,7 +186,7 @@ func allASCIIDigits(text string) bool {
 }
 
 func damageFloaterPlacement(kind damageFloaterKind, progress float64) (dx, dy, zLift, scale, alpha float64) {
-	progress = clampFloat(progress, 0, 1)
+	progress = scene.ClampFloat(progress, 0, 1)
 	alpha = 1 - progress
 	switch kind {
 	case damageFloaterCombo:
@@ -229,12 +230,6 @@ func damageFloaterColor(kind damageFloaterKind, fallback color.RGBA) color.RGBA 
 	}
 }
 
-func withAlpha(c color.RGBA, alpha float64) color.RGBA {
-	alpha = clampFloat(alpha, 0, 1)
-	c.A = uint8(math.Round(float64(c.A) * alpha))
-	return c
-}
-
 func damageFloaterProgress(floater damageFloater, now time.Time) float64 {
 	duration := floater.duration
 	if duration <= 0 {
@@ -244,14 +239,4 @@ func damageFloaterProgress(floater damageFloater, now time.Time) float64 {
 		return 1
 	}
 	return float64(now.Sub(floater.starts)) / float64(duration)
-}
-
-func clampFloat(value, minValue, maxValue float64) float64 {
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
 }

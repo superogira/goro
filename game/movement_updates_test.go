@@ -8,6 +8,9 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/internal/testutil"
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
@@ -79,7 +82,7 @@ func TestSkillPacketsDoNotReplayCompletedCasterWalk(t *testing.T) {
 					Moving: true, Speed: 150, MoveStartTick: 1000, HasMoveStartTick: true,
 				}, now.Add(-30*time.Second))
 				before := w.Actors[300]
-				if x, y := actorRenderPosition(before, now); x != 30 || y != 20 {
+				if x, y := scene.ActorRenderPosition(before, now); x != 30 || y != 20 {
 					t.Fatalf("setup: caster at %v,%v, want completed walk at 30,20", x, y)
 				}
 				packet := network.Packet{ID: 0x011A, Data: make([]byte, 15)}
@@ -105,7 +108,7 @@ func TestSkillPacketsDoNotReplayCompletedCasterWalk(t *testing.T) {
 				mode := NewWorldMode()
 				mode.handleNetworkPacket(ctx, packet, now)
 				actor := w.Actors[300]
-				if x, y := actorRenderPosition(actor, time.Now()); x != 30 || y != 20 {
+				if x, y := scene.ActorRenderPosition(actor, time.Now()); x != 30 || y != 20 {
 					t.Fatalf("skill teleported caster to %v,%v; want 30,20", x, y)
 				}
 				if actor.Dir != directionFromDelta(30, 20, 34, 20, before.Dir) {
@@ -116,5 +119,97 @@ func TestSkillPacketsDoNotReplayCompletedCasterWalk(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWalkPathBuildsPathAroundObstacle(t *testing.T) {
+	gat := testutil.PathGAT(3, 3, map[worldstate.WalkStep]bool{
+		{X: 1, Y: 0}: true,
+	})
+
+	path := maps.WalkPath(gat, 0, 0, 2, 0)
+	if len(path) < 4 {
+		t.Fatalf("path too short: %+v", path)
+	}
+	for _, step := range path {
+		if step.X == 1 && step.Y == 0 {
+			t.Fatalf("path crosses blocked cell: %+v", path)
+		}
+	}
+	w := worldstate.New()
+	setPlayerMovementPathAt(client.Context{World: w}, path, 0, 0, 2, 0, 0, time.Now(), 0)
+	if got := w.Player.MoveDuration; got <= 300*time.Millisecond {
+		t.Fatalf("duration = %s, want longer than direct two-cell move", got)
+	}
+}
+
+func TestWalkPathStoresFinalSegmentDirection(t *testing.T) {
+	gat := testutil.PathGAT(3, 3, map[worldstate.WalkStep]bool{
+		{X: 1, Y: 0}: true,
+	})
+	path := maps.WalkPath(gat, 0, 0, 2, 0)
+	w := worldstate.New()
+	setPlayerMovementPathAt(client.Context{World: w}, path, 0, 0, 2, 0, directionFromDelta(0, 0, 2, 0, 0), time.Now(), 0)
+
+	if got, want := w.Player.Dir, directionFromDelta(2, 1, 2, 0, 0); got != want {
+		t.Fatalf("player dir = %d, want final segment dir %d; path=%+v", got, want, w.Player.MovePath)
+	}
+	if w.Dir != w.Player.Dir {
+		t.Fatalf("world dir = %d, want player dir %d", w.Dir, w.Player.Dir)
+	}
+}
+
+func TestRemoteMoveUpdateUsesExistingActorSpeed(t *testing.T) {
+	now := time.Unix(100, 0)
+	w := worldstate.New()
+	w.Actors[300] = worldstate.Actor{ID: 300, X: 0, Y: 0, Speed: 500}
+
+	upsertActorAt(client.Context{World: w}, worldstate.Actor{
+		ID:     300,
+		X:      4,
+		Y:      0,
+		FromX:  0,
+		FromY:  0,
+		ToX:    4,
+		ToY:    0,
+		Moving: true,
+	}, now)
+
+	actor := w.Actors[300]
+	if actor.Speed != 500 {
+		t.Fatalf("speed = %d, want preserved 500", actor.Speed)
+	}
+	if got, want := actor.MoveDuration, 2*time.Second; got != want {
+		t.Fatalf("move duration = %s, want %s", got, want)
+	}
+}
+
+func TestRemoteMoveUpdateUsesServerMoveStartTick(t *testing.T) {
+	s := &session.Session{}
+	now := time.Unix(100, 0)
+	s.SyncServerTick(1500, now)
+	w := worldstate.New()
+	w.Actors[300] = worldstate.Actor{ID: 300, X: 0, Y: 0, Speed: 500}
+
+	upsertActorAt(client.Context{World: w, Session: s}, worldstate.Actor{
+		ID:               300,
+		X:                4,
+		Y:                0,
+		FromX:            0,
+		FromY:            0,
+		ToX:              4,
+		ToY:              0,
+		MoveStartTick:    500,
+		HasMoveStartTick: true,
+		Moving:           true,
+	}, now)
+
+	actor := w.Actors[300]
+	if got, want := actor.MoveStarted, now.Add(-time.Second); !got.Equal(want) {
+		t.Fatalf("move started = %s, want %s", got, want)
+	}
+	x, y := scene.ActorRenderPosition(actor, now)
+	if x < 1.9 || x > 2.1 || y != 0 {
+		t.Fatalf("render position = %.2f,%.2f, want around 2,0", x, y)
 	}
 }

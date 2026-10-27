@@ -2,6 +2,7 @@ package game
 
 import (
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	worldstate "github.com/kivutar/goro/world"
@@ -16,7 +17,7 @@ func applyVendingBoardToWorld(ctx client.Context, board network.VendingBoard) {
 	if ctx.World == nil {
 		return
 	}
-	if isLocalActor(ctx, board.OwnerAID) {
+	if scene.IsLocalActor(ctx, board.OwnerAID) {
 		ctx.World.Player.Vending = true
 		ctx.World.Player.VendingName = board.Name
 		return
@@ -39,7 +40,7 @@ func applyVendingBoardDisappearToWorld(ctx client.Context, board network.Vending
 	if ctx.World == nil {
 		return
 	}
-	if isLocalActor(ctx, board.OwnerAID) {
+	if scene.IsLocalActor(ctx, board.OwnerAID) {
 		ctx.World.Player.Vending = false
 		ctx.World.Player.VendingName = ""
 		return

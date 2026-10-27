@@ -5,20 +5,9 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/input"
-	"github.com/kivutar/goro/res"
 	worldstate "github.com/kivutar/goro/world"
-)
-
-const (
-	defaultCameraFollowLerpPerMS   = 0.006
-	defaultCameraWheelZoomUnits    = 15
-	defaultCameraPinchZoomScale    = 240
-	defaultCameraMinZoom           = 65.0
-	defaultCameraMaxZoom           = 165.0
-	defaultCameraMinPitch          = 205.0
-	defaultCameraMaxPitch          = 245.0
-	defaultCameraPitchDragPerPixel = 0.3
 )
 
 type followCamera struct {
@@ -50,9 +39,9 @@ func (c *followCamera) ResetTracking() {
 func (c *followCamera) ResetView() {
 	c.yawOffset = 0
 	c.yawTarget = 0
-	c.pitch = defaultSceneCameraPitch
-	c.zoom = defaultSceneCameraZoom
-	c.zoomTarget = defaultSceneCameraZoom
+	c.pitch = (scene.DefaultCameraMinPitch + scene.DefaultCameraMaxPitch) / 2
+	c.zoom = (scene.DefaultCameraMinZoom + scene.DefaultCameraMaxZoom) / 2
+	c.zoomTarget = (scene.DefaultCameraMinZoom + scene.DefaultCameraMaxZoom) / 2
 }
 
 func (c *followCamera) Update(ctx client.Context, now time.Time) {
@@ -83,7 +72,7 @@ func cameraFollowLerp(delta time.Duration) float64 {
 	if delta <= 0 {
 		return 0
 	}
-	return math.Min(float64(delta)/float64(time.Millisecond)*defaultCameraFollowLerpPerMS, 1.0)
+	return math.Min(float64(delta)/float64(time.Millisecond)*scene.DefaultCameraFollowLerpPerMS, 1.0)
 }
 
 // Camera button steps for the on-screen touch controls. Yaw is measured in
@@ -109,48 +98,48 @@ func (c *followCamera) RotateImmediate(delta float64) {
 }
 
 func (c *followCamera) Tilt(delta float64) {
-	if delta == 0 || !isFinite(delta) {
+	if delta == 0 || !scene.IsFinite(delta) {
 		return
 	}
-	c.pitch = clampCameraPitch(c.currentPitch() + delta)
+	c.pitch = scene.ClampCameraPitch(c.currentPitch() + delta)
 }
 
 func (c *followCamera) currentPitch() float64 {
-	if c.pitch == 0 || !isFinite(c.pitch) {
-		return sceneCameraPitch()
+	if c.pitch == 0 || !scene.IsFinite(c.pitch) {
+		return scene.CameraPitch()
 	}
-	return clampCameraPitch(c.pitch)
+	return scene.ClampCameraPitch(c.pitch)
 }
 
 func (c *followCamera) ZoomBy(factor float64) {
-	if factor <= 0 || !isFinite(factor) {
+	if factor <= 0 || !scene.IsFinite(factor) {
 		return
 	}
-	c.zoomTarget = clampCameraZoom(c.targetZoom() * factor)
+	c.zoomTarget = scene.ClampCameraZoom(c.targetZoom() * factor)
 }
 
 func (c *followCamera) ZoomByDelta(delta float64) {
-	if delta == 0 || !isFinite(delta) {
+	if delta == 0 || !scene.IsFinite(delta) {
 		return
 	}
-	c.zoomTarget = clampCameraZoom(c.targetZoom() + delta)
+	c.zoomTarget = scene.ClampCameraZoom(c.targetZoom() + delta)
 }
 
 func (c *followCamera) currentZoom() float64 {
-	if c.zoom <= 0 || !isFinite(c.zoom) {
+	if c.zoom <= 0 || !scene.IsFinite(c.zoom) {
 		return c.targetZoom()
 	}
-	return clampCameraZoom(c.zoom)
+	return scene.ClampCameraZoom(c.zoom)
 }
 
 func (c *followCamera) targetZoom() float64 {
-	if c.zoomTarget <= 0 || !isFinite(c.zoomTarget) {
-		if c.zoom > 0 && isFinite(c.zoom) {
-			return clampCameraZoom(c.zoom)
+	if c.zoomTarget <= 0 || !scene.IsFinite(c.zoomTarget) {
+		if c.zoom > 0 && scene.IsFinite(c.zoom) {
+			return scene.ClampCameraZoom(c.zoom)
 		}
-		return sceneCameraZoom()
+		return scene.CameraZoom()
 	}
-	return clampCameraZoom(c.zoomTarget)
+	return scene.ClampCameraZoom(c.zoomTarget)
 }
 
 func cameraZoomLerp(followLerp float64) float64 {
@@ -164,26 +153,26 @@ func (c *followCamera) ResetRotation() {
 	c.yawTarget = 0
 }
 
-func (c *followCamera) Projection(ctx client.Context, width, height int, now time.Time) sceneProjection {
+func (c *followCamera) Projection(ctx client.Context, width, height int, now time.Time) scene.Projection {
 	return c.ProjectionWithOffset(ctx, width, height, now, 0, 0)
 }
 
-func (c *followCamera) ProjectionWithOffset(ctx client.Context, width, height int, now time.Time, offsetX, offsetY float64) sceneProjection {
+func (c *followCamera) ProjectionWithOffset(ctx client.Context, width, height int, now time.Time, offsetX, offsetY float64) scene.Projection {
 	if !c.initialized {
 		c.Update(ctx, now)
 	}
 	c.store(ctx)
 	yawOffset := c.yawOffset
-	if cameraRotationLockedForMap(ctx) {
+	if scene.CameraRotationLockedForMap(ctx) {
 		yawOffset = 0
 	}
 	outdoorZoom := c.currentZoom()
 	projectedZoom := cameraZoomForMap(ctx, outdoorZoom)
 	projectedPitch := c.currentPitch()
-	if cameraRotationLockedForMap(ctx) {
-		projectedPitch = sceneCameraPitch()
+	if scene.CameraRotationLockedForMap(ctx) {
+		projectedPitch = scene.CameraPitch()
 	}
-	return newSceneProjectionForTargetYawPitchZoom(width, height, c.x+offsetX, c.y+offsetY, c.z, cameraYawForMap(ctx)+yawOffset, projectedPitch, projectedZoom)
+	return scene.NewProjection(width, height, c.x+offsetX, c.y+offsetY, c.z, scene.CameraYawForMap(ctx)+yawOffset, projectedPitch, projectedZoom)
 }
 
 func (c *followCamera) store(ctx client.Context) {
@@ -194,7 +183,7 @@ func (c *followCamera) store(ctx client.Context) {
 	ctx.World.Camera.Y = c.y
 }
 
-func (m *WorldMode) sceneProjection(ctx client.Context, width, height int, now time.Time) sceneProjection {
+func (m *WorldMode) sceneProjection(ctx client.Context, width, height int, now time.Time) scene.Projection {
 	offsetX, offsetY := m.cameraShakeOffset(now)
 	return m.camera.ProjectionWithOffset(ctx, width, height, now, offsetX, offsetY)
 }
@@ -216,14 +205,14 @@ func (m *WorldMode) cameraShakeOffset(now time.Time) (float64, float64) {
 		return 0, 0
 	}
 	elapsed := now.Sub(m.cameraShakeStart)
-	progress := clampFloat(float64(elapsed)/float64(duration), 0, 1)
+	progress := scene.ClampFloat(float64(elapsed)/float64(duration), 0, 1)
 	amplitude := 0.18 * (1 - progress)
 	seconds := float64(elapsed) / float64(time.Second)
 	return math.Sin(seconds*120*2*math.Pi) * amplitude, math.Cos(seconds*150*2*math.Pi) * amplitude
 }
 
 func (m *WorldMode) updateCameraRotation(ctx client.Context) {
-	if cameraRotationLockedForMap(ctx) {
+	if scene.CameraRotationLockedForMap(ctx) {
 		return
 	}
 	delta := 0.0
@@ -273,59 +262,28 @@ func playerCameraTarget(world *worldstate.World, now time.Time) (float64, float6
 	if world == nil {
 		return 0.5, 0.5, 0
 	}
-	playerX, playerY := actorRenderPosition(world.Player, now)
-	return cellCenter(playerX), cellCenter(playerY), cameraTargetHeightAt(world, playerX, playerY)
+	playerX, playerY := scene.ActorRenderPosition(world.Player, now)
+	return scene.CellCenter(playerX), scene.CellCenter(playerY), cameraTargetHeightAt(world, playerX, playerY)
 }
 
 func cameraTargetHeightAt(world *worldstate.World, x, y float64) float64 {
-	return terrainHeightAt(world, x, y)
-}
-
-func cameraYawForMap(ctx client.Context) float64 {
-	if viewPoint, ok := lockedCameraViewPointForMap(ctx); ok {
-		return -float64(viewPoint.InitialLongitude)
-	}
-	if cameraRotationLockedForMap(ctx) {
-		return -45
-	}
-	return sceneCameraYaw()
-}
-
-func cameraRotationLockedForMap(ctx client.Context) bool {
-	if ctx.Resources == nil || ctx.World == nil {
-		return false
-	}
-	if _, ok := lockedCameraViewPointForMap(ctx); ok {
-		return true
-	}
-	return ctx.Resources.IsIndoorMap(ctx.World.MapName)
-}
-
-func lockedCameraViewPointForMap(ctx client.Context) (res.CameraViewPoint, bool) {
-	if ctx.Resources == nil || ctx.World == nil {
-		return res.CameraViewPoint{}, false
-	}
-	viewPoint, ok := ctx.Resources.CameraViewPoint(ctx.World.MapName)
-	if !ok || !viewPoint.LocksLongitude() {
-		return res.CameraViewPoint{}, false
-	}
-	return viewPoint, true
+	return scene.TerrainHeightAt(world, x, y)
 }
 
 func cameraZoomForMap(ctx client.Context, outdoorZoom float64) float64 {
 	if ctx.Resources == nil || ctx.World == nil {
-		return clampCameraZoom(outdoorZoom)
+		return scene.ClampCameraZoom(outdoorZoom)
 	}
 	if viewPoint, ok := ctx.Resources.CameraViewPoint(ctx.World.MapName); ok && viewPoint.DistanceScope <= 0 {
 		if viewPoint.InitialDistance > 0 {
-			return clampCameraZoom(float64(viewPoint.InitialDistance))
+			return scene.ClampCameraZoom(float64(viewPoint.InitialDistance))
 		}
-		return sceneCameraZoom()
+		return scene.CameraZoom()
 	}
 	if ctx.Resources.IsIndoorMap(ctx.World.MapName) {
-		return sceneCameraZoom()
+		return scene.CameraZoom()
 	}
-	return clampCameraZoom(outdoorZoom)
+	return scene.ClampCameraZoom(outdoorZoom)
 }
 
 func cameraZoomLockedForMap(ctx client.Context) bool {
@@ -346,43 +304,29 @@ func cameraDragYawDelta(mouseDX, screenWidth int) float64 {
 }
 
 func cameraDragPitchDelta(mouseDY int) float64 {
-	return float64(mouseDY) * defaultCameraPitchDragPerPixel
+	return float64(mouseDY) * scene.DefaultCameraPitchDragPerPixel
 }
 
 func cameraWheelZoomDelta(wheelY float64) float64 {
-	if wheelY == 0 || !isFinite(wheelY) {
+	if wheelY == 0 || !scene.IsFinite(wheelY) {
 		return 0
 	}
 	return -math.Copysign(cameraZoomWheelUnits(), wheelY)
 }
 
 func cameraPinchZoomFactor(delta float64) float64 {
-	if delta == 0 || !isFinite(delta) {
+	if delta == 0 || !scene.IsFinite(delta) {
 		return 1
 	}
 	return math.Exp(-delta / cameraPinchZoomScale())
 }
 
 func cameraZoomWheelUnits() float64 {
-	return defaultCameraWheelZoomUnits
+	return scene.DefaultCameraWheelZoomUnits
 }
 
 func cameraPinchZoomScale() float64 {
-	return defaultCameraPinchZoomScale
-}
-
-func clampCameraZoom(zoom float64) float64 {
-	if !isFinite(zoom) || zoom <= 0 {
-		zoom = defaultSceneCameraZoom
-	}
-	return math.Max(defaultCameraMinZoom, math.Min(defaultCameraMaxZoom, zoom))
-}
-
-func clampCameraPitch(pitch float64) float64 {
-	if !isFinite(pitch) || pitch == 0 {
-		pitch = defaultSceneCameraPitch
-	}
-	return math.Max(defaultCameraMinPitch, math.Min(defaultCameraMaxPitch, pitch))
+	return scene.DefaultCameraPinchZoomScale
 }
 
 // cameraYawShortestDelta returns the signed angular difference taking

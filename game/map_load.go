@@ -1,6 +1,8 @@
 package game
 
 import (
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/sprites"
 	"image/color"
 	"sync/atomic"
 
@@ -68,13 +70,13 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 		}},
 		{"sprites", func() error {
 			playerStatus := ""
-			if view, status := loadPlayerHumanoidSpriteView(ctx.Resources, visualCharacter, ctx.Session.Sex, localPlayerIsAdmin(ctx)); view != nil {
+			if view, status := sprites.LoadPlayer(ctx.Resources, visualCharacter, ctx.Session.Sex, localPlayerIsAdmin(ctx)); view != nil {
 				m.playerView = view
 				playerStatus = status
 			} else {
 				playerStatus = status
 			}
-			if view, status := loadActorShadowSpriteView(ctx.Resources); view != nil {
+			if view, status := sprites.LoadShadow(ctx.Resources); view != nil {
 				m.shadowView = view
 				if status != "" {
 					playerStatus += " " + status
@@ -83,7 +85,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 				m.shadowViewMiss = true
 				glog.Warnf("actor shadow resources unavailable: %s", status)
 			}
-			if view, status := loadCursorSpriteView(ctx.Resources); view != nil {
+			if view, status := sprites.LoadCursor(ctx.Resources); view != nil {
 				m.cursorView = view
 				if status != "" {
 					playerStatus += " " + status
@@ -99,7 +101,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			if !hasMap {
 				return nil
 			}
-			if gnd, _, err := loadGND(ctx.Resources, ctx.World.MapName); err == nil {
+			if gnd, _, err := maps.LoadGND(ctx.Resources, ctx.World.MapName); err == nil {
 				ctx.World.GND = gnd
 			} else {
 				ctx.World.GND = nil
@@ -110,12 +112,11 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			if !hasMap {
 				return nil
 			}
-			rsw, rswSource, err := loadRSW(ctx.Resources, ctx.World.MapName)
+			rsw, rswSource, err := maps.LoadRSW(ctx.Resources, ctx.World.MapName)
 			if err != nil {
 				ctx.World.RSW = nil
 				ctx.World.RSM = nil
 				ctx.World.RSMFail = 0
-				m.prefetchMapTextures(ctx.Resources, ctx.World.GND, nil, nil)
 				m.playMapBGM(ctx, ctx.World.MapName)
 				return nil
 			}
@@ -128,7 +129,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			if !hasMap || !rswLoaded {
 				return nil
 			}
-			ctx.World.RSM, ctx.World.RSMFail = loadRSMModels(ctx.Resources, ctx.World.RSW)
+			ctx.World.RSM, ctx.World.RSMFail = maps.LoadRSMModels(ctx.Resources, ctx.World.RSW)
 			return nil
 		}},
 		{"textures", func() error {
@@ -136,9 +137,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 				return nil
 			}
 			if rswLoaded {
-				m.prefetchMapTextures(ctx.Resources, ctx.World.GND, ctx.World.RSW, ctx.World.RSM)
 			} else {
-				m.prefetchMapTextures(ctx.Resources, ctx.World.GND, nil, nil)
 			}
 			return nil
 		}},
@@ -148,7 +147,7 @@ func (m *WorldMode) startMapLoad(ctx client.Context) {
 			}
 			if rswLoaded {
 				m.playMapBGM(ctx, m.mapLoadRSWSource)
-				m.preloadMapSounds(ctx)
+				m.mapScene.PreloadMapSounds(ctx)
 			} else {
 				m.playMapBGM(ctx, ctx.World.MapName)
 			}

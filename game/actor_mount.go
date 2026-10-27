@@ -2,18 +2,15 @@ package game
 
 import (
 	"github.com/kivutar/goro/client"
-	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
 )
 
-func actorVisualJob(actor worldstate.Actor) int {
-	return visualJobForEffectState(int(actor.Job), actor.EffectState)
-}
-
 func actorWithVisualJob(actor worldstate.Actor) worldstate.Actor {
-	actor.Job = int16(actorVisualJob(actor))
+	actor.Job = int16(scene.ActorVisualJob(actor))
 	return actor
 }
 
@@ -22,20 +19,8 @@ func characterWithVisualJob(character session.Character) session.Character {
 }
 
 func characterWithVisualJobForEffectState(character session.Character, effectState uint32) session.Character {
-	character.Job = int16(visualJobForEffectState(int(character.Job), effectState))
+	character.Job = int16(scene.VisualJobForEffectState(int(character.Job), effectState))
 	return character
-}
-
-func visualJobForEffectState(job int, effectState uint32) int {
-	if effectState&db.EffectStateWedding != 0 {
-		return db.JobMarried
-	}
-	if effectState&db.EffectStateRiding != 0 {
-		if mounted, ok := db.MountJob(job); ok {
-			return mounted
-		}
-	}
-	return job
 }
 
 func localPlayerVisualCharacter(ctx client.Context) session.Character {
@@ -64,7 +49,7 @@ func (m *WorldMode) reloadPlayerSpriteView(ctx client.Context, reason string) {
 		return
 	}
 	character := localPlayerVisualCharacter(ctx)
-	view, status := loadPlayerHumanoidSpriteView(ctx.Resources, character, ctx.Session.Sex, localPlayerIsAdmin(ctx))
+	view, status := sprites.LoadPlayer(ctx.Resources, character, ctx.Session.Sex, localPlayerIsAdmin(ctx))
 	if view != nil {
 		m.playerView = view
 		glog.Debugf("player sprite reloaded reason=%s visual_job=%d %s", reason, character.Job, status)

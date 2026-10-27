@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -142,7 +144,7 @@ func (m *WorldMode) applyParameterChange(ctx client.Context, change network.Para
 		}
 	}
 	if change.VarID == network.StatusBaseLevel {
-		m.syncLevel99AuraEffects(ctx, time.Now())
+		m.effects().SyncLevel99AuraEffects(ctx, time.Now())
 	}
 }
 
@@ -187,11 +189,11 @@ var statusVisualEffects = map[uint16]statusVisualEffect{
 	},
 	network.StatusBaseLevel: {
 		current:       func(s *session.Session) int { return s.Progress.BaseLevel },
-		levelEffectID: effectBaseLevelUp,
+		levelEffectID: effects.BaseLevelUp,
 	},
 	network.StatusJobLevel: {
 		current:       func(s *session.Session) int { return s.Progress.JobLevel },
-		levelEffectID: effectJobLevelUp,
+		levelEffectID: effects.JobLevelUp,
 	},
 }
 
@@ -209,11 +211,11 @@ func (v statusVisualEffect) applyParameterChange(ctx client.Context, mode *World
 		return
 	}
 	if v.levelEffectID > 0 && current > previous {
-		mode.addWorldEffectIfMissing(ctx, v.levelEffectID, localSkillTarget(ctx))
+		mode.effects().AddIfMissing(ctx, v.levelEffectID, scene.LocalSkillTarget(ctx))
 		switch v.levelEffectID {
-		case effectBaseLevelUp:
+		case effects.BaseLevelUp:
 			mode.ui.levelUpNotifications.NotifyBase()
-		case effectJobLevelUp:
+		case effects.JobLevelUp:
 			mode.ui.levelUpNotifications.NotifyJob()
 		}
 	}

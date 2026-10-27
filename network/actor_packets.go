@@ -102,6 +102,11 @@ type ActorStateChange struct {
 	EffectState uint32
 }
 
+type ActorDevotion struct {
+	SourceID uint32
+	Targets  [5]uint32
+}
+
 type ActorBladeStop struct {
 	SourceID uint32
 	TargetID uint32
@@ -787,6 +792,20 @@ func ParseActorStateChange(packet Packet) (ActorStateChange, bool, error) {
 	default:
 		return ActorStateChange{}, false, nil
 	}
+}
+
+func ParseActorDevotion(packet Packet) (ActorDevotion, bool, error) {
+	if packet.ID != 0x01CF {
+		return ActorDevotion{}, false, nil
+	}
+	if len(packet.Data) < 28 {
+		return ActorDevotion{}, false, fmt.Errorf("ZC_DEVOTIONLIST too short: %d", len(packet.Data))
+	}
+	notify := ActorDevotion{SourceID: binary.LittleEndian.Uint32(packet.Data[2:6])}
+	for i := range notify.Targets {
+		notify.Targets[i] = binary.LittleEndian.Uint32(packet.Data[6+4*i : 10+4*i])
+	}
+	return notify, true, nil
 }
 
 func ParseActorBladeStop(packet Packet) (ActorBladeStop, bool, error) {

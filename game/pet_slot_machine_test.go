@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/res"
 )
@@ -20,7 +21,7 @@ func TestActivePetSlotMachineUsesClickCursor(t *testing.T) {
 	mode := &WorldMode{petSlotMachine: petSlotMachineState{active: true}}
 	ctx := client.Context{Input: input.NewState()}
 
-	if got := mode.cursorDesiredAction(ctx, sceneProjection{}, time.Now()); got != cursorActionClick {
+	if got := mode.cursorDesiredAction(ctx, scene.Projection{}, time.Now()); got != cursorActionClick {
 		t.Fatalf("cursor action = %d, want click", got)
 	}
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
@@ -91,9 +93,9 @@ func (m *WorldMode) applyFalconStatus(ctx client.Context, change network.StatusE
 	}
 	id := change.ActorID
 	if id == 0 {
-		id = localSkillTarget(ctx)
+		id = scene.LocalSkillTarget(ctx)
 	}
-	actor, ok, local := actorForCombatID(ctx, id)
+	actor, ok, local := scene.ActorForCombatID(ctx, id)
 	if !ok {
 		return
 	}
@@ -127,11 +129,11 @@ func (m *WorldMode) applyFalconSkillNoDamageNotify(ctx client.Context, notify ne
 	if !falconSkillAttacksTarget(notify.SkillID) {
 		return
 	}
-	target, ok, _ := actorForCombatID(ctx, notify.TargetID)
+	target, ok, _ := scene.ActorForCombatID(ctx, notify.TargetID)
 	if !ok {
 		return
 	}
-	targetX, targetY := actorRenderPosition(target, now)
+	targetX, targetY := scene.ActorRenderPosition(target, now)
 	m.startFalconAttackAt(ctx, notify.SourceID, int(targetX), int(targetY), now)
 }
 
@@ -139,19 +141,12 @@ func (m *WorldMode) applyFalconActorActionNotify(ctx client.Context, action netw
 	if !falconSkillAttacksTarget(action.SkillID) {
 		return
 	}
-	target, ok, _ := actorForCombatID(ctx, action.TargetID)
+	target, ok, _ := scene.ActorForCombatID(ctx, action.TargetID)
 	if !ok {
 		return
 	}
-	targetX, targetY := actorRenderPosition(target, now)
+	targetX, targetY := scene.ActorRenderPosition(target, now)
 	m.startFalconAttackAt(ctx, action.SourceID, int(targetX), int(targetY), now)
-}
-
-func (m *WorldMode) applyFalconSkillCastNotify(ctx client.Context, notify network.SkillCastNotify, now time.Time) {
-	if !falconSkillAttacksGround(notify.SkillID) {
-		return
-	}
-	m.startFalconAttackAt(ctx, notify.SourceID, int(notify.X), int(notify.Y), now)
 }
 
 func (m *WorldMode) applyFalconGroundSkillNotify(ctx client.Context, notify network.GroundSkillNotify, now time.Time) {
@@ -162,7 +157,7 @@ func (m *WorldMode) applyFalconGroundSkillNotify(ctx client.Context, notify netw
 }
 
 func (m *WorldMode) startFalconAttackAt(ctx client.Context, sourceID uint32, targetX, targetY int, now time.Time) bool {
-	source, ok, local := actorForCombatID(ctx, sourceID)
+	source, ok, local := scene.ActorForCombatID(ctx, sourceID)
 	if !ok {
 		return false
 	}
@@ -238,12 +233,12 @@ func (m *WorldMode) removeFalconState(ownerID uint32) {
 	delete(m.falcons, ownerID)
 }
 
-func (m *WorldMode) falconSpriteView(ctx client.Context, job int) *spriteView {
+func (m *WorldMode) falconSpriteView(ctx client.Context, job int) *scene.SpriteView {
 	if ctx.Resources == nil {
 		return nil
 	}
 	if m.falconViews == nil {
-		m.falconViews = make(map[int]*spriteView)
+		m.falconViews = make(map[int]*scene.SpriteView)
 	}
 	if m.falconViewMiss == nil {
 		m.falconViewMiss = make(map[int]struct{})
@@ -254,7 +249,7 @@ func (m *WorldMode) falconSpriteView(ctx client.Context, job int) *spriteView {
 	if _, miss := m.falconViewMiss[job]; miss {
 		return nil
 	}
-	view, status := loadFalconSpriteView(ctx.Resources, job)
+	view, status := sprites.LoadFalcon(ctx.Resources, job)
 	if view == nil {
 		m.falconViewMiss[job] = struct{}{}
 		glog.Warnf("falcon sprite unavailable job=%d: %s", job, status)
@@ -267,7 +262,7 @@ func (m *WorldMode) falconSpriteView(ctx client.Context, job int) *spriteView {
 	return view
 }
 
-func (m *WorldMode) drawSceneActorFalcons(screen *render.Frame, ctx client.Context, projection sceneProjection, entries []sceneActorDrawEntry) {
+func (m *WorldMode) drawSceneActorFalcons(screen *render.Frame, ctx client.Context, projection scene.Projection, entries []scene.ActorDrawEntry) {
 	if len(entries) == 0 {
 		m.pruneFalconStates(nil)
 		return
@@ -275,16 +270,16 @@ func (m *WorldMode) drawSceneActorFalcons(screen *render.Frame, ctx client.Conte
 	now := time.Now()
 	activeOwners := make(map[uint32]struct{})
 	for _, entry := range entries {
-		if !actorHasFalcon(entry.actor) {
+		if !actorHasFalcon(entry.Actor) {
 			continue
 		}
-		activeOwners[entry.actor.ID] = struct{}{}
+		activeOwners[entry.Actor.ID] = struct{}{}
 		alpha := 1.0
-		if entry.stealth == stealthHidden {
+		if entry.Stealth == scene.StealthHidden {
 			alpha = 0.35
 		}
-		alpha *= m.actorVisualAlpha(entry.actor.ID, now)
-		m.drawActorFalcon3D(screen, ctx, projection, entry.actor, projection.cameraYaw, alpha, now)
+		alpha *= m.actorVisualAlpha(entry.Actor.ID, now)
+		m.drawActorFalcon3D(screen, ctx, projection, entry.Actor, projection.CameraYaw, alpha, now)
 	}
 	m.pruneFalconStates(activeOwners)
 }
@@ -301,7 +296,7 @@ func (m *WorldMode) pruneFalconStates(activeOwners map[uint32]struct{}) {
 	}
 }
 
-func (m *WorldMode) drawActorFalcon3D(screen *render.Frame, ctx client.Context, projection sceneProjection, actor worldstate.Actor, cameraYaw float64, alpha float64, now time.Time) bool {
+func (m *WorldMode) drawActorFalcon3D(screen *render.Frame, ctx client.Context, projection scene.Projection, actor worldstate.Actor, cameraYaw float64, alpha float64, now time.Time) bool {
 	if ctx.World == nil || !actorHasFalcon(actor) {
 		return false
 	}
@@ -314,14 +309,14 @@ func (m *WorldMode) drawActorFalcon3D(screen *render.Frame, ctx client.Context, 
 		return false
 	}
 	state := falcon.spriteState(cameraYaw)
-	billboard, ok := singleSpriteBillboardForState(view, state, now)
+	billboard, ok := sprites.BillboardForState(view, state, now)
 	if !ok {
 		return false
 	}
-	terrainZ := terrainHeightAt(ctx.World, falcon.x, falcon.y)
+	terrainZ := scene.TerrainHeightAt(ctx.World, falcon.x, falcon.y)
 	worldX, worldY := cellWorldAnchor(falcon.x, falcon.y)
 	worldZ := terrainZ + falconGlideHeight
-	scale := actorBillboardScreenScale(projection, worldX, worldY, worldZ)
+	scale := scene.ActorBillboardScreenScale(projection, worldX, worldY, worldZ)
 	shadow := actorShadowFactor(ctx.World, falcon.x, falcon.y)
 	m.drawActorSpriteBillboardTintAlpha3D(screen, projection, billboard, worldX, worldY, worldZ, scale, alpha, shadow, color.RGBA{R: 255, G: 255, B: 255, A: 255}, render.BlendSourceOver)
 	return true
@@ -334,7 +329,7 @@ func (m *WorldMode) updateFalconState(actor worldstate.Actor, now time.Time) *fa
 	if m.falcons == nil {
 		m.falcons = make(map[uint32]*falconRenderState)
 	}
-	ownerX, ownerY := actorRenderPosition(actor, now)
+	ownerX, ownerY := scene.ActorRenderPosition(actor, now)
 	state := m.falcons[actor.ID]
 	if state == nil {
 		targetX, targetY := falconFollowTargetCell(ownerX, ownerY)
@@ -389,9 +384,9 @@ func (state *falconRenderState) advance(now time.Time) {
 		state.path = nil
 		return
 	}
-	state.x, state.y = renderPathPositionWithSpeed(state.path, elapsed, state.moveSpeedMS, state.moveStartX, state.moveStartY, true)
-	fromX, fromY, toX, toY := renderPathSegmentWithSpeed(state.path, elapsed, state.moveSpeedMS, state.moveStartX, state.moveStartY, true)
-	state.direction = directionFromFloatDelta(fromX, fromY, toX, toY, state.direction)
+	state.x, state.y = scene.RenderPathPositionWithSpeed(state.path, elapsed, state.moveSpeedMS, state.moveStartX, state.moveStartY, true)
+	fromX, fromY, toX, toY := scene.RenderPathSegmentWithSpeed(state.path, elapsed, state.moveSpeedMS, state.moveStartX, state.moveStartY, true)
+	state.direction = scene.DirectionFromFloatDelta(fromX, fromY, toX, toY, state.direction)
 }
 
 func (state *falconRenderState) startFollow(targetX, targetY int, now time.Time) {
@@ -439,21 +434,21 @@ func (state *falconRenderState) startPathTo(targetX, targetY int, stopRange int,
 	}
 }
 
-func (state *falconRenderState) spriteState(cameraYaw float64) spriteState {
+func (state *falconRenderState) spriteState(cameraYaw float64) sprites.State {
 	if state == nil {
-		return spriteState{}
+		return sprites.State{}
 	}
-	sprite := spriteState{
-		actionFamily: spriteActionIdle,
-		direction:    state.direction,
-		cameraYaw:    cameraYaw,
-		loopIdle:     true,
-		moving:       state.moving,
-		moveSpeedMS:  state.moveSpeedMS,
-		loop:         true,
+	sprite := sprites.State{
+		ActionFamily: scene.SpriteActionIdle,
+		Direction:    state.direction,
+		CameraYaw:    cameraYaw,
+		LoopIdle:     true,
+		Moving:       state.moving,
+		MoveSpeedMS:  state.moveSpeedMS,
+		Loop:         true,
 	}
 	if state.attacking {
-		sprite.actionFamily = spriteActionWalk
+		sprite.ActionFamily = scene.SpriteActionWalk
 	}
 	return sprite
 }

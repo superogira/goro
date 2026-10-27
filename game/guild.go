@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/res"
@@ -734,7 +735,7 @@ func applyLocalGuildSkills(ctx client.Context, info network.GuildSkillInfo) {
 	ctx.Session.Guild.SkillPoints = info.SkillPoints
 	ctx.Session.Guild.Skills = make([]session.Skill, 0, len(info.Skills))
 	for _, skill := range info.Skills {
-		ctx.Session.Guild.Skills = append(ctx.Session.Guild.Skills, sessionSkillFromNetworkWithResources(ctx.Resources, skill))
+		ctx.Session.Guild.Skills = append(ctx.Session.Guild.Skills, scene.SessionSkillFromNetworkWithResources(ctx.Resources, skill))
 	}
 	glog.Debugf("guild skill list received count=%d points=%d", len(info.Skills), info.SkillPoints)
 }

@@ -755,9 +755,9 @@ func (c *ChatConsole) submitCompanionAI(ctx client.Context, homunculus bool) {
 		enabled = ctx.Session.MercenaryCustomAI
 	}
 	if enabled {
-		c.AddSystemMessage("%s AI: Custom", label)
+		c.AddSystemMessage("%s AI mode: Custom", label)
 	} else {
-		c.AddSystemMessage("%s AI: Default", label)
+		c.AddSystemMessage("%s AI mode: Default", label)
 	}
 }
 
@@ -1432,4 +1432,10 @@ func consoleBounds(screenW, screenH int) (x, y, w, h int) {
 	x = maxInt(consoleMargin, (screenW-w)/2)
 	y = maxInt(consoleMargin, screenH-h-consoleMargin)
 	return x, y, w, h
+}
+
+// ConsoleBoundsForTest exposes the console's overlay rect to game tests
+// (the handheld docks it bottom-center, so fixed-corner probes miss it).
+func ConsoleBoundsForTest(screenW, screenH int) (x, y, w, h int) {
+	return consoleBounds(screenW, screenH)
 }

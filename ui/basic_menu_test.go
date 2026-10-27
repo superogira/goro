@@ -136,7 +136,7 @@ func TestCharacterDragKeepsAttachedBasicMenuOnScreen(t *testing.T) {
 	if !character.Update(ctx) {
 		t.Fatal("character window drag start was not consumed")
 	}
-	if !character.dragging {
+	if !character.dragLayer {
 		t.Fatal("character window did not enter drag state")
 	}
 	menu.FollowCharacterWindow(ctx, &character)

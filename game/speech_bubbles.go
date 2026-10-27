@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 )
@@ -19,6 +20,7 @@ const (
 type speechBubble struct {
 	text    string
 	expires time.Time
+	ground  *[2]int
 }
 
 func (m *WorldMode) applySpeechBubble(ctx client.Context, chat network.ChatMessage, now time.Time) {
@@ -29,6 +31,10 @@ func (m *WorldMode) applySpeechBubble(ctx client.Context, chat network.ChatMessa
 		return
 	}
 	text := speechBubbleText(chat.Text)
+	x, y, onTrap := m.skillUnitModelCell(chat.GID)
+	if onTrap {
+		text = strings.TrimSpace(chat.Text)
+	}
 	if text == "" {
 		return
 	}
@@ -50,6 +56,9 @@ func (m *WorldMode) applySpeechBubble(ctx client.Context, chat network.ChatMessa
 		m.speechBubbles[actorID] = speechBubble{
 			text:    text,
 			expires: now.Add(duration),
+		}
+		if onTrap {
+			m.speechBubbles[actorID] = speechBubble{text: text, expires: now.Add(5 * time.Second), ground: &[2]int{x, y}}
 		}
 	}
 }
@@ -100,24 +109,29 @@ func actorSpeechBubbleBottomY(baseY, scale float64) float64 {
 	return actorSpriteTopY(baseY, scale) - actorSpeechBubbleGap
 }
 
-func (m *WorldMode) drawSpeechBubbles(screen *render.Frame, entries []sceneActorDrawEntry, now time.Time) {
+func (m *WorldMode) drawSpeechBubbles(screen *render.Frame, ctx client.Context, projection scene.Projection, entries []scene.ActorDrawEntry, now time.Time) {
 	if len(m.speechBubbles) == 0 {
 		return
 	}
 	for id, bubble := range m.speechBubbles {
 		if now.After(bubble.expires) {
 			delete(m.speechBubbles, id)
+		} else if bubble.ground != nil {
+			x, y := float64(bubble.ground[0]), float64(bubble.ground[1])
+			if p, ok := projection.ProjectPoint(scene.CellCenter(x), scene.CellCenter(y), scene.TerrainHeightAt(ctx.World, x, y)); ok {
+				render.DrawUISpeechBubble(screen, bubble.text, float64(p.X), float64(p.Y)-actorSpeechBubbleGap, speechBubbleMaxWidth)
+			}
 		}
 	}
 	if len(m.speechBubbles) == 0 {
 		return
 	}
 	for _, entry := range entries {
-		bubble, ok := m.speechBubbles[entry.actor.ID]
+		bubble, ok := m.speechBubbles[entry.Actor.ID]
 		if !ok || strings.TrimSpace(bubble.text) == "" {
 			continue
 		}
-		bottomY := actorSpeechBubbleBottomY(entry.screenY, entry.scale)
-		render.DrawUISpeechBubble(screen, bubble.text, entry.screenX, bottomY, speechBubbleMaxWidth)
+		bottomY := actorSpeechBubbleBottomY(entry.ScreenY, entry.Scale)
+		render.DrawUISpeechBubble(screen, bubble.text, entry.ScreenX, bottomY, speechBubbleMaxWidth)
 	}
 }

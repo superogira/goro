@@ -8,6 +8,9 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/internal/testutil"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -29,7 +32,7 @@ func stealthTestContext() client.Context {
 func TestStealthVisibilityAndPicking2008(t *testing.T) {
 	for _, mapProperty := range []worldstate.MapProperty{worldstate.MapPropertyNothing, worldstate.MapPropertyFreePvPZone, worldstate.MapPropertyAgitZone} {
 		for _, viewer := range []string{"self", "party", "other", "detection", "self detection", "GM"} {
-			for _, state := range []uint32{0, db.EffectStateHide, db.EffectStateCloak, db.EffectStateChasewalk, db.EffectStateCloak | db.EffectStateChasewalk, db.EffectStateInvisible, actorStealthMask} {
+			for _, state := range []uint32{0, db.EffectStateHide, db.EffectStateCloak, db.EffectStateChasewalk, db.EffectStateCloak | db.EffectStateChasewalk, db.EffectStateInvisible, scene.ActorStealthMask} {
 				t.Run(fmt.Sprintf("map=%d/%s/option=%x", mapProperty, viewer, state), func(t *testing.T) {
 					ctx := stealthTestContext()
 					ctx.World.MapProperty = mapProperty
@@ -51,29 +54,29 @@ func TestStealthVisibilityAndPicking2008(t *testing.T) {
 					if viewer == "GM" {
 						ctx.Session.AdminList = []uint32{ctx.Session.AccountID}
 					}
-					want := stealthHidden
+					want := scene.StealthHidden
 					switch {
 					case state == 0:
-						want = stealthVisible
+						want = scene.StealthVisible
 					case state&db.EffectStateInvisible != 0:
 					case detection:
-						want = stealthSilhouette
+						want = scene.StealthSilhouette
 					case state == db.EffectStateHide && (local || viewer == "GM"):
-						want = stealthShadow
+						want = scene.StealthShadow
 					}
-					projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
+					projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
 					mode := &WorldMode{}
 					entries := mode.collectSceneActorEntries(render.NewFrame(800, 600), ctx, projection)
 					found := false
 					for _, entry := range entries {
-						if entry.actor.ID == actor.ID {
+						if entry.Actor.ID == actor.ID {
 							found = true
-							if entry.stealth != want {
-								t.Fatalf("render view = %d, want %d", entry.stealth, want)
+							if entry.Stealth != want {
+								t.Fatalf("render view = %d, want %d", entry.Stealth, want)
 							}
 						}
 					}
-					if found != (local || want != stealthHidden) {
+					if found != (local || want != scene.StealthHidden) {
 						t.Fatalf("actor in draw list = %t, want view %d", found, want)
 					}
 					if !local && state != 0 {
@@ -83,7 +86,7 @@ func TestStealthVisibilityAndPicking2008(t *testing.T) {
 						if actorCanBeAttackClicked(ctx, actor) || actorCanOpenPlayerContext(ctx, actor) || actorCanBeSkillTargeted(ctx, session.Skill{ID: db.SkillALHeal, Type: skillTargetFriend}, actor) {
 							t.Fatal("hidden actor was targetable")
 						}
-						if siegeActorShowsGuildEmblem(sceneActorDrawEntry{actor: actor}) {
+						if siegeActorShowsGuildEmblem(scene.ActorDrawEntry{Actor: actor}) {
 							t.Fatal("hidden actor exposed its guild emblem")
 						}
 					}
@@ -94,28 +97,28 @@ func TestStealthVisibilityAndPicking2008(t *testing.T) {
 }
 
 func TestStealthDrawsShadowOrBlackBody(t *testing.T) {
-	sprite := &spriteView{
-		spr:    &res.SPR{Frames: []res.SPRFrame{{Type: res.SPRFrameRGBA, Width: 8, Height: 8, Data: solidRGBAFrame(8, 8)}}},
-		act:    &res.ACT{Actions: []res.ACTAction{{DelayMS: 100, Animations: []res.ACTAnimation{{Layers: []res.ACTLayer{{Index: 0, SPRType: res.SPRFrameRGBA, ScaleX: 1, ScaleY: 1, Color: [4]float32{1, 1, 1, 1}}}}}}}},
-		images: make(map[spriteFrameKey]*render.Image), billboards: make(map[singleSpriteBillboardKey]*spriteBillboard),
+	sprite := &scene.SpriteView{
+		Spr:    &res.SPR{Frames: []res.SPRFrame{{Type: res.SPRFrameRGBA, Width: 8, Height: 8, Data: testutil.SolidRGBAFrame(8, 8)}}},
+		Act:    &res.ACT{Actions: []res.ACTAction{{DelayMS: 100, Animations: []res.ACTAnimation{{Layers: []res.ACTLayer{{Index: 0, SPRType: res.SPRFrameRGBA, ScaleX: 1, ScaleY: 1, Color: [4]float32{1, 1, 1, 1}}}}}}}},
+		Images: make(map[scene.SpriteFrameKey]*render.Image), Billboards: make(map[scene.SpriteBillboardKey]*scene.Billboard),
 	}
-	mode := &WorldMode{shadowView: sprite, playerView: &humanoidSpriteView{body: sprite, billboards: make(map[humanoidBillboardKey]*spriteBillboard)}}
+	mode := &WorldMode{shadowView: sprite, playerView: &sprites.Humanoid{Body: sprite}}
 	ctx := stealthTestContext()
-	projection := newSceneProjectionForTarget(800, 600, cellCenter(10), cellCenter(20), 0)
+	projection := testutil.Projection(800, 600, scene.CellCenter(10), scene.CellCenter(20), 0)
 	for _, tc := range []struct {
-		view         stealthView
+		view         scene.StealthView
 		body, shadow bool
-	}{{stealthVisible, true, true}, {stealthShadow, false, true}, {stealthSilhouette, true, false}, {stealthHidden, false, false}} {
+	}{{scene.StealthVisible, true, true}, {scene.StealthShadow, false, true}, {scene.StealthSilhouette, true, false}, {scene.StealthHidden, false, false}} {
 		t.Run(fmt.Sprint(tc.view), func(t *testing.T) {
 			entry := mode.collectSceneActorEntries(render.NewFrame(800, 600), ctx, projection)[0]
-			entry.stealth = tc.view
+			entry.Stealth = tc.view
 			frame := render.NewFrame(800, 600)
 			mode.drawSceneActorEntry(frame, ctx, projection, entry)
 			commands := reflect.ValueOf(frame).Elem().FieldByName("worldBillboards")
 			if (commands.Len() > 0) != tc.body {
 				t.Fatalf("body draws = %d, want body=%t", commands.Len(), tc.body)
 			}
-			if tc.view == stealthSilhouette {
+			if tc.view == scene.StealthSilhouette {
 				for _, channel := range []string{"ColorR", "ColorG", "ColorB"} {
 					if commands.Index(0).FieldByName(channel).Float() != 0 {
 						t.Fatal("detected body was not black")
@@ -140,7 +143,7 @@ func TestStealthActionPackets(t *testing.T) {
 	netClient, server := newBotTestConnection(t, 20080910)
 	ctx.Network = netClient
 	mode := &WorldMode{}
-	actor := worldstate.Actor{ID: 300, X: 11, Y: 20, Job: 1002, HasObjectType: true, ObjectType: actorObjectTypeMob, HasState: true}
+	actor := worldstate.Actor{ID: 300, X: 11, Y: 20, Job: 1002, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob, HasState: true}
 	ctx.World.UpsertActor(actor)
 	item := session.InventoryItem{Index: 7, ItemID: 501, Type: db.ItemTypeHealing}
 	floorItem := worldstate.FloorItem{ID: 400, X: 10, Y: 20}
@@ -214,7 +217,7 @@ func TestStealthCollectionHandlesPlayerOutsideViewport(t *testing.T) {
 	ctx := stealthTestContext()
 	ctx.World.Player.X = 100000
 	ctx.World.Player.EffectState = db.EffectStateHide
-	projection := newSceneProjectionForTarget(800, 600, 0, 0, 0)
+	projection := testutil.Projection(800, 600, 0, 0, 0)
 	mode := &WorldMode{}
 	if entries := mode.collectSceneActorEntries(render.NewFrame(800, 600), ctx, projection); len(entries) != 0 {
 		t.Fatal("offscreen player remained in the draw list")
@@ -226,21 +229,21 @@ func TestStealthCancelsQueuedActionsAndHidesAttachments(t *testing.T) {
 	actor := worldstate.Actor{ID: 300, Job: db.JobAssassin, X: 11, Y: 20, HasLevel: true, Level: 99, Appearance: true, HasState: true}
 	ctx.World.UpsertActor(actor)
 	mode := &WorldMode{}
-	mode.syncLevel99AuraEffects(ctx, time.Now())
-	if len(mode.worldEffects) == 0 {
+	mode.effects().SyncLevel99AuraEffects(ctx, time.Now())
+	if len(mode.effects().Active) == 0 {
 		t.Fatal("missing initial level aura")
 	}
 	mode.pendingAttack = attackIntent{targetID: actor.ID}
 	mode.lockedAttackID, mode.attackFocusID = actor.ID, actor.ID
 	mode.pendingSkill = pendingSkillTarget{skill: session.Skill{ID: db.SkillALHeal}, targetID: actor.ID}
 	mode.applyActorStateChange(ctx, network.ActorStateChange{ID: actor.ID, EffectState: db.EffectStateCloak})
-	mode.syncLevel99AuraEffects(ctx, time.Now())
-	if mode.pendingAttack.targetID != 0 || mode.lockedAttackID != 0 || mode.attackFocusID != 0 || mode.pendingSkill.skill.ID != 0 || len(mode.worldEffects) != 0 {
+	mode.effects().SyncLevel99AuraEffects(ctx, time.Now())
+	if mode.pendingAttack.targetID != 0 || mode.lockedAttackID != 0 || mode.attackFocusID != 0 || mode.pendingSkill.skill.ID != 0 || len(mode.effects().Active) != 0 {
 		t.Fatal("hidden target retained an action or aura")
 	}
 	mode.applyActorStateChange(ctx, network.ActorStateChange{ID: actor.ID})
-	mode.syncLevel99AuraEffects(ctx, time.Now())
-	if len(mode.worldEffects) == 0 {
+	mode.effects().SyncLevel99AuraEffects(ctx, time.Now())
+	if len(mode.effects().Active) == 0 {
 		t.Fatal("revealed actor did not regain its aura")
 	}
 	mode.pendingAttack = attackIntent{targetID: actor.ID}
@@ -250,11 +253,11 @@ func TestStealthCancelsQueuedActionsAndHidesAttachments(t *testing.T) {
 	if mode.pendingAttack.targetID != 0 || mode.pendingPickup.itemID != 0 || mode.pendingSkill.skill.ID != 0 {
 		t.Fatal("Hiding retained a queued local action")
 	}
-	entry := sceneActorDrawEntry{actor: worldstate.Actor{ID: 100, EffectState: db.EffectStateHide | db.EffectStateCart1 | db.EffectStateFalcon, HasCart: true, HasCartState: true}}
-	if mode.drawActorCart3D(nil, ctx, sceneProjection{}, entry, 0, 1, 1) {
+	entry := scene.ActorDrawEntry{Actor: worldstate.Actor{ID: 100, EffectState: db.EffectStateHide | db.EffectStateCart1 | db.EffectStateFalcon, HasCart: true, HasCartState: true}}
+	if mode.drawActorCart3D(nil, ctx, scene.Projection{}, entry, 0, 1, 1) {
 		t.Fatal("hidden cart was drawn")
 	}
-	mode.drawSceneActorFalcons(nil, ctx, sceneProjection{}, []sceneActorDrawEntry{entry})
+	mode.drawSceneActorFalcons(nil, ctx, scene.Projection{}, []scene.ActorDrawEntry{entry})
 	if len(mode.falcons) != 0 {
 		t.Fatal("hidden actor created a falcon")
 	}

@@ -1,9 +1,9 @@
 package game
 
 import (
-	"github.com/kivutar/goro/client"
 	"testing"
 
+	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/config"
 )
 

@@ -544,3 +544,11 @@ holding these modifiers also pauses the profile's continuous controls.
 The profile is implemented entirely in Lua. The Go API only exposes generic
 keyboard state, movement, actions, target information, and highlighting
 primitives.
+
+## Code organization
+
+The Lua runtime, API bindings, and data conversion helpers live in `game/bot`.
+Its VM state is private. `game/script.go` supplies typed Go callbacks for world
+commands and login/UI state; the mode manager retains script ownership and
+callback ordering. Runtime tests live in `game/bot`, while tests exercising
+actual modes remain in `game/script_test.go` and use the public script API.

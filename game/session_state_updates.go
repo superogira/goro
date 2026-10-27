@@ -2,6 +2,7 @@ package game
 
 import (
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
 
 	"github.com/kivutar/goro/network"
@@ -124,7 +125,7 @@ func applySkillInfoList(ctx client.Context, list network.SkillInfoList) {
 	}
 	ctx.Session.Skills.List = ctx.Session.Skills.List[:0]
 	for _, skill := range list.Skills {
-		ctx.Session.Skills.List = append(ctx.Session.Skills.List, sessionSkillFromNetworkWithResources(ctx.Resources, skill))
+		ctx.Session.Skills.List = append(ctx.Session.Skills.List, scene.SessionSkillFromNetworkWithResources(ctx.Resources, skill))
 	}
 	refreshLocalPlayerMoveSpeed(ctx)
 	glog.Debugf("skill list received count=%d points=%d", len(ctx.Session.Skills.List), ctx.Session.Skills.Points)
@@ -134,7 +135,7 @@ func applySkillInfoUpdate(ctx client.Context, update network.SkillInfoUpdate) {
 	if ctx.Session == nil {
 		return
 	}
-	upsertSessionSkill(ctx.Session, sessionSkillFromNetworkWithResources(ctx.Resources, update.Skill))
+	upsertSessionSkill(ctx.Session, scene.SessionSkillFromNetworkWithResources(ctx.Resources, update.Skill))
 	refreshLocalPlayerMoveSpeed(ctx)
 	glog.Debugf("skill update id=%d level=%d sp=%d range=%d upgradable=%t", update.Skill.ID, update.Skill.Level, update.Skill.SPCost, update.Skill.Range, update.Skill.Upgradable)
 }

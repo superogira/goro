@@ -1,6 +1,8 @@
 package game
 
 import (
+	"github.com/kivutar/goro/game/sprites"
+	"github.com/kivutar/goro/game/scene"
 	"math/rand"
 	"strings"
 
@@ -71,7 +73,7 @@ func loadLoadingShowcase(manager *res.Manager) *loadingShowcase {
 	}
 	for attempt := 0; attempt < 8; attempt++ {
 		stem := stems[rand.Intn(len(stems))]
-		view, _ := loadSpriteView(manager,
+		view, _ := scene.LoadSpriteView(manager,
 			[]string{stem + ".act"},
 			[]string{stem + ".spr"},
 			nil,
@@ -79,11 +81,11 @@ func loadLoadingShowcase(manager *res.Manager) *loadingShowcase {
 		if view == nil {
 			continue
 		}
-		billboard, ok := fixedSpriteBillboard(view)
-		if !ok || billboard.image == nil || billboard.image.Bounds().Dy() <= 0 {
+		billboard, ok := sprites.FixedBillboard(view)
+		if !ok || billboard.Image == nil || billboard.Image.Bounds().Dy() <= 0 {
 			continue
 		}
-		return &loadingShowcase{image: billboard.image, name: loadingShowcaseName(stem)}
+		return &loadingShowcase{image: billboard.Image, name: loadingShowcaseName(stem)}
 	}
 	return nil
 }

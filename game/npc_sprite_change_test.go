@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/internal/testutil"
+	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
@@ -26,7 +29,7 @@ func TestNPCSpriteChangePreservesActorAndMovement(t *testing.T) {
 	now := time.Now()
 	before := worldstate.Actor{
 		ID: 300, Job: 1008, Name: "Pupa", Appearance: true, X: 15, Y: 20, Dir: 6,
-		ObjectType: actorObjectTypeMob, HasObjectType: true, Speed: 200,
+		ObjectType: scene.ActorObjectTypeMob, HasObjectType: true, Speed: 200,
 		Moving: true, FromX: 10, FromY: 20, ToX: 15, ToY: 20,
 		MoveStarted: now.Add(-time.Second), MoveDuration: 2 * time.Second,
 		MoveStartX: 10.5, MoveStartY: 20.5, HasMoveStart: true,
@@ -40,7 +43,7 @@ func TestNPCSpriteChangePreservesActorAndMovement(t *testing.T) {
 			want.Job = 1018
 			packet := npcSpriteChangeTestPacket(before.ID, 1018, packetType)
 			if login {
-				if !(&LoginMode{}).applyLoginActorBootstrapPacket(ctx, packet) {
+				if handled, err := applyLoginActorBootstrapPacket(ctx, packet); !handled || err != nil {
 					t.Fatal("login dropped transformation")
 				}
 			} else {
@@ -61,7 +64,7 @@ func TestNPCSpriteChangePreservesActorAndMovement(t *testing.T) {
 func TestNPCSpriteChangeIgnoresMissingActorsAndPlayers(t *testing.T) {
 	ctx := client.Context{World: worldstate.New(), Session: &session.Session{AccountID: 100, CharID: 200, Selected: session.Character{ID: 200, Job: 1}}}
 	ctx.World.Player = worldstate.Actor{ID: 200, Job: 1, Appearance: true}
-	ctx.World.UpsertActor(worldstate.Actor{ID: 300, Job: 1, Appearance: true, ObjectType: actorObjectTypePC, HasObjectType: true})
+	ctx.World.UpsertActor(worldstate.Actor{ID: 300, Job: 1, Appearance: true, ObjectType: scene.ActorObjectTypePC, HasObjectType: true})
 	ctx.World.UpsertActor(worldstate.Actor{ID: 301, Job: 1, Appearance: true})
 	mode := &WorldMode{}
 	for _, id := range []uint32{0, 100, 200, 300, 301, 999} {
@@ -82,19 +85,19 @@ func TestNPCSpriteChangeIgnoresMissingActorsAndPlayers(t *testing.T) {
 
 func TestNPCSpriteChangeHandlesHiddenClasses(t *testing.T) {
 	ctx := client.Context{World: worldstate.New()}
-	ctx.World.UpsertActor(worldstate.Actor{ID: 300, Job: 1002, Appearance: true, ObjectType: actorObjectTypeNPC, HasObjectType: true})
+	ctx.World.UpsertActor(worldstate.Actor{ID: 300, Job: 1002, Appearance: true, ObjectType: scene.ActorObjectTypeNPC, HasObjectType: true})
 	mode := &WorldMode{}
 	for _, job := range []uint32{139, 111, 1002} {
 		mode.handleNetworkPacket(ctx, npcSpriteChangeTestPacket(300, job, 1), time.Now())
 		actor := ctx.World.Actors[300]
-		if uint32(actor.Job) != job || actorJobHasNoSprite(int(actor.Job)) != (job != 1002) {
+		if uint32(actor.Job) != job || sprites.JobHasNoSprite(int(actor.Job)) != (job != 1002) {
 			t.Fatalf("class %d: %+v", job, actor)
 		}
 	}
 }
 
 func TestPupaTransformationsSwitchSpritesRealData(t *testing.T) {
-	ctx := client.Context{World: worldstate.New(), Session: &session.Session{}, Resources: realDataManager(t)}
+	ctx := client.Context{World: worldstate.New(), Session: &session.Session{}, Resources: testutil.RealDataManager(t)}
 	mode := &WorldMode{}
 	now := time.Now()
 	// Keep one unchanged Pupa to catch accidental mutation of the shared view.
@@ -102,7 +105,7 @@ func TestPupaTransformationsSwitchSpritesRealData(t *testing.T) {
 		ctx.World.UpsertActor(worldstate.Actor{ID: id, Job: 1008, Appearance: true, X: 10, Y: 20, Speed: 200})
 	}
 	pupa := mode.nonPCSpriteView(ctx, ctx.World.Actors[300])
-	if pupa == nil || !strings.Contains(strings.ToLower(pupa.source), "pupa.spr") {
+	if pupa == nil || !strings.Contains(strings.ToLower(pupa.Source), "pupa.spr") {
 		t.Fatal("Pupa resource did not load")
 	}
 	var stream []byte
@@ -130,11 +133,11 @@ func TestPupaTransformationsSwitchSpritesRealData(t *testing.T) {
 		upsertNetworkActor(ctx, network.ActorEntry{ID: id, Moving: true, FromX: 10, FromY: 20, ToX: 15, ToY: 20, X: 15, Y: 20})
 		actor := ctx.World.Actors[id]
 		view := mode.nonPCSpriteView(ctx, actor)
-		if actor.Job != 1018 || actor.Name != "Creamy" || view == nil || view == pupa || !strings.Contains(strings.ToLower(view.source), "creamy.spr") {
+		if actor.Job != 1018 || actor.Name != "Creamy" || view == nil || view == pupa || !strings.Contains(strings.ToLower(view.Source), "creamy.spr") {
 			t.Fatalf("actor %d did not become Creamy: %+v", id, actor)
 		}
 		state := mode.nonPCSpriteState(actor, time.Now())
-		if state.actionFamily != spriteActionWalk || !state.moving {
+		if state.ActionFamily != scene.SpriteActionWalk || !state.Moving {
 			t.Fatalf("Creamy lost movement: %+v", state)
 		}
 	}

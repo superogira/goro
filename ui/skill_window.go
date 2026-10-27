@@ -88,8 +88,6 @@ type SkillWindow struct {
 	dragFrom       time.Time
 	hoveredSkill   session.Skill
 	hasHover       bool
-	hoverX         int
-	hoverY         int
 	tooltip        tooltipState
 	pending        map[uint16]int
 	pendingOrder   []uint16
@@ -431,8 +429,6 @@ func (w *SkillWindow) skillGridWidget(ctx Context, assets AssetProvider, actions
 		onHover: func(skill session.Skill, mx, my int) {
 			w.hoveredSkill = skill
 			w.hasHover = true
-			w.hoverX = mx
-			w.hoverY = my
 			w.showTooltip(ctx, skill, mx, my)
 		},
 		onLeave: func() {
@@ -577,8 +573,6 @@ func (w *SkillWindow) handleSkillTableRowEvent(widgetCtx widget.Context, ctx Con
 		}
 		w.hoveredSkill = skill
 		w.hasHover = true
-		w.hoverX = mx
-		w.hoverY = my
 		w.showTooltip(ctx, skill, mx, my)
 		return false
 	case event.MousePress:
@@ -604,7 +598,7 @@ func (w *SkillWindow) handleSkillTableRowEvent(widgetCtx widget.Context, ctx Con
 			w.dirty = true
 			return true
 		}
-		w.pressSkill(ctx, actions, skill, int(mouse.GlobalPosition.X), int(mouse.GlobalPosition.Y))
+		w.pressSkill(ctx, actions, skill, 0, 0)
 		return true
 	}
 	return false
@@ -665,8 +659,6 @@ func (w *SkillWindow) pressSkill(ctx Context, actions GameActions, skill session
 	w.dragActive = true
 	w.hideTooltip()
 	w.dragFrom = now
-	w.hoverX = mx
-	w.hoverY = my
 }
 
 func (w *SkillWindow) showTooltip(ctx Context, skill session.Skill, mx, my int) {
@@ -728,7 +720,7 @@ func (w *SkillWindow) skillIconImage(ctx Context, assets AssetProvider, skill se
 	}
 	icons := w.icons[skill.ID]
 	if icons.normal == nil {
-		img := assets.SkillIconImage(ctx.Resources, skill, skillIconSize)
+		img := assets.SkillIconImage(ctx.Resources, skill)
 		if img == nil {
 			if w.iconMiss == nil {
 				w.iconMiss = make(map[uint16]struct{})
@@ -1045,10 +1037,6 @@ func (w *SkillWindow) skillRequirementsMet(job int, levels map[uint16]int, skill
 	return true
 }
 
-func skillDefaultPosition(ctx Context) (int, int) {
-	return skillWindowDefaultPosition(ctx, skillWindowWidth, skillWindowHeight)
-}
-
 func skillWindowDefaultPosition(ctx Context, windowWidth, windowHeight int) (int, int) {
 	width, height := ctx.ScreenSize()
 	// Right-flush and nudged 5px above center: the MENU panels' character
@@ -1102,10 +1090,6 @@ func skillTableButtonBoundsForColumns(columns []rotheme.TableViewColumn, row int
 		x += col.Width
 	}
 	return geometry.Rect{}
-}
-
-func skillTableLevelUpButtonBounds(row int) geometry.Rect {
-	return skillTableButtonBounds(row, "levelup")
 }
 
 func skillTypeLabel(skill session.Skill) string {

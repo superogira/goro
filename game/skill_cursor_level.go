@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/session"
 )
@@ -50,12 +51,12 @@ func pendingSkillCursorLevelPosition(mouseX, mouseY int, magnetX, magnetY float6
 	return float64(mouseX) + pendingSkillCursorLevelOffsetX - magnetX, float64(mouseY) + pendingSkillCursorLevelOffsetY - magnetY
 }
 
-func (m *WorldMode) pendingSkillCursorLevelBillboard(ctx client.Context, text string) (*spriteBillboard, bool) {
+func (m *WorldMode) pendingSkillCursorLevelBillboard(ctx client.Context, text string) (*scene.Billboard, bool) {
 	if text == "" {
 		return nil, false
 	}
 	if m.cursorLevelNums == nil {
-		m.cursorLevelNums = make(map[string]*spriteBillboard)
+		m.cursorLevelNums = make(map[string]*scene.Billboard)
 	}
 	if billboard, ok := m.cursorLevelNums[text]; ok {
 		return billboard, true
@@ -64,14 +65,14 @@ func (m *WorldMode) pendingSkillCursorLevelBillboard(ctx client.Context, text st
 	if !ok {
 		return nil, false
 	}
-	image := pendingSkillCursorLevelGlyphImage(raw.image)
+	image := pendingSkillCursorLevelGlyphImage(raw.Image)
 	if image == nil {
 		return nil, false
 	}
-	billboard := &spriteBillboard{
-		image:   image,
-		anchorX: raw.anchorX,
-		anchorY: raw.anchorY,
+	billboard := &scene.Billboard{
+		Image:   image,
+		AnchorX: raw.AnchorX,
+		AnchorY: raw.AnchorY,
 	}
 	m.cursorLevelNums[text] = billboard
 	return billboard, true
@@ -105,8 +106,8 @@ func pendingSkillCursorLevelGlyphImage(src *render.Image) *render.Image {
 	return render.NewImageFromImage(dst)
 }
 
-func drawPendingSkillCursorLevelBillboard(screen *render.Frame, billboard *spriteBillboard, x, y float64) {
-	if screen == nil || billboard == nil || billboard.image == nil {
+func drawPendingSkillCursorLevelBillboard(screen *render.Frame, billboard *scene.Billboard, x, y float64) {
+	if screen == nil || billboard == nil || billboard.Image == nil {
 		return
 	}
 	x, y = pendingSkillCursorLevelDrawOrigin(screen, x, y)
@@ -125,14 +126,14 @@ func drawPendingSkillCursorLevelBillboard(screen *render.Frame, billboard *sprit
 		outline.GeoM.Translate(x+offset.x, y+offset.y)
 		outline.Filter = render.FilterLinear
 		outline.ColorScale.Scale(outlineR, outlineG, outlineB, outlineA)
-		screen.DrawImage(billboard.image, &outline)
+		screen.DrawImage(billboard.Image, &outline)
 	}
 
 	var opts render.DrawImageOptions
 	opts.GeoM.Scale(pendingSkillCursorLevelScale, pendingSkillCursorLevelScale)
 	opts.GeoM.Translate(x, y)
 	opts.Filter = render.FilterLinear
-	screen.DrawImage(billboard.image, &opts)
+	screen.DrawImage(billboard.Image, &opts)
 }
 
 func pendingSkillCursorLevelDrawOrigin(screen *render.Frame, x, y float64) (float64, float64) {

@@ -215,7 +215,7 @@ func (m *BasicMenu) FollowCharacterWindow(ctx client.Context, character *Charact
 	// The menu owns the attached extent. Expanding near the bottom moves the
 	// whole group back on screen (upstream behavior).
 	bottom := basicMenuFollowGap + height
-	if bottom > character.dragBottom && !character.dragging {
+	if bottom > character.dragBottom && !character.dragLayer {
 		_, screenH := ctx.ScreenSize()
 		maxY := maxInt(windowScreenMargin, screenH-character.height-bottom-windowScreenMargin)
 		if character.y > maxY {

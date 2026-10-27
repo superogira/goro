@@ -1,6 +1,8 @@
 package game
 
-import "github.com/kivutar/goro/db"
+import (
+	"github.com/kivutar/goro/db"
+)
 
 const inventoryIconSize = 24
 

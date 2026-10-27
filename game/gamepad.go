@@ -1,6 +1,8 @@
 package game
 
 import (
+	maps "github.com/kivutar/goro/game/map"
+	"github.com/kivutar/goro/game/scene"
 	"fmt"
 	"image/color"
 	"math"
@@ -836,7 +838,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 // gamepadPrimaryAction attacks the nearest attackable actor in range, else
 // requests pickup of the nearest floor item in range.
 func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool {
-	playerX, playerY := currentPlayerCell(ctx, now)
+	playerX, playerY := scene.CurrentPlayerCell(ctx, now)
 
 	bestDistance := math.Inf(1)
 	var bestActor world.Actor
@@ -847,7 +849,7 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 		if !actorCanBeAttackClicked(ctx, actor) {
 			continue
 		}
-		actorX, actorY := actorRenderPosition(actor, now)
+		actorX, actorY := scene.ActorRenderPosition(actor, now)
 		distance := math.Hypot(actorX-float64(playerX), actorY-float64(playerY))
 		if distance < bestDistance {
 			bestDistance = distance
@@ -887,7 +889,7 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 		if !cursorActorCanTalk(actor) {
 			continue
 		}
-		actorX, actorY := actorRenderPosition(actor, now)
+		actorX, actorY := scene.ActorRenderPosition(actor, now)
 		distance := math.Hypot(actorX-float64(playerX), actorY-float64(playerY))
 		if distance < bestTalkDistance {
 			bestTalkDistance = distance
@@ -944,7 +946,7 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 				m.camera.ZoomBy(1 / zoomFactor)
 			}
 		}
-		if !cameraRotationLockedForMap(ctx) {
+		if !scene.CameraRotationLockedForMap(ctx) {
 			if dx < 0 {
 				m.camera.Rotate(-rotateAngle)
 			} else if dx > 0 {
@@ -967,12 +969,12 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 
 	screenW, screenH := ctx.ScreenSize()
 	projection := m.sceneProjection(ctx, screenW, screenH, now)
-	playerX, playerY := currentPlayerCell(ctx, now)
-	terrainZ := terrainHeightAt(ctx.World, float64(playerX), float64(playerY))
-	point := projection.Project(cellCenter(float64(playerX)), cellCenter(float64(playerY)), terrainZ)
-	screenX := math.Min(math.Max(float64(point.x)+float64(dx)*gamepadWalkScreenLead, 0), float64(screenW-1))
-	screenY := math.Min(math.Max(float64(point.y)+float64(dy)*gamepadWalkScreenLead, 0), float64(screenH-1))
-	targetX, targetY, ok := clickedWalkTarget(ctx, projection, int(screenX), int(screenY))
+	playerX, playerY := scene.CurrentPlayerCell(ctx, now)
+	terrainZ := scene.TerrainHeightAt(ctx.World, float64(playerX), float64(playerY))
+	point := projection.Project(scene.CellCenter(float64(playerX)), scene.CellCenter(float64(playerY)), terrainZ)
+	screenX := math.Min(math.Max(float64(point.X)+float64(dx)*gamepadWalkScreenLead, 0), float64(screenW-1))
+	screenY := math.Min(math.Max(float64(point.Y)+float64(dy)*gamepadWalkScreenLead, 0), float64(screenH-1))
+	targetX, targetY, ok := maps.ClickedWalkTarget(ctx, projection, int(screenX), int(screenY))
 	if !ok || playerAtWalkTarget(ctx.World.Player, targetX, targetY, now) {
 		return
 	}
@@ -986,4 +988,27 @@ func (m *WorldMode) updateGamepadWalk(ctx client.Context, pointerBlocked bool, n
 		return
 	}
 	m.requestWalk(ctx, targetX, targetY, "gamepad walk")
+}
+
+// setHeldMenuOpen toggles the direct-drawn MENU overlay and its companion
+// panels (character info + minimap) together.
+func (m *WorldMode) setHeldMenuOpen(ctx client.Context, open bool) {
+	if m.heldMenuOpen == open {
+		return
+	}
+	m.heldMenuOpen = open
+	if open && m.heldMenuSel < 0 {
+		m.heldMenuSel = 0
+	}
+	glog.Infof("handheld menu toggled open=%t", m.heldMenuOpen)
+	if open {
+		m.menuPanelsShown = true
+		m.ui.minimap.Show(ctx)
+		return
+	}
+	m.menuPanelsShown = false
+	m.ui.minimap.Hide(ctx)
+	if m.ui.characterWindow.IsOpen() {
+		m.ui.characterWindow.Close()
+	}
 }

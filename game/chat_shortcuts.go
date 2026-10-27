@@ -5,6 +5,7 @@ import (
 
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
+	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/input"
 )
 
@@ -30,7 +31,7 @@ func (m *WorldMode) PrepareKeyInput(ctx client.Context, code input.KeyCode, mods
 }
 
 func (m *WorldMode) uiInputSuspended() bool {
-	return !m.serverProgress.started.IsZero() || m.mapFade.phase == mapFadeOut || m.mapFade.phase == mapFadeHold || m.mapFade.phase == mapFadePrewarm
+	return !m.serverProgress.started.IsZero() || m.mapFade.Phase == maps.FadeOut || m.mapFade.Phase == maps.FadeHold || m.mapFade.Phase == maps.FadePrewarm
 }
 
 func (m *WorldMode) suppressShortcutText(ctx client.Context, code input.KeyCode) bool {

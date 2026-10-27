@@ -1,6 +1,7 @@
 package game
 
 import (
+	"github.com/kivutar/goro/game/scene"
 	"math"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestPickBoundsGrowWithMultiplier(t *testing.T) {
 func TestSnapCircleCoversPickBox(t *testing.T) {
 	for _, scale := range []float64{0.42, 1, 2.5} {
 		actorRadius := actorCursorSnapRadius(scale)
-		actorReach := math.Hypot(44*scale, float64(humanoidBillboardAnchorY+20)/2*scale)
+		actorReach := math.Hypot(44*scale, float64(scene.HumanoidBillboardAnchorY+20)/2*scale)
 		if actorRadius+1e-9 < actorReach {
 			t.Fatalf("actor snap radius %.2f < pick box corner reach %.2f at scale %.2f", actorRadius, actorReach, scale)
 		}

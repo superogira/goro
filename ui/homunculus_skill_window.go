@@ -47,8 +47,6 @@ type HomunculusSkillWindow struct {
 	dragFrom       time.Time
 	hoveredSkill   session.Skill
 	hasHover       bool
-	hoverX         int
-	hoverY         int
 	tooltip        tooltipState
 	pending        map[uint16]int
 	pendingOrder   []uint16
@@ -200,16 +198,6 @@ func (w *HomunculusSkillWindow) UpdateDrag(ctx Context, shortcuts *ShortcutBar) 
 		return true
 	}
 	return true
-}
-
-func (w *HomunculusSkillWindow) Draw(screen *render.Frame, ctx Context, assets AssetProvider) {
-	w.EnsureWindow(homunculusSkillWindowWidth, homunculusSkillWindowHeight)
-	if !w.IsOpen() {
-		w.Unpublish(ctx)
-		w.hideTooltip()
-		return
-	}
-	w.Publish(ctx)
 }
 
 func (w *HomunculusSkillWindow) DrawDragGhost(screen *render.Frame, ctx Context, assets AssetProvider) {
@@ -380,8 +368,6 @@ func (w *HomunculusSkillWindow) handleSkillTableRowEvent(widgetCtx widget.Contex
 		}
 		w.hoveredSkill = skill
 		w.hasHover = true
-		w.hoverX = mx
-		w.hoverY = my
 		w.showTooltip(ctx, skill, mx, my)
 		return false
 	case event.MousePress:
@@ -397,7 +383,7 @@ func (w *HomunculusSkillWindow) handleSkillTableRowEvent(widgetCtx widget.Contex
 			w.dirty = true
 			return true
 		}
-		w.pressSkill(ctx, actions, skill, int(mouse.GlobalPosition.X), int(mouse.GlobalPosition.Y))
+		w.pressSkill(ctx, actions, skill)
 		return true
 	}
 	return false
@@ -413,7 +399,7 @@ func (w *HomunculusSkillWindow) refresh(ctx Context, actions GameActions) {
 	w.Publish(ctx)
 }
 
-func (w *HomunculusSkillWindow) pressSkill(ctx Context, actions GameActions, skill session.Skill, mx, my int) {
+func (w *HomunculusSkillWindow) pressSkill(ctx Context, actions GameActions, skill session.Skill) {
 	if skill.Level <= 0 {
 		glog.Debugf("%s skill use ignored id=%d: not learned", w.kindLabelLower(), skill.ID)
 		return
@@ -441,8 +427,6 @@ func (w *HomunculusSkillWindow) pressSkill(ctx Context, actions GameActions, ski
 	w.dragActive = true
 	w.hideTooltip()
 	w.dragFrom = now
-	w.hoverX = mx
-	w.hoverY = my
 }
 
 func (w *HomunculusSkillWindow) clearPending() {
@@ -524,11 +508,6 @@ func (w *HomunculusSkillWindow) syncCompanionIdentity(ctx Context) {
 	}
 }
 
-func (w *HomunculusSkillWindow) syncHomunculusIdentity(ctx Context) {
-	w.kind = companionSkillWindowHomunculus
-	w.syncCompanionIdentity(ctx)
-}
-
 func (w *HomunculusSkillWindow) showTooltip(ctx Context, skill session.Skill, mx, my int) {
 	if w.dragActive || skill.ID == 0 {
 		w.hideTooltip()
@@ -583,7 +562,7 @@ func (w *HomunculusSkillWindow) skillIconImage(ctx Context, assets AssetProvider
 	if _, ok := w.iconMiss[skill.ID]; ok {
 		return nil
 	}
-	img := assets.SkillIconImage(ctx.Resources, skill, skillIconSize)
+	img := assets.SkillIconImage(ctx.Resources, skill)
 	if img == nil {
 		if w.iconMiss == nil {
 			w.iconMiss = make(map[uint16]struct{})

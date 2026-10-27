@@ -47,6 +47,7 @@ type gpuRenderer struct {
 	pipelineAdd            *wgpu.RenderPipeline
 	pipelineSrcDst         *wgpu.RenderPipeline
 	worldPipelines         map[worldPipelineKey]*wgpu.RenderPipeline
+	billboardDepth         *wgpu.RenderPipeline
 	billboardAlphaRead     *wgpu.RenderPipeline
 	billboardAddRead       *wgpu.RenderPipeline
 	billboardSrcDstRead    *wgpu.RenderPipeline
@@ -128,6 +129,14 @@ type worldBillboardBatch struct {
 	firstInstance uint32
 	instanceCount uint32
 }
+
+type billboardPass uint8
+
+const (
+	billboardColorPass billboardPass = iota
+	billboardDepthPass
+	billboardOverlayPass
+)
 
 type worldPipelineKey struct {
 	blend      Blend
@@ -368,6 +377,14 @@ func (r *gpuRenderer) init(_ *gogpu.Context) error {
 	if err != nil {
 		return err
 	}
+	depth := r.worldBillboardPipelineDescriptor(billboardShader, gputypes.BlendStateAlpha(), true, "goro-world-billboard-depth")
+	depth.Vertex.EntryPoint = "vs_depth_main"
+	depth.DepthStencil.DepthWriteEnabled = true
+	depth.Fragment.Targets[0].WriteMask = gputypes.ColorWriteMaskNone
+	r.billboardDepth, err = r.dev.CreateRenderPipeline(depth)
+	if err != nil {
+		return err
+	}
 	r.billboardQuadBuf, err = r.createBillboardQuadBuffer()
 	return err
 }
@@ -459,7 +476,11 @@ func (r *gpuRenderer) worldPipelineDescriptor(shader *wgpu.ShaderModule, blend g
 }
 
 func (r *gpuRenderer) createWorldBillboardPipeline(shader *wgpu.ShaderModule, blend gputypes.BlendState, depthTest bool, label string) (*wgpu.RenderPipeline, error) {
-	return r.dev.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+	return r.dev.CreateRenderPipeline(r.worldBillboardPipelineDescriptor(shader, blend, depthTest, label))
+}
+
+func (r *gpuRenderer) worldBillboardPipelineDescriptor(shader *wgpu.ShaderModule, blend gputypes.BlendState, depthTest bool, label string) *wgpu.RenderPipelineDescriptor {
+	return &wgpu.RenderPipelineDescriptor{
 		Label:  label,
 		Layout: r.worldLayout,
 		Vertex: wgpu.VertexState{
@@ -510,7 +531,7 @@ func (r *gpuRenderer) createWorldBillboardPipeline(shader *wgpu.ShaderModule, bl
 				WriteMask: gputypes.ColorWriteMaskAll,
 			}},
 		},
-	})
+	}
 }
 
 func worldDepthCompare(depthTest bool) gputypes.CompareFunction {
@@ -659,31 +680,30 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 			pass.SetBindGroup(0, r.ssao.groups[1], nil)
 			pass.Draw(gputypes.DrawArgs{VertexCount: 3, InstanceCount: 1})
 		}
-		worldState := renderPassState{}
-		if worldVertexBuf != nil && worldIndexBuf != nil {
-			worldState.setVertexBuffer(pass, worldVertexBuf)
-			worldState.setIndexBuffer(pass, worldIndexBuf)
-			for _, batch := range world.batches {
-				if batch.indexCount == 0 || batch.key.options.DepthWrite {
-					continue
-				}
-				if err := r.drawWorldBatch(pass, batch, &worldState, nil); err != nil {
-					_ = pass.End()
-					return false, err
-				}
-			}
+		lateGeometry, err := r.drawWorldAlpha(pass, world, screen.worldMeshes, worldVertexBuf, worldIndexBuf, false)
+		if err != nil {
+			_ = pass.End()
+			return false, err
 		}
-		for _, meshCommand := range screen.worldMeshes {
-			mesh := meshCommand.Mesh
-			if mesh == nil || mesh.options.DepthWrite {
-				continue
+		if err := r.prepareWorldBillboards(screen.worldBillboards); err != nil {
+			_ = pass.End()
+			return false, err
+		}
+		if err := r.drawWorldBillboards(pass, billboardColorPass); err != nil {
+			_ = pass.End()
+			return false, err
+		}
+		if lateGeometry {
+			if err := r.drawWorldBillboards(pass, billboardDepthPass); err != nil {
+				_ = pass.End()
+				return false, err
 			}
-			if err := r.drawWorldMesh(pass, mesh, &worldState); err != nil {
+			if _, err := r.drawWorldAlpha(pass, world, screen.worldMeshes, worldVertexBuf, worldIndexBuf, true); err != nil {
 				_ = pass.End()
 				return false, err
 			}
 		}
-		if err := r.drawWorldBillboards(pass, screen.worldBillboards); err != nil {
+		if err := r.drawWorldBillboards(pass, billboardOverlayPass); err != nil {
 			_ = pass.End()
 			return false, err
 		}
@@ -1171,26 +1191,36 @@ func (r *gpuRenderer) drawWorldMeshBatch(pass *wgpu.RenderPassEncoder, batch wor
 	return nil
 }
 
-func (r *gpuRenderer) drawWorldBillboards(pass *wgpu.RenderPassEncoder, commands []WorldBillboardCommand) error {
-	if len(commands) == 0 || r.billboardQuadBuf == nil {
-		return nil
-	}
+func (r *gpuRenderer) prepareWorldBillboards(commands []WorldBillboardCommand) error {
 	instances, batches := r.buildWorldBillboardBatches(commands)
 	if len(instances) == 0 || len(batches) == 0 {
 		return nil
 	}
-	instanceBuf, err := r.dynamicBuffer(
+	_, err := r.dynamicBuffer(
 		&r.billboardInstanceBuf,
 		"goro-world-billboard-instances",
 		len(instances)*4,
 		wgpu.BufferUsageVertex|wgpu.BufferUsageCopyDst,
 		floatBytes(instances),
 	)
-	if err != nil {
-		return err
+	return err
+}
+
+// Write silhouettes separately so overlapping equipment and glow layers keep
+// their colour-pass order. Only solid sprites participate, never their shadows.
+func (r *gpuRenderer) drawWorldBillboards(pass *wgpu.RenderPassEncoder, stage billboardPass) error {
+	if r.billboardQuadBuf == nil || r.billboardInstanceBuf.buf == nil {
+		return nil
 	}
 	pass.SetVertexBuffer(0, r.billboardQuadBuf, 0)
-	for _, batch := range batches {
+	for _, batch := range r.worldBillboardBatches {
+		overlay := !batch.key.options.DepthTest
+		if overlay != (stage == billboardOverlayPass) {
+			continue
+		}
+		if stage == billboardDepthPass && !batch.key.options.DepthWrite {
+			continue
+		}
 		tex, err := r.ensureTexture(batch.key.texture)
 		if err != nil {
 			return err
@@ -1203,9 +1233,13 @@ func (r *gpuRenderer) drawWorldBillboards(pass *wgpu.RenderPassEncoder, commands
 		if err != nil {
 			return err
 		}
-		pass.SetPipeline(r.worldBillboardPipelineFor(batch.key.options.Blend, batch.key.options.DepthTest))
+		pipeline := r.worldBillboardPipelineFor(batch.key.options.Blend, batch.key.options.DepthTest)
+		if stage == billboardDepthPass {
+			pipeline = r.billboardDepth
+		}
+		pass.SetPipeline(pipeline)
 		pass.SetBindGroup(0, bg, nil)
-		pass.SetVertexBuffer(1, instanceBuf, uint64(batch.firstInstance)*billboardInstanceStride)
+		pass.SetVertexBuffer(1, r.billboardInstanceBuf.buf, uint64(batch.firstInstance)*billboardInstanceStride)
 		pass.Draw(gputypes.DrawArgs{
 			VertexCount:   6,
 			InstanceCount: batch.instanceCount,
@@ -1275,10 +1309,6 @@ func (r *gpuRenderer) createBillboardQuadBuffer() (*wgpu.Buffer, error) {
 		return nil, err
 	}
 	return buf, nil
-}
-
-func billboardInstanceData(cmd WorldBillboardCommand) []float32 {
-	return appendBillboardInstanceData(nil, cmd)
 }
 
 func appendBillboardInstanceData(dst []float32, cmd WorldBillboardCommand) []float32 {
@@ -1461,6 +1491,7 @@ func (r *gpuRenderer) release() {
 		pipeline.Release()
 	}
 	for _, pipeline := range []*wgpu.RenderPipeline{
+		r.billboardDepth,
 		r.billboardAlphaRead,
 		r.billboardAddRead,
 		r.billboardSrcDstRead,

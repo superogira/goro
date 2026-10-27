@@ -2,62 +2,31 @@ package game
 
 import (
 	"fmt"
-	"image/color"
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
-	"github.com/kivutar/goro/render"
+	"github.com/kivutar/goro/game/scene"
 	worldstate "github.com/kivutar/goro/world"
 )
-
-const actorStealthMask = db.EffectStateHide | db.EffectStateCloak | db.EffectStateInvisible | db.EffectStateChasewalk
-
-type stealthView uint8
-
-const (
-	stealthVisible stealthView = iota
-	stealthHidden
-	stealthShadow
-	stealthSilhouette
-)
-
-func actorHasStealth(actor worldstate.Actor) bool {
-	return actor.EffectState&actorStealthMask != 0
-}
 
 // The 2008 Sakexe hides cloaked bodies, including self and party members.
 // CPc::Render (0x005e4920) reveals them only through Clairvoyance, in black.
 // CGameActor::SetAttrState (0x00572b80) keeps Hiding shadows for self/GM;
 // Invisible takes precedence and is not revealed by Clairvoyance.
-func actorStealthView(ctx client.Context, actor worldstate.Actor, local bool) stealthView {
-	if !actorHasStealth(actor) {
-		return stealthVisible
+func actorStealthView(ctx client.Context, actor worldstate.Actor, local bool) scene.StealthView {
+	if !scene.ActorHasStealth(actor) {
+		return scene.StealthVisible
 	}
 	if actor.EffectState&db.EffectStateInvisible != 0 {
-		return stealthHidden
+		return scene.StealthHidden
 	}
 	if localActorHasStatus(ctx, db.StatusClairvoyance) {
-		return stealthSilhouette
+		return scene.StealthSilhouette
 	}
 	if actor.EffectState&(db.EffectStateCloak|db.EffectStateChasewalk) == 0 && (local || localPlayerIsAdmin(ctx)) {
-		return stealthShadow
+		return scene.StealthShadow
 	}
-	return stealthHidden
-}
-
-func (v stealthView) tint(tint color.RGBA) color.RGBA {
-	if v == stealthSilhouette {
-		tint.R, tint.G, tint.B = 0, 0, 0
-	}
-	return tint
-}
-
-func (v stealthView) blend(blend render.Blend) render.Blend {
-	if v == stealthSilhouette {
-		// An additive black silhouette would disappear completely.
-		return render.BlendSourceOver
-	}
-	return blend
+	return scene.StealthHidden
 }
 
 func localStealthAllowsSkill(ctx client.Context, skillID uint16) bool {
@@ -83,7 +52,7 @@ func checkStealthSkill(ctx client.Context, skillID uint16, targetID uint32) erro
 	if !localStealthAllowsSkill(ctx, skillID) {
 		return fmt.Errorf("skill cannot be used while hidden")
 	}
-	if actor, ok, local := actorForCombatID(ctx, targetID); ok && !local && actorHasStealth(actor) {
+	if actor, ok, local := scene.ActorForCombatID(ctx, targetID); ok && !local && scene.ActorHasStealth(actor) {
 		return fmt.Errorf("target is hidden")
 	}
 	return nil

@@ -3,6 +3,7 @@ package weather
 import (
 	"image/color"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,8 +11,24 @@ import (
 	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/render"
+	"github.com/kivutar/goro/res"
 	worldstate "github.com/kivutar/goro/world"
 )
+
+func TestDisabledEffectsStopWeather(t *testing.T) {
+	ctx := testutil.ArcherEffectContext()
+	ctx.World.MapName = "comodo"
+	ctx.World.GND = &res.GND{Width: 1, Height: 1}
+	ctx.Session.NoEffects = true
+	m := &System{sounds: map[int]time.Time{effects.Firecracker: time.Now()}}
+	frame := render.NewFrame(800, 600)
+	m.Draw(frame, ctx, testutil.Projection(800, 600, .5, .5, 0), time.Now(), &effects.System{}, func(time.Time, ...string) {
+		t.Fatal("disabled weather played a sound")
+	})
+	if !reflect.DeepEqual(*m, System{}) {
+		t.Fatal("disabled weather retained its particle or sound cycle")
+	}
+}
 
 func TestMapWeatherForComodoMatchesReferenceWeatherTable(t *testing.T) {
 	for _, name := range []string{"comodo", "comodo.gat", "data\\comodo.rsw", "DATA/COMODO.RSW"} {

@@ -70,6 +70,7 @@ type gpuRenderer struct {
 	msaaTarget             gpuRenderTarget
 	bloomEnabled           bool
 	bloom                  *gpuBloom
+	hallucination          *gpuHallucination
 	ssaoEnabled            bool
 	ssao                   *gpuSSAO
 	worldVertexBuf         dynamicGPUBuffer
@@ -581,7 +582,26 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 			}
 		}
 	}
-	worldTarget := surface
+	output := surface
+	if screen.hallucination {
+		if r.hallucination == nil {
+			var err error
+			r.hallucination, err = newGPUHallucination(r.dev, r.format)
+			if err != nil {
+				return false, fmt.Errorf("create hallucination: %w", err)
+			}
+		}
+		if err := r.hallucination.ensure(r.dev, r.format, width, height); err != nil {
+			return false, fmt.Errorf("prepare hallucination: %w", err)
+		}
+		if err := r.queue.WriteBuffer(r.hallucination.uniform, 0, floatBytes([]float32{screen.hallucinationPhase, 0, 0, 0})); err != nil {
+			return false, fmt.Errorf("upload hallucination phase: %w", err)
+		}
+		output = r.hallucination.target.view
+	} else if r.hallucination != nil {
+		r.hallucination.releaseTarget()
+	}
+	worldTarget := output
 	bloomActive := r.bloomEnabled && screen.camera.Enabled
 	if bloomActive {
 		if r.bloom == nil {
@@ -712,7 +732,7 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 		}
 	}
 	if bloomActive {
-		if err := r.bloom.draw(enc, surface); err != nil {
+		if err := r.bloom.draw(enc, output); err != nil {
 			return false, fmt.Errorf("draw bloom: %w", err)
 		}
 	}
@@ -724,7 +744,7 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 	}
 	pass, err := enc.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{{
-			View: surface, LoadOp: load, StoreOp: gputypes.StoreOpStore, ClearValue: clear,
+			View: output, LoadOp: load, StoreOp: gputypes.StoreOpStore, ClearValue: clear,
 		}},
 	})
 	if err != nil {
@@ -765,6 +785,11 @@ func (r *gpuRenderer) Draw(ctx *gogpu.Context, screen *Frame) (bool, error) {
 		return false, err
 	}
 	r.lastEncodeDur = time.Since(encStart)
+	if screen.hallucination {
+		if err := r.hallucination.draw(enc, surface); err != nil {
+			return false, fmt.Errorf("draw hallucination: %w", err)
+		}
+	}
 	cmd, err := enc.Finish()
 	if err != nil {
 		return false, err
@@ -1523,6 +1548,9 @@ func (r *gpuRenderer) release() {
 	}
 	if r.bloom != nil {
 		r.bloom.release()
+	}
+	if r.hallucination != nil {
+		r.hallucination.release()
 	}
 	if r.ssao != nil {
 		r.ssao.release()

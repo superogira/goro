@@ -6,6 +6,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/actors"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/glog"
@@ -72,7 +73,7 @@ func (m *WorldMode) updateHeldWalk(ctx client.Context, pointerBlocked bool, now 
 		m.nextHeldWalkAt = time.Time{}
 		return false
 	}
-	if ctx.Input.MouseJustPressed(input.MouseButtonLeft) || m.pendingSkill.skill.ID != 0 || m.pendingPetCapture.active || shouldUseTurnOnlyGroundClick(ctx) {
+	if ctx.Input.MouseJustPressed(input.MouseButtonLeft) || m.skillSystem.Pending.Skill.ID != 0 || m.petSystem.PendingCapture.Active || shouldUseTurnOnlyGroundClick(ctx) {
 		return false
 	}
 	if !m.walkReady(now) || (!m.nextHeldWalkAt.IsZero() && now.Before(m.nextHeldWalkAt)) {
@@ -141,7 +142,7 @@ func warpWalkTarget(ctx client.Context, actor worldstate.Actor, now time.Time) (
 }
 
 func (m *WorldMode) requestWalk(ctx client.Context, targetX, targetY int, source string) bool {
-	if playerIsDead(ctx) {
+	if scene.PlayerIsDead(ctx) {
 		return false
 	}
 	if ctx.PlayerHasEffectState(db.EffectStateHide) && learnedSkillLevel(ctx.Session, db.SkillRGTunneldrive) == 0 {
@@ -169,7 +170,7 @@ func (m *WorldMode) requestWalk(ctx client.Context, targetX, targetY int, source
 // that path bends around an obstacle.
 func (m *WorldMode) requestWalkStop(ctx client.Context, source string) bool {
 	now := time.Now()
-	if playerIsDead(ctx) || ctx.World == nil || ctx.Network == nil {
+	if scene.PlayerIsDead(ctx) || ctx.World == nil || ctx.Network == nil {
 		return false
 	}
 	player := ctx.World.Player
@@ -198,8 +199,8 @@ func nextPlayerPathCell(player worldstate.Actor, now time.Time) (int, int) {
 	}
 
 	x, y := scene.ActorRenderPosition(player, now)
-	targetX := int(math.Round(x)) + signInt(player.ToX-int(math.Round(x)))
-	targetY := int(math.Round(y)) + signInt(player.ToY-int(math.Round(y)))
+	targetX := int(math.Round(x)) + actors.SignInt(player.ToX-int(math.Round(x)))
+	targetY := int(math.Round(y)) + actors.SignInt(player.ToY-int(math.Round(y)))
 	return targetX, targetY
 }
 
@@ -219,7 +220,7 @@ func (m *WorldMode) requestChangeDirection(ctx client.Context, targetX, targetY 
 		return
 	}
 	playerX, playerY := scene.CurrentPlayerCell(ctx, time.Now())
-	targetDir := directionFromDelta(playerX, playerY, targetX, targetY, ctx.World.Player.Dir)
+	targetDir := actors.DirectionFromDelta(playerX, playerY, targetX, targetY, ctx.World.Player.Dir)
 	headDir, bodyDir, ok := resolveTurnOnlyDirection(ctx.World.Player.Dir, int(ctx.World.Player.HeadDir), targetDir)
 	if !ok {
 		return
@@ -323,7 +324,7 @@ func applySelfMoveAck(ctx client.Context, ack network.SelfMoveAck) {
 			fastForward = elapsed
 		}
 	}
-	dir := directionFromDelta(ack.FromX, ack.FromY, ack.ToX, ack.ToY, ctx.World.Dir)
+	dir := actors.DirectionFromDelta(ack.FromX, ack.FromY, ack.ToX, ack.ToY, ctx.World.Dir)
 	setPlayerMovementAt(ctx, ack.FromX, ack.FromY, ack.ToX, ack.ToY, dir, now, fastForward)
 	ctx.Session.PlayerX = ack.ToX
 	ctx.Session.PlayerY = ack.ToY
@@ -346,12 +347,12 @@ func setPlayerMovementPathAt(ctx client.Context, path []worldstate.WalkStep, fro
 	}
 	oldPlayer := ctx.World.Player
 	if len(path) == 0 {
-		path = directMovementPath(fromX, fromY, toX, toY)
+		path = actors.DirectMovementPath(fromX, fromY, toX, toY)
 	}
 	finalDir := movementFinalDirection(path, fromX, fromY, toX, toY, dir)
 	speed := scene.ActorMoveSpeed(ctx.World.Player)
-	startX, startY, hasMoveStart, offset := movementStart(path, oldPlayer, now, fastForward, speed, fromX, fromY)
-	duration := actorMovementDurationFromWithSpeed(path, fromX, fromY, toX, toY, speed, startX, startY, hasMoveStart)
+	startX, startY, hasMoveStart, offset := actors.MovementStart(path, oldPlayer, now, fastForward, speed, fromX, fromY)
+	duration := actors.ActorMovementDurationFromWithSpeed(path, fromX, fromY, toX, toY, speed, startX, startY, hasMoveStart)
 	ctx.World.Player.X = toX
 	ctx.World.Player.Y = toY
 	ctx.World.Player.Dir = finalDir
@@ -368,111 +369,8 @@ func setPlayerMovementPathAt(ctx client.Context, path []worldstate.WalkStep, fro
 	ctx.World.Player.MoveStartX = startX
 	ctx.World.Player.MoveStartY = startY
 	ctx.World.Player.HasMoveStart = hasMoveStart
-	ctx.World.Player.WalkDistance = movementWalkDistanceOffset(path, oldPlayer, now, offset, speed, startX, startY, hasMoveStart)
+	ctx.World.Player.WalkDistance = actors.MovementWalkDistanceOffset(path, oldPlayer, now, offset, speed, startX, startY, hasMoveStart)
 	ctx.World.Dir = finalDir
-}
-
-func upsertActor(ctx client.Context, actor worldstate.Actor) {
-	upsertActorAt(ctx, actor, time.Now())
-}
-
-func upsertActorAt(ctx client.Context, actor worldstate.Actor, now time.Time) {
-	if ctx.World == nil {
-		return
-	}
-	existing, hasExisting := ctx.World.Actors[actor.ID]
-	// Network movement entries have no local start time yet. Updates copied
-	// from a live actor already have one, even after the walk has finished;
-	// changing direction, appearance or status must not replay that path.
-	if actor.Moving && actor.MoveStarted.IsZero() {
-		if actor.FromX == 0 && actor.FromY == 0 {
-			if hasExisting {
-				actor.FromX = existing.X
-				actor.FromY = existing.Y
-			}
-		}
-		if actor.ToX == 0 && actor.ToY == 0 {
-			actor.ToX = actor.X
-			actor.ToY = actor.Y
-		}
-		if actor.Speed <= 0 && hasExisting && existing.Speed > 0 {
-			actor.Speed = existing.Speed
-		}
-		if len(actor.MovePath) == 0 {
-			actor.MovePath = maps.WalkPath(ctx.World.GAT, actor.FromX, actor.FromY, actor.ToX, actor.ToY)
-			if len(actor.MovePath) == 0 {
-				actor.MovePath = directMovementPath(actor.FromX, actor.FromY, actor.ToX, actor.ToY)
-			}
-		}
-		fastForward := time.Duration(0)
-		if actor.HasMoveStartTick && ctx.Session != nil {
-			if elapsed, ok := ctx.Session.ElapsedSinceServerTick(actor.MoveStartTick, now); ok {
-				fastForward = elapsed
-			}
-		}
-		speed := scene.ActorMoveSpeed(actor)
-		startX, startY, hasMoveStart, offset := movementStart(actor.MovePath, existing, now, fastForward, speed, actor.FromX, actor.FromY)
-		actor.MoveStarted = now.Add(-offset)
-		actor.MoveDuration = actorMovementDurationFromWithSpeed(actor.MovePath, actor.FromX, actor.FromY, actor.ToX, actor.ToY, speed, startX, startY, hasMoveStart)
-		actor.MoveStartX = startX
-		actor.MoveStartY = startY
-		actor.HasMoveStart = hasMoveStart
-		if hasExisting && scene.ActorIsMovingAt(existing, now) {
-			actor.WalkDistance = movementWalkDistanceOffset(actor.MovePath, existing, now, offset, speed, startX, startY, hasMoveStart)
-		}
-	}
-	ctx.World.UpsertActor(actor)
-}
-
-func applyWarpPosition(ctx client.Context, x, y int) {
-	dir := ctx.World.Dir
-	if ctx.Session.PlayerDir != 0 {
-		dir = ctx.Session.PlayerDir
-	}
-	ctx.Session.PlayerX = x
-	ctx.Session.PlayerY = y
-	ctx.World.SetPlayerPosition(x, y, dir)
-}
-
-func applyActorSetPosition(ctx client.Context, position network.ActorSetPosition) {
-	if ctx.World == nil {
-		return
-	}
-	if scene.IsLocalActor(ctx, position.ID) {
-		ctx.World.SetPlayerPosition(position.X, position.Y, ctx.World.Dir)
-		ctx.Session.PlayerX = position.X
-		ctx.Session.PlayerY = position.Y
-		return
-	}
-	// Position updates can also refer to skill units; they never spawn actors.
-	if _, ok := ctx.World.Actors[position.ID]; !ok {
-		return
-	}
-	upsertActor(ctx, worldstate.Actor{
-		ID: position.ID,
-		X:  position.X,
-		Y:  position.Y,
-	})
-}
-
-func applyActorJumpPosition(ctx client.Context, position network.ActorJumpPosition) {
-	if ctx.World == nil {
-		return
-	}
-	if scene.IsLocalActor(ctx, position.ID) {
-		ctx.World.SetPlayerPosition(position.X, position.Y, ctx.World.Dir)
-		ctx.Session.PlayerX = position.X
-		ctx.Session.PlayerY = position.Y
-		return
-	}
-	if _, ok := ctx.World.Actors[position.ID]; !ok {
-		return
-	}
-	upsertActor(ctx, worldstate.Actor{
-		ID: position.ID,
-		X:  position.X,
-		Y:  position.Y,
-	})
 }
 
 func (m *WorldMode) scheduleActorStop(id uint32, at time.Time, resumeWalk bool, resumeAt time.Time) {
@@ -512,7 +410,7 @@ func (m *WorldMode) pauseActorMovementForResume(ctx client.Context, id uint32, a
 	}
 	toX := ctx.World.Player.ToX
 	toY := ctx.World.Player.ToY
-	stopLocalPlayerMovementAt(ctx, at)
+	actors.StopLocalPlayerMovementAt(ctx, at)
 	if ctx.World.Player.X == toX && ctx.World.Player.Y == toY {
 		return
 	}
@@ -568,7 +466,7 @@ func (m *WorldMode) stopActorMovementAt(ctx client.Context, id uint32, at time.T
 		return
 	}
 	if scene.IsLocalActor(ctx, id) {
-		stopLocalPlayerMovementAt(ctx, at)
+		actors.StopLocalPlayerMovementAt(ctx, at)
 		return
 	}
 	actor, ok := ctx.World.Actors[id]
@@ -578,268 +476,17 @@ func (m *WorldMode) stopActorMovementAt(ctx client.Context, id uint32, at time.T
 	x, y := scene.ActorRenderPosition(actor, at)
 	actor.X = int(math.Round(x))
 	actor.Y = int(math.Round(y))
-	clearActorMovement(&actor)
+	actors.ClearActorMovement(&actor)
 	ctx.World.Actors[id] = actor
-}
-
-func stopLocalPlayerMovementAt(ctx client.Context, at time.Time) {
-	if ctx.World == nil || !scene.ActorIsMovingAt(ctx.World.Player, at) {
-		return
-	}
-	x, y := scene.ActorRenderPosition(ctx.World.Player, at)
-	ctx.World.Player.X = int(math.Round(x))
-	ctx.World.Player.Y = int(math.Round(y))
-	clearActorMovement(&ctx.World.Player)
-	if ctx.Session != nil {
-		ctx.Session.PlayerX = ctx.World.Player.X
-		ctx.Session.PlayerY = ctx.World.Player.Y
-	}
-}
-
-func clearActorMovement(actor *worldstate.Actor) {
-	actor.Moving = false
-	actor.FromX = actor.X
-	actor.FromY = actor.Y
-	actor.ToX = actor.X
-	actor.ToY = actor.Y
-	actor.MovePath = nil
-	actor.HasMoveStart = false
-	actor.MoveStartX = 0
-	actor.MoveStartY = 0
-	actor.WalkDistance = 0
-}
-
-func actorRenderWalkDistance(actor worldstate.Actor, now time.Time) float64 {
-	if !scene.ActorIsMovingAt(actor, now) || actor.MoveDuration <= 0 {
-		return 0
-	}
-	base := actor.WalkDistance
-	elapsed := now.Sub(actor.MoveStarted)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	if len(actor.MovePath) >= 2 {
-		return base + pathWalkDistanceWithSpeed(actor.MovePath, elapsed, scene.ActorMoveSpeed(actor), actor.MoveStartX, actor.MoveStartY, actor.HasMoveStart)
-	}
-	t := float64(elapsed) / float64(actor.MoveDuration)
-	if t < 0 {
-		t = 0
-	} else if t > 1 {
-		t = 1
-	}
-	return base + math.Hypot(float64(actor.ToX-actor.FromX), float64(actor.ToY-actor.FromY))*t
 }
 
 func movementFinalDirection(path []worldstate.WalkStep, fromX, fromY, toX, toY int, fallback int) int {
 	if len(path) >= 2 {
 		from := path[len(path)-2]
 		to := path[len(path)-1]
-		return directionFromDelta(from.X, from.Y, to.X, to.Y, fallback)
+		return actors.DirectionFromDelta(from.X, from.Y, to.X, to.Y, fallback)
 	}
-	return directionFromDelta(fromX, fromY, toX, toY, fallback)
-}
-
-func movementStart(path []worldstate.WalkStep, oldPlayer worldstate.Actor, now time.Time, fastForward time.Duration, speedMS, fromX, fromY int) (float64, float64, bool, time.Duration) {
-	startX := float64(fromX)
-	startY := float64(fromY)
-	duration := time.Duration(0)
-	if len(path) > 0 {
-		duration = actorMovementDurationWithSpeed(path, path[0].X, path[0].Y, path[len(path)-1].X, path[len(path)-1].Y, speedMS)
-	}
-	if duration > 0 && fastForward > duration*4 {
-		fastForward = 0
-	}
-	offset := clampMovementOffset(fastForward, duration)
-	if scene.ActorIsMovingAt(oldPlayer, now) && len(path) >= 2 {
-		x, y := scene.ActorRenderPosition(oldPlayer, now)
-		if currentOffset, ok := pathElapsedAtPositionWithSpeed(path, x, y, speedMS); ok {
-			if currentOffset > offset {
-				offset = clampMovementOffset(currentOffset, duration)
-			}
-			return startX, startY, false, offset
-		}
-		if math.Hypot(x-float64(fromX), y-float64(fromY)) <= 1.25 {
-			return x, y, true, 0
-		}
-		if nearMovementStartLine(path, x, y, 3.0, 0.25) {
-			return x, y, true, 0
-		}
-	}
-	return startX, startY, false, offset
-}
-
-func nearMovementStartLine(path []worldstate.WalkStep, x, y float64, maxDistance, maxLateral float64) bool {
-	if len(path) < 2 {
-		return false
-	}
-	from := path[0]
-	to := path[1]
-	fromX := float64(from.X)
-	fromY := float64(from.Y)
-	dx := float64(to.X - from.X)
-	dy := float64(to.Y - from.Y)
-	lengthSq := dx*dx + dy*dy
-	if lengthSq == 0 {
-		return false
-	}
-	if math.Hypot(x-fromX, y-fromY) > maxDistance {
-		return false
-	}
-	t := ((x-fromX)*dx + (y-fromY)*dy) / lengthSq
-	if t > 0.25 {
-		return false
-	}
-	px := fromX + dx*t
-	py := fromY + dy*t
-	return math.Hypot(x-px, y-py) <= maxLateral
-}
-
-func movementWalkDistanceOffset(path []worldstate.WalkStep, oldPlayer worldstate.Actor, now time.Time, offset time.Duration, speedMS int, startX, startY float64, hasMoveStart bool) float64 {
-	if !scene.ActorIsMovingAt(oldPlayer, now) {
-		return 0
-	}
-	previous := actorRenderWalkDistance(oldPlayer, now)
-	current := pathWalkDistanceWithSpeed(path, offset, speedMS, startX, startY, hasMoveStart)
-	return previous - current
-}
-
-func clampMovementOffset(offset, duration time.Duration) time.Duration {
-	if offset < 0 {
-		return 0
-	}
-	if duration > 0 && offset > duration {
-		return duration
-	}
-	return offset
-}
-
-func actorMovementDurationWithSpeed(path []worldstate.WalkStep, fromX, fromY, toX, toY int, speedMS int) time.Duration {
-	return actorMovementDurationFromWithSpeed(path, fromX, fromY, toX, toY, speedMS, 0, 0, false)
-}
-
-func actorMovementDurationFromWithSpeed(path []worldstate.WalkStep, fromX, fromY, toX, toY int, speedMS int, startX, startY float64, hasMoveStart bool) time.Duration {
-	if len(path) >= 2 {
-		total := time.Duration(0)
-		for i := 1; i < len(path); i++ {
-			segmentStartX, segmentStartY := scene.PathSegmentStart(path, i, startX, startY, hasMoveStart)
-			total += scene.MovementSegmentDurationFloatWithSpeed(float64(path[i].X)-segmentStartX, float64(path[i].Y)-segmentStartY, speedMS)
-		}
-		if total > 0 {
-			return total
-		}
-	}
-	dx := scene.AbsInt(toX - fromX)
-	dy := scene.AbsInt(toY - fromY)
-	if dx == 0 && dy == 0 {
-		return movementSegmentDurationWithSpeed(0, 0, speedMS)
-	}
-	return movementSegmentDurationWithSpeed(dx, dy, speedMS)
-}
-
-func movementSegmentDurationWithSpeed(dx, dy int, speedMS int) time.Duration {
-	if speedMS <= 0 {
-		speedMS = scene.DefaultMoveSpeedMS
-	}
-	if dx < 0 {
-		dx = -dx
-	}
-	if dy < 0 {
-		dy = -dy
-	}
-	if dx == 0 && dy == 0 {
-		return time.Duration(speedMS) * time.Millisecond
-	}
-	if dx != 0 && dy != 0 && dx == dy {
-		return time.Duration(math.Round(float64(dx)*float64(speedMS)*math.Sqrt2)) * time.Millisecond
-	}
-	steps := dx
-	if dy > steps {
-		steps = dy
-	}
-	return time.Duration(steps*speedMS) * time.Millisecond
-}
-
-func pathElapsedAtPositionWithSpeed(path []worldstate.WalkStep, x, y float64, speedMS int) (time.Duration, bool) {
-	if len(path) < 2 {
-		return 0, false
-	}
-	bestDistance := math.Inf(1)
-	bestElapsed := time.Duration(0)
-	elapsedBefore := time.Duration(0)
-	for i := 1; i < len(path); i++ {
-		from := path[i-1]
-		to := path[i]
-		dx := float64(to.X - from.X)
-		dy := float64(to.Y - from.Y)
-		segmentDuration := movementSegmentDurationWithSpeed(to.X-from.X, to.Y-from.Y, speedMS)
-		segmentLengthSq := dx*dx + dy*dy
-		if segmentLengthSq == 0 {
-			elapsedBefore += segmentDuration
-			continue
-		}
-		t := ((x-float64(from.X))*dx + (y-float64(from.Y))*dy) / segmentLengthSq
-		if t < 0 {
-			t = 0
-		} else if t > 1 {
-			t = 1
-		}
-		px := float64(from.X) + dx*t
-		py := float64(from.Y) + dy*t
-		distance := math.Hypot(x-px, y-py)
-		if distance < bestDistance {
-			bestDistance = distance
-			bestElapsed = elapsedBefore + time.Duration(float64(segmentDuration)*t)
-		}
-		elapsedBefore += segmentDuration
-	}
-	if bestDistance > 0.05 {
-		return 0, false
-	}
-	return bestElapsed, true
-}
-
-func pathWalkDistanceWithSpeed(path []worldstate.WalkStep, elapsed time.Duration, speedMS int, startX, startY float64, hasMoveStart bool) float64 {
-	if len(path) < 2 || elapsed <= 0 {
-		return 0
-	}
-	remaining := elapsed
-	total := 0.0
-	for i := 1; i < len(path); i++ {
-		fromX, fromY := scene.PathSegmentStart(path, i, startX, startY, hasMoveStart)
-		toX := float64(path[i].X)
-		toY := float64(path[i].Y)
-		segmentDistance := math.Hypot(toX-fromX, toY-fromY)
-		duration := scene.MovementSegmentDurationFloatWithSpeed(toX-fromX, toY-fromY, speedMS)
-		if duration <= 0 {
-			total += segmentDistance
-			continue
-		}
-		if remaining >= duration {
-			total += segmentDistance
-			remaining -= duration
-			continue
-		}
-		t := float64(remaining) / float64(duration)
-		if t < 0 {
-			t = 0
-		} else if t > 1 {
-			t = 1
-		}
-		total += segmentDistance * t
-		break
-	}
-	return total
-}
-
-func directMovementPath(fromX, fromY, toX, toY int) []worldstate.WalkStep {
-	if fromX == toX && fromY == toY {
-		return []worldstate.WalkStep{{X: fromX, Y: fromY}}
-	}
-	return []worldstate.WalkStep{{X: fromX, Y: fromY}, {X: toX, Y: toY}}
-}
-
-func directionFromDelta(fromX, fromY, toX, toY int, fallback int) int {
-	return scene.DirectionFromFloatDelta(float64(fromX), float64(fromY), float64(toX), float64(toY), scene.NormalizeDirectionIndex(fallback))
+	return actors.DirectionFromDelta(fromX, fromY, toX, toY, fallback)
 }
 
 func (m *WorldMode) hoveredWalkCell(ctx client.Context, projection scene.Projection, mouseX, mouseY int) (int, int, bool) {

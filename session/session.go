@@ -18,6 +18,9 @@ type Session struct {
 	BattleMode           bool
 	ScriptPath           string // Runtime override; empty uses the configured script.
 	LessEffects          bool
+	NoEffects            bool
+	FogEnabled           bool
+	SimpleAura           bool
 	HomunculusCustomAI   bool
 	HomunculusAggressive bool
 	MercenaryCustomAI    bool
@@ -26,12 +29,13 @@ type Session struct {
 	GuildID              uint32
 	EmblemVersion        uint32
 	GuildName            string
+	GuildTitle           string
 	Guild                Guild
 	PendingGuildName     string
 	SnapTargets          bool
 	SnapItems            bool
 	SnapRadius           float64
-	AttackRange          int
+	AttackRange          int // Server-reported range; zero until received.
 	CharServers          []CharServer
 	CharServerIndex      int
 	Characters           []Character
@@ -51,6 +55,7 @@ type Session struct {
 	Skills               Skills
 	Hotkeys              Hotkeys
 	Quests               Quests
+	Instance             Instance
 	Statuses             Statuses
 	Friends              Friends
 	Whisper              WhisperSettings
@@ -62,7 +67,7 @@ type Session struct {
 }
 
 func New() *Session {
-	return &Session{Whisper: DefaultWhisperSettings()}
+	return &Session{FogEnabled: true, Whisper: DefaultWhisperSettings()}
 }
 
 func (s *Session) SelectCharacter(character Character) {
@@ -77,6 +82,7 @@ func (s *Session) SelectCharacter(character Character) {
 	s.GuildID = 0
 	s.EmblemVersion = 0
 	s.GuildName = ""
+	s.GuildTitle = ""
 	s.Guild = Guild{}
 	s.PendingGuildName = ""
 	s.Zone = ZoneServer{}
@@ -94,6 +100,7 @@ func (s *Session) SelectCharacter(character Character) {
 	s.Skills = Skills{}
 	s.Hotkeys = Hotkeys{}
 	s.Quests = Quests{}
+	s.Instance = Instance{}
 	s.Statuses = Statuses{}
 	s.Friends = Friends{}
 	s.SuperNovicePrayer = SuperNovicePrayer{}
@@ -288,11 +295,30 @@ func (m GuildMember) Online() bool {
 }
 
 type GuildPosition struct {
-	PositionID uint32
-	Right      uint32
-	Ranking    uint32
-	PayRate    uint32
-	PosName    string
+	PositionID     uint32
+	Right          uint32
+	HasPermissions bool
+	Ranking        uint32
+	PayRate        uint32
+	PosName        string
+}
+
+func (s *Session) GuildRights() uint32 {
+	if s == nil {
+		return 0
+	}
+	for _, member := range s.Guild.Members {
+		if member.AccountID != s.AccountID || member.CharID != s.CharID {
+			continue
+		}
+		for _, position := range s.Guild.Positions {
+			if position.PositionID == member.PositionID && position.HasPermissions {
+				return position.Right
+			}
+		}
+		break
+	}
+	return s.Guild.Right
 }
 
 type GuildExpelHistory struct {

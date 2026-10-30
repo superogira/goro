@@ -12,6 +12,9 @@ import (
 )
 
 func (m *System) DrawRSWEffects(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time, fx func() *effects.System) {
+	if !effects.Enabled(ctx) {
+		return
+	}
 	if screen == nil || ctx.World == nil || ctx.World.RSW == nil || ctx.World.GND == nil {
 		return
 	}

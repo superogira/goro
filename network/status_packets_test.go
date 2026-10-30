@@ -6,6 +6,26 @@ import (
 	"time"
 )
 
+func TestParseAttackRange(t *testing.T) {
+	for _, want := range []int16{1, 9, 300, 0, -1} {
+		data := make([]byte, 4)
+		binary.LittleEndian.PutUint16(data, PacketZCAttackRange)
+		binary.LittleEndian.PutUint16(data[2:], uint16(want))
+		got, ok, err := ParseAttackRange(Packet{ID: PacketZCAttackRange, Data: data})
+		if err != nil || !ok || got != int(want) {
+			t.Fatalf("range %d: got=%d ok=%v err=%v", want, got, ok, err)
+		}
+	}
+	if _, ok, err := ParseAttackRange(Packet{ID: 0x00B0}); ok || err != nil {
+		t.Fatalf("unrelated packet: ok=%v err=%v", ok, err)
+	}
+	for size := 0; size < 4; size++ {
+		if _, ok, err := ParseAttackRange(Packet{ID: PacketZCAttackRange, Data: make([]byte, size)}); ok || err == nil {
+			t.Errorf("truncated size %d: ok=%v err=%v", size, ok, err)
+		}
+	}
+}
+
 func TestParseParameterChange(t *testing.T) {
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint16(data[0:2], 0x00B0)

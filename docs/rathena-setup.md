@@ -191,6 +191,28 @@ make tools
   -rebuild
 ```
 
+## Legacy Mail Compatibility
+
+Goro implements legacy mail for `PACKETVER=20080910`. Open the mailbox through
+an NPC's `openmail` command, or `@mail` if the server permits it.
+
+The local rAthena checkout at `7f30a25e62411b1e1c17c4f21eb151e96eeaf37a`
+was checked on 2026-10-22:
+
+- `clif_parse_Mail_setattach` still validates the inventory index before handling
+  index zero, which represents Zeny. This rejects legacy Zeny attachments.
+- `clif_parse_Mail_winopen` and `clif_parse_Mail_refreshinbox` now pass the wire
+  index (internal index + 2) to `mail_removeitem`. Older versions passed the
+  internal index and could fail to release an attachment reservation.
+- `mail_removeitem`'s delivery branch does not clear its reservation entry.
+  Repeated sends and subsequent cleanup still need live validation.
+
+Live acceptance remains pending for sending, reading, replying, taking item and
+Zeny attachments, cancelling drafts, returning/deleting mail, full inventories,
+invalid recipients, and reconnecting with a request pending. Check both
+characters' inventory and Zeny after relogging. These server-side issues must be
+resolved without client-side refunds or switching the client to RODEX packets.
+
 ## Running
 
 Start the three rAthena servers from separate terminals:

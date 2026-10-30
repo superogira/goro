@@ -35,7 +35,8 @@ const (
 	npcMenuMinHeight     = ROWindowTitleHeight + npcMenuPad*2 + npcMenuMinRows*npcMenuRowH + ROWindowFooterHeight
 	npcInputNumberWidth  = 174
 	npcInputTextWidth    = 274
-	npcInputHeight       = 52
+	npcInputTextHeight   = 32
+	npcInputNumberHeight = 52
 	npcInputMaxLength    = 80
 )
 
@@ -1035,11 +1036,12 @@ func (d *NPCDialog) menuBounds(width, height, dialogX, dialogY, dialogW, dialogH
 
 func (d *NPCDialog) inputBounds(width, height, dialogX, dialogY, dialogW, dialogH int) (int, int, int, int) {
 	w := npcInputTextWidth
+	h := npcInputTextHeight
 	if d.action == npcDialogActionNumberInput {
 		w = npcInputNumberWidth
+		h = npcInputNumberHeight
 	}
 	w = minInt(w, maxInt(140, width-2*windowScreenMargin))
-	h := npcInputHeight
 	x := dialogX + (dialogW-w)/2
 	y := dialogY + dialogH + 8
 	x = clampWindowInt(x, windowScreenMargin, maxInt(windowScreenMargin, width-w-windowScreenMargin))

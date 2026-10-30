@@ -1,7 +1,10 @@
 package network
 
 import (
+	"bytes"
+	"compress/zlib"
 	"encoding/binary"
+	"io"
 	"strings"
 	"testing"
 )
@@ -428,6 +431,52 @@ func TestGuildPacketDirections(t *testing.T) {
 	} {
 		if got := lengths[id]; got != want {
 			t.Fatalf("0x%04X receive length = %d, want %d", id, got, want)
+		}
+	}
+}
+
+func TestBuildRegisterGuildEmblemPacketValidatesBMP(t *testing.T) {
+	for _, depth := range []uint16{8, 24} {
+		offset := uint32(54)
+		if depth == 8 {
+			offset += 256 * 4
+		}
+		data := make([]byte, offset+24*24*uint32(depth/8))
+		copy(data, "BM")
+		binary.LittleEndian.PutUint32(data[2:], uint32(len(data)))
+		binary.LittleEndian.PutUint32(data[10:], offset)
+		binary.LittleEndian.PutUint32(data[14:], 40)
+		binary.LittleEndian.PutUint32(data[18:], 24)
+		binary.LittleEndian.PutUint32(data[22:], 24)
+		binary.LittleEndian.PutUint16(data[26:], 1)
+		binary.LittleEndian.PutUint16(data[28:], depth)
+		packet, err := BuildRegisterGuildEmblemPacket(data)
+		if err != nil {
+			t.Fatalf("%d-bit emblem: %v", depth, err)
+		}
+		zr, err := zlib.NewReader(bytes.NewReader(packet[4:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := io.ReadAll(zr)
+		zr.Close()
+		if err != nil || !bytes.Equal(decoded, data) {
+			t.Fatalf("emblem round trip failed: %v", err)
+		}
+		for _, field := range []int{0, 2, 10, 14, 18, 22, 26, 28, 30} {
+			bad := bytes.Clone(data)
+			bad[field]++
+			if _, err := BuildRegisterGuildEmblemPacket(bad); err == nil {
+				t.Fatalf("%d-bit emblem accepted invalid header field at %d", depth, field)
+			}
+		}
+		if _, err := BuildRegisterGuildEmblemPacket(data[:len(data)-1]); err == nil {
+			t.Fatal("accepted truncated emblem")
+		}
+	}
+	for _, data := range [][]byte{nil, []byte("BM"), make([]byte, 1801)} {
+		if _, err := BuildRegisterGuildEmblemPacket(data); err == nil {
+			t.Fatal("accepted invalid BMP size")
 		}
 	}
 }

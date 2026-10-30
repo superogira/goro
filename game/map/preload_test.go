@@ -14,6 +14,7 @@ import (
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
+	worldstate "github.com/kivutar/goro/world"
 )
 
 func mapTextureFixture(t *testing.T) (*System, client.Context) {
@@ -23,7 +24,9 @@ func mapTextureFixture(t *testing.T) (*System, client.Context) {
 
 func TestMapTexturesPreloadAllSourcesAndReuseDrawCaches(t *testing.T) {
 	m, ctx := mapTextureFixture(t)
-	m.PreloadTextures(ctx)
+	for _, load := range m.TextureLoadTasks(ctx) {
+		load()
+	}
 	if len(m.Images.Uploads) != 35 || len(m.Textures) != 34 || len(m.TextureMiss) != 1 {
 		t.Fatalf("uploads=%d textures=%d missing=%d; want 2 shared/model + 32 water + lightmap", len(m.Images.Uploads), len(m.Textures), len(m.TextureMiss))
 	}
@@ -55,7 +58,9 @@ func TestMapTexturesSkipDryMapsAndHeadless(t *testing.T) {
 		m, ctx := mapTextureFixture(t)
 		ctx.Config.Headless = headless
 		ctx.World.RSW.Water.Level = -1
-		m.PreloadTextures(ctx)
+		for _, load := range m.TextureLoadTasks(ctx) {
+			load()
+		}
 		want := 3
 		if headless {
 			want = 0
@@ -80,7 +85,9 @@ func TestMapTextureUpscalingIsCachedAndAppliesOnNextMap(t *testing.T) {
 	m, ctx := mapTextureFixture(t)
 	runtime := &mapTextureRuntime{upscale: true}
 	ctx.Runtime = runtime
-	m.PreloadTextures(ctx)
+	for _, load := range m.TextureLoadTasks(ctx) {
+		load()
+	}
 	for _, name := range []string{"ground.png", "model.png"} {
 		img := m.Textures[name]
 		if img.Bounds() != image.Rect(0, 0, 4, 2) || img.ByteSize() != 44 {
@@ -104,7 +111,9 @@ func TestMapTextureUpscalingIsCachedAndAppliesOnNextMap(t *testing.T) {
 	m.Images.Release()
 	m.Textures = make(map[string]*render.Image)
 	ctx.Config.Render.TextureUpscaling = true // The runtime setting must take precedence.
-	m.PreloadTextures(ctx)
+	for _, load := range m.TextureLoadTasks(ctx) {
+		load()
+	}
 	if m.Textures["ground.png"].Bounds().Dx() != 2 {
 		t.Fatal("next map did not pick up the disabled runtime setting")
 	}
@@ -125,7 +134,12 @@ func TestLoadMapModelsHasNo128ModelLimitAndCachesFailures(t *testing.T) {
 		rsw.Models = append(rsw.Models, res.RSWModel{Filename: name})
 	}
 	rsw.Models = append(rsw.Models, res.RSWModel{Filename: "missing.rsm"}, res.RSWModel{Filename: "missing.rsm"})
-	models, failures := LoadRSMModels(&res.Manager{Root: root}, rsw)
+	w := worldstate.New()
+	w.RSW = rsw
+	for _, load := range ModelLoadTasks(client.Context{Resources: &res.Manager{Root: root}, World: w}) {
+		load()
+	}
+	models, failures := w.RSM, w.RSMFail
 	if len(models) != 131 || models["model129.rsm"] == nil || failures != 1 {
 		t.Fatalf("models=%d failures=%d; late model=%v", len(models), failures, models["model129.rsm"])
 	}

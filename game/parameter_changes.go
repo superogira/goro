@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/battle"
 	"github.com/kivutar/goro/game/effects"
 	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/social"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -99,7 +101,7 @@ func applyParameterChange(ctx client.Context, change network.ParameterChange) {
 	}
 	switch change.VarID {
 	case network.StatusHP, network.StatusMaxHP:
-		syncLocalPartyVitals(ctx)
+		social.SyncLocalPartyVitals(ctx)
 	}
 	glog.Debugf("parameter change var=%d value=%d hp=%d/%d sp=%d/%d base_lv=%d job_lv=%d base_exp=%d/%d job_exp=%d/%d zeny=%d weight=%d/%d",
 		change.VarID,
@@ -128,7 +130,7 @@ func (m *WorldMode) applyParameterChange(ctx client.Context, change network.Para
 	previousBaseLevel := ctx.Session.Progress.BaseLevel
 	previousJobLevel := ctx.Session.Progress.JobLevel
 	applyParameterChange(ctx, change)
-	m.applyPetTalkParameterChange(ctx, change, previousHP, previousBaseLevel)
+	m.pets().ApplyTalkParameterChange(ctx, change, previousHP, previousBaseLevel)
 	if change.Value <= 0 {
 		return
 	}
@@ -163,7 +165,7 @@ type statusVisualEffect struct {
 	recover       func(*session.Session, int) bool
 	recovery      bool
 	recoveryColor color.RGBA
-	recoveryKind  damageFloaterKind
+	recoveryKind  battle.FloaterKind
 	recoverySFX   []string
 	clearsDeath   bool
 	levelEffectID int
@@ -175,7 +177,7 @@ var statusVisualEffects = map[uint16]statusVisualEffect{
 		recover:       recoverSessionHP,
 		recovery:      true,
 		recoveryColor: recoveryHPColor,
-		recoveryKind:  damageFloaterRecoveryHP,
+		recoveryKind:  battle.FloaterRecoveryHP,
 		recoverySFX:   []string{recoveryHPSFX},
 		clearsDeath:   true,
 	},
@@ -184,7 +186,7 @@ var statusVisualEffects = map[uint16]statusVisualEffect{
 		recover:       recoverSessionSP,
 		recovery:      true,
 		recoveryColor: recoverySPColor,
-		recoveryKind:  damageFloaterRecoverySP,
+		recoveryKind:  battle.FloaterRecoverySP,
 		recoverySFX:   []string{recoverySPSFX},
 	},
 	network.StatusBaseLevel: {
@@ -205,7 +207,7 @@ func (v statusVisualEffect) applyParameterChange(ctx client.Context, mode *World
 	if v.recovery {
 		delta := current - previous
 		if delta > 0 {
-			mode.addLocalRecoveryFloater(ctx, delta, v.recoveryColor, v.recoveryKind)
+			mode.battle().AddLocalRecoveryFloater(ctx, delta, v.recoveryColor, v.recoveryKind)
 			mode.scheduleSound(time.Now(), v.sfxCandidates()...)
 		}
 		return

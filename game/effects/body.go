@@ -50,7 +50,7 @@ func (m *System) DrawActorSpriteBodyEffects3D(ctx client.Context, screen *render
 	local := scene.IsLocalActor(ctx, entry.Actor.ID) || ctx.World != nil && entry.Actor.ID != 0 && entry.Actor.ID == ctx.World.Player.ID
 	for _, effect := range m.Active {
 		owner := effect.ActorID == entry.Actor.ID || local && scene.IsLocalActor(ctx, effect.ActorID)
-		if !owner || now.Before(effect.Starts) || effect.Expired(now) {
+		if !owner || now.Before(effect.Starts) || effect.Expired(now) || !effectEnabled(ctx, effect.EffectID) {
 			continue
 		}
 		frame := int(now.Sub(effect.Starts) / db.EffectFrameDuration)

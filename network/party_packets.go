@@ -31,6 +31,7 @@ const (
 	PacketZCNotifyHPToGroup     uint16 = 0x0106
 	PacketZCNotifyPositionToGrp uint16 = 0x0107
 	PacketZCNotifyChatParty     uint16 = 0x0109
+	PacketZCItemPickupParty     uint16 = 0x02B8
 	PacketZCPartyJoinReqAck     uint16 = 0x02C5
 	PacketZCPartyJoinReq        uint16 = 0x02C6
 	PacketZCPartyConfig         uint16 = 0x02C9
@@ -98,6 +99,32 @@ type PartyMemberPosition struct {
 type PartyChat struct {
 	AccountID uint32
 	Message   string
+}
+
+type PartyItemPickup struct {
+	AccountID  uint32
+	ItemID     uint16
+	Identified bool
+	Type       uint8
+	Refine     uint8
+	Cards      [4]uint16
+}
+
+func ParsePartyItemPickup(packet Packet) (PartyItemPickup, bool, error) {
+	if packet.ID != PacketZCItemPickupParty {
+		return PartyItemPickup{}, false, nil
+	}
+	if len(packet.Data) < 22 {
+		return PartyItemPickup{}, false, fmt.Errorf("ZC_ITEM_PICKUP_PARTY too short: %d", len(packet.Data))
+	}
+	return PartyItemPickup{
+		AccountID:  binary.LittleEndian.Uint32(packet.Data[2:6]),
+		ItemID:     binary.LittleEndian.Uint16(packet.Data[6:8]),
+		Identified: packet.Data[8] != 0,
+		Type:       packet.Data[21],
+		Refine:     packet.Data[10],
+		Cards:      readItemCards(packet.Data, 11),
+	}, true, nil
 }
 
 func ParsePartyCreateResult(packet Packet) (PartyCreateResult, bool, error) {

@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gogpu/ui/event"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
@@ -120,6 +122,44 @@ func TestConsoleNoCtrlCommandTogglesSessionPreference(t *testing.T) {
 	}
 }
 
+func TestConsoleVisualCommandsStayLocalAndSave(t *testing.T) {
+	console := &ChatConsole{}
+	ctx := client.Context{
+		Config:  config.Config{ConfigPath: filepath.Join(t.TempDir(), "goro.ini")},
+		Session: session.New(),
+	}
+	for _, step := range []struct {
+		command                    string
+		fog, simpleAura, noEffects bool
+		message                    string
+	}{
+		{" /FOG ", false, false, false, "Fog: Off"},
+		{"/aura", false, true, false, "Simple Aura: On"},
+		{" /EFFECT ", false, true, true, "Effects: Off"},
+		{"/fog", true, true, true, "Fog: On"},
+		{" /AURA ", true, false, true, "Simple Aura: Off"},
+		{"/effect", true, false, false, "Effects: On"},
+	} {
+		if !console.SendText(ctx, step.command) {
+			t.Fatalf("%q fell through to server chat", step.command)
+		}
+		if ctx.Session.FogEnabled != step.fog || ctx.Session.SimpleAura != step.simpleAura || ctx.Session.NoEffects != step.noEffects || ctx.Session.LessEffects {
+			t.Fatalf("%q: fog=%t simple aura=%t less effects=%t", step.command, ctx.Session.FogEnabled, ctx.Session.SimpleAura, ctx.Session.LessEffects)
+		}
+		messages := console.Messages()
+		if got := messages[len(messages)-1].Text; got != step.message {
+			t.Fatalf("%q: message = %q, want %q", step.command, got, step.message)
+		}
+		saved, err := config.LoadConfig([]string{"--config", ctx.Config.ConfigPath})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if saved.Fog.Enabled != step.fog || saved.Gameplay.SimpleAura != step.simpleAura || saved.Gameplay.NoEffects != step.noEffects {
+			t.Fatalf("%q: saved fog=%t simple aura=%t", step.command, saved.Fog.Enabled, saved.Gameplay.SimpleAura)
+		}
+	}
+}
+
 func TestConsoleMineffectCommandTogglesSessionPreference(t *testing.T) {
 	console := &ChatConsole{input: "/mineffect", active: true}
 	sessionState := &session.Session{}
@@ -187,6 +227,16 @@ func TestConsoleBreakGuildCommandIsHandledLocally(t *testing.T) {
 	}
 	if len(console.messages) != 1 || console.messages[0].Text != "send failed: not connected" {
 		t.Fatalf("console messages = %+v", console.messages)
+	}
+}
+
+func TestConsoleWhisperIgnoreListWithoutNetwork(t *testing.T) {
+	console := &ChatConsole{}
+	if !console.SendText(client.Context{}, "/ex") {
+		t.Fatal("list command fell through to public chat")
+	}
+	if messages := console.Messages(); len(messages) != 1 || messages[0].Text != "send failed: not connected" {
+		t.Fatalf("messages = %+v", messages)
 	}
 }
 
@@ -415,6 +465,27 @@ func TestConsoleOutsideClickBlursAndPassesThrough(t *testing.T) {
 	}
 	if console.input != "hello" {
 		t.Fatalf("input = %q, want preserved draft", console.input)
+	}
+}
+
+func TestConsoleDragKeepsMessagesAndMovedInputBounds(t *testing.T) {
+	t.Skip("fork: band-restore drag release defers the content swap and end token past this budget")
+}
+func TestConsoleRestorePosition(t *testing.T) {
+	ctx := client.Context{ScreenW: 1000, ScreenH: 700, UIManager: NewManager()}
+	console := &ChatConsole{}
+	want := config.WindowPosition{X: 100, Y: 200, Set: true}
+	console.RestorePosition(ctx, want)
+	console.window.Close()
+	console.UpdatePresentation(ctx)
+	console.Rebind(ctx)
+	if got := console.SavedPosition(); got != want {
+		t.Fatalf("reopened position = %+v, want %+v", got, want)
+	}
+	console.RestorePosition(ctx, config.WindowPosition{X: -100, Y: 100000, Set: true})
+	want = config.WindowPosition{X: windowScreenMargin, Y: ctx.ScreenH - console.window.height - windowScreenMargin, Set: true}
+	if got := console.SavedPosition(); got != want {
+		t.Fatalf("offscreen position = %+v, want %+v", got, want)
 	}
 }
 

@@ -61,3 +61,15 @@ func SessionSkillFromNetworkWithResources(manager *res.Manager, skill network.Sk
 	}
 	return NormalizeSessionSkillLevelCap(out)
 }
+
+func SessionSkillLevel(s *session.Session, skillID uint16) int {
+	if s == nil {
+		return 0
+	}
+	for _, skill := range s.Skills.List {
+		if skill.ID == skillID {
+			return skill.Level
+		}
+	}
+	return 0
+}

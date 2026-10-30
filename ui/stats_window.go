@@ -117,7 +117,8 @@ func (w *StatsWindow) OpenWindow(ctx Context) {
 	}
 	x, y := statsWindowPosition(ctx)
 	w.snapshot = statsWindowSnapshot(ctx.Session)
-	w.OpenAt(x, y, w.widgetTree(ctx))
+	w.SetAutoPosition(x, y)
+	w.Open(ctx, w.widgetTree(ctx))
 	w.Publish(ctx)
 }
 

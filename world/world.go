@@ -91,6 +91,7 @@ type Actor struct {
 	GuildID          uint32
 	EmblemVersion    uint32
 	GuildName        string
+	GuildTitle       string
 	X                int
 	Y                int
 	Dir              int
@@ -212,6 +213,9 @@ func (w *World) UpsertActor(actor Actor) {
 		}
 		if actor.GuildName == "" {
 			actor.GuildName = existing.GuildName
+		}
+		if actor.GuildTitle == "" {
+			actor.GuildTitle = existing.GuildTitle
 		}
 		if !actor.Appearance {
 			actor.Job = existing.Job

@@ -18,7 +18,7 @@ import (
 )
 
 func TestDerivedStatParameterPackets(t *testing.T) {
-	// Wire IDs from DHXJ's VAR_* and roBrowser's StatusProperty enums.
+	// Wire IDs match roBrowser's StatusProperty enum.
 	tests := []struct {
 		name  string
 		id    uint16

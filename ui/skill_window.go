@@ -283,7 +283,8 @@ func (w *SkillWindow) openAtDefault(ctx Context) {
 	w.ensureSkillViewForSnapshot(ctx, w.snapshot)
 	w.ensureScrollSignal().Set(0)
 	w.resetGamepadSelection()
-	w.OpenAt(x, y, w.widgetTree(ctx, w.actions))
+	w.SetAutoPosition(x, y)
+	w.Open(ctx, w.widgetTree(ctx, w.actions))
 	w.Publish(ctx)
 }
 
@@ -616,7 +617,23 @@ func (w *SkillWindow) refresh(ctx Context, actions GameActions) {
 }
 
 func (w *SkillWindow) toggleGridMode(ctx Context, assets AssetProvider, actions GameActions) {
-	w.gridMode = !w.gridMode
+	w.setGridMode(ctx, !w.gridMode, assets, actions)
+}
+
+func (w *SkillWindow) TreeMode() bool { return w.gridMode }
+
+func (w *SkillWindow) SetTreeMode(ctx Context, tree bool) {
+	w.setGridMode(ctx, tree, w.assets, w.actions)
+}
+
+func (w *SkillWindow) setGridMode(ctx Context, tree bool, assets AssetProvider, actions GameActions) {
+	if w.gridMode == tree {
+		return
+	}
+	w.gridMode = tree
+	if !w.IsOpen() {
+		return
+	}
 	w.dragActive = false
 	w.hasHover = false
 	w.hideTooltip()

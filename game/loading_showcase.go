@@ -1,6 +1,7 @@
 package game
 
 import (
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/game/scene"
 	"math/rand"
@@ -103,7 +104,7 @@ func loadingShowcaseName(stem string) string {
 			return name
 		}
 	}
-	return displayNameFromResource(base)
+	return actors.DisplayNameFromResource(base)
 }
 
 // drawLoadingShowcase draws the sprite mid-screen on the loading cover.

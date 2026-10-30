@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gogpu/ui/widget"
@@ -21,12 +22,14 @@ const (
 	PlayerContextActionAdopt
 	PlayerContextActionGuildAlliance
 	PlayerContextActionGuildHostility
+	PlayerContextActionGMCommand
 )
 
 type PlayerContextAction struct {
 	Kind    PlayerContextActionKind
 	ActorID uint32
 	Name    string
+	Command string
 }
 
 type PlayerContextMenu struct {
@@ -44,6 +47,7 @@ type PlayerContextOptions struct {
 	CanAdopt           bool
 	CanRequestAlliance bool
 	CanDeclareHostile  bool
+	ShowGM             bool
 }
 
 func (m *PlayerContextMenu) Open(ctx Context, x, y int, actorID uint32, name string, options PlayerContextOptions) {
@@ -150,6 +154,19 @@ func (m *PlayerContextMenu) widgetTree(ctx Context) widget.Widget {
 			}),
 		)
 	}
+	if m.options.ShowGM {
+		for _, entry := range []struct{ label, command string }{
+			{"GM: Stats", `/check "` + m.name + `"`},
+			{"GM: Kick", fmt.Sprintf("/kill %d", m.actorID)},
+			{"GM: Mute 1h", fmt.Sprintf("/mute %d 60", m.actorID)},
+			{"GM: Unmute", fmt.Sprintf("/unmute %d", m.actorID)},
+		} {
+			rows = append(rows, contextMenuItem(entry.label, func() {
+				m.action = PlayerContextAction{Kind: PlayerContextActionGMCommand, ActorID: m.actorID, Name: m.name, Command: entry.command}
+				m.Close()
+			}))
+		}
+	}
 	return contextMenu(playerContextMenuWidth, rows...)
 }
 
@@ -172,6 +189,9 @@ func (m *PlayerContextMenu) height() int {
 	}
 	if m.options.CanDeclareHostile {
 		rows++
+	}
+	if m.options.ShowGM {
+		rows += 4
 	}
 	return contextMenuHeight(rows)
 }

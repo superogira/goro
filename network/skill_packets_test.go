@@ -313,6 +313,21 @@ func TestParseSkillCastNotify(t *testing.T) {
 	}
 }
 
+func TestParseSkillCastCancel(t *testing.T) {
+	packet := Packet{ID: PacketZCSkillCastCancel, Data: []byte{0xB9, 0x01, 0x44, 0x33, 0x22, 0x11}}
+	if id, ok, err := ParseSkillCastCancel(packet); err != nil || !ok || id != 0x11223344 {
+		t.Fatalf("cast cancellation: id=%d ok=%v err=%v", id, ok, err)
+	}
+	if _, ok, err := ParseSkillCastCancel(Packet{ID: 0x013E}); ok || err != nil {
+		t.Fatalf("unrelated packet: ok=%v err=%v", ok, err)
+	}
+	for size := 0; size < 6; size++ {
+		if _, ok, err := ParseSkillCastCancel(Packet{ID: PacketZCSkillCastCancel, Data: packet.Data[:size]}); ok || err == nil {
+			t.Errorf("truncated size %d: ok=%v err=%v", size, ok, err)
+		}
+	}
+}
+
 func TestParseGroundSkillNotify(t *testing.T) {
 	data := make([]byte, 18)
 	binary.LittleEndian.PutUint16(data[0:2], 0x0117)

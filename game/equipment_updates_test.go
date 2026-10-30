@@ -35,7 +35,7 @@ func TestAccessorySlotsSurviveEquipReloadAndUnequip(t *testing.T) {
 	}
 	check := func(index, worn uint16) {
 		t.Helper()
-		item, ok := findSessionInventoryItem(ctx.Session, index)
+		item, ok := session.FindInventoryItem(ctx.Session, index)
 		if !ok || !item.Equip || item.Location != db.EquipAccessory1|db.EquipAccessory2 || item.WearLocation != worn || item.Equipped != (worn != 0) {
 			t.Fatalf("index %d: %+v, want both slots allowed and wear 0x%04X", index, item, worn)
 		}

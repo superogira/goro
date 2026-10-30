@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	chatRoomWindowW        = 320
+	chatRoomWindowW        = 480
+	chatRoomMembersW       = 160
 	chatRoomWindowContentH = 152
 	chatRoomMessagePadX    = 8
 	chatRoomMessagePadY    = 6
@@ -22,8 +23,11 @@ const (
 )
 
 type ChatRoomWindowAction struct {
-	Message string
-	Leave   bool
+	Message   string
+	Leave     bool
+	Settings  bool
+	MakeOwner string
+	Kick      string
 }
 
 type chatRoomLine struct {
@@ -34,17 +38,21 @@ type chatRoomLine struct {
 
 type ChatRoomWindow struct {
 	Window
-	title      string
-	limit      uint16
-	public     bool
-	count      uint16
-	owner      string
-	members    []string
-	input      string
-	inputField *textfield.Widget
-	lines      []chatRoomLine
-	scrollY    state.Signal[float32]
-	action     ChatRoomWindowAction
+	RoomID         uint32
+	title          string
+	limit          uint16
+	public         bool
+	count          uint16
+	owner          string
+	localName      string
+	selectedMember string
+	memberScroll   state.Signal[float32]
+	members        []string
+	input          string
+	inputField     *textfield.Widget
+	lines          []chatRoomLine
+	scrollY        state.Signal[float32]
+	action         ChatRoomWindowAction
 	// webOpen marks the DOM-panel twin as the active presentation (web
 	// build only); webSig skips no-op syncs so the page keeps focus.
 	webOpen bool
@@ -57,12 +65,19 @@ func (w *ChatRoomWindow) Open(ctx Context, title string, limit uint16, public bo
 		return
 	}
 	w.ctx = ctx
+	w.RoomID = 0
 	w.title = title
 	w.limit = limit
 	w.public = public
 	w.members = compactChatRoomMembers(members)
 	w.count = uint16(len(w.members))
 	w.owner = firstChatRoomMember(w.members)
+	w.localName = ""
+	if ctx.Session != nil {
+		w.localName = ctx.Session.SelectedCharacter().Name
+	}
+	w.selectedMember = ""
+	w.memberScroll = state.NewSignal[float32](0)
 	w.input = ""
 	w.inputField = nil
 	w.lines = nil
@@ -77,9 +92,10 @@ func (w *ChatRoomWindow) Open(ctx Context, title string, limit uint16, public bo
 	w.EnsureWindow(chatRoomWindowW, ROWindowTitleHeight+chatRoomWindowContentH+ROWindowFooterHeight)
 	w.SetBackground(widget.RGBA8(0, 0, 0, 0))
 	w.SetFullRedraw(true)
-	w.Window.Open(ctx, w.widgetTree(ctx))
-	w.focusInput()
+	w.Window.Open(ctx, nil)
+	w.SetContent(w.widgetTree(ctx))
 	w.Publish(ctx)
+	w.focusInput()
 }
 
 // Close hides whichever presentation is active.
@@ -172,6 +188,20 @@ func (w *ChatRoomWindow) RoomCount() uint16 {
 	return uint16(len(w.members))
 }
 
+func (w *ChatRoomWindow) IsOwner() bool {
+	return w.IsOpen() && w.localName != "" && strings.EqualFold(w.owner, w.localName)
+}
+
+func (w *ChatRoomWindow) CanManageMember(name string) bool {
+	return w.IsOwner() && name != "" && !strings.EqualFold(name, w.localName) && chatRoomHasMember(w.members, name)
+}
+
+func (w *ChatRoomWindow) OpenSettings(ctx Context, form *ChatRoomCreateWindow) {
+	if w.IsOwner() {
+		form.OpenEdit(ctx, w.title, w.limit, w.public)
+	}
+}
+
 func (w *ChatRoomWindow) AddMessage(ctx Context, text string) {
 	w.addLine(ctx, strings.TrimSpace(text), "", widget.RGBA8(232, 238, 245, 255))
 }
@@ -233,7 +263,7 @@ func (w *ChatRoomWindow) RemoveMember(ctx Context, name string, count uint16) {
 		w.count = uint16(len(w.members))
 	}
 	if strings.EqualFold(w.owner, name) {
-		w.owner = firstChatRoomMember(w.members)
+		w.owner = ""
 	}
 	if w.IsOpen() {
 		w.refresh(ctx)
@@ -289,14 +319,17 @@ func (w *ChatRoomWindow) widgetTree(ctx Context) widget.Widget {
 		OnClose(func() { w.requestLeave(ctx) }),
 		Size(chatRoomWindowW, ROWindowTitleHeight+chatRoomWindowContentH+ROWindowFooterHeight),
 		Background(widget.RGBA8(0, 0, 0, 0)),
-		Content(w.contentTree()),
+		Content(primitives.HBox(
+			primitives.Expanded(w.contentTree()),
+			w.memberList(),
+		).CrossAlign(primitives.CrossAxisStretch)),
 		Footer(w.footerTree(ctx)...),
 	)
 }
 
 func (w *ChatRoomWindow) contentTree() widget.Widget {
 	messageHeight := chatRoomWindowContentH - 24 - chatRoomMessagePadY*2
-	textWidth := maxInt(1, scrollbarSafeIntWidth(chatRoomWindowW-2*chatRoomMessagePadX)-6)
+	textWidth := maxInt(1, scrollbarSafeIntWidth(chatRoomWindowW-chatRoomMembersW-2*chatRoomMessagePadX)-6)
 	lines := wrapChatRoomLines(w.visibleLines(), textWidth)
 	contentHeight := whisperMessageContentHeight(len(lines))
 	rows := make([]widget.Widget, 0, len(lines)+1)
@@ -360,7 +393,7 @@ func (w *ChatRoomWindow) memberSummary() widget.Widget {
 }
 
 func (w *ChatRoomWindow) footerTree(ctx Context) []widget.Widget {
-	return []widget.Widget{
+	buttons := []widget.Widget{
 		primitives.Expanded(
 			primitives.Box(w.inputWidget(ctx)).
 				Height(24).
@@ -369,10 +402,52 @@ func (w *ChatRoomWindow) footerTree(ctx Context) []widget.Widget {
 		rotheme.Button("Send", func() {
 			w.submit(ctx)
 		}),
-		rotheme.Button("Leave", func() {
-			w.requestLeave(ctx)
-		}),
 	}
+	if w.IsOwner() {
+		buttons = append(buttons, rotheme.Button("Settings", func() {
+			if w.IsOwner() {
+				w.action = ChatRoomWindowAction{Settings: true}
+			}
+		}))
+	}
+	return append(buttons, rotheme.Button("Leave", func() {
+		w.requestLeave(ctx)
+	}))
+}
+
+func (w *ChatRoomWindow) memberList() widget.Widget {
+	members := append([]string(nil), w.members...)
+	rows := make([]itemTableRow, len(members))
+	selected := -1
+	for i, name := range members {
+		rows[i].name = name
+		if strings.EqualFold(name, w.owner) {
+			rows[i].name = "* " + name
+		}
+		if name == w.selectedMember {
+			selected = i
+		}
+	}
+	list := itemTableView(rows, "Members", 22, 24, "No members", w.memberScroll, selected, func(row int) {
+		w.selectedMember = members[row]
+	})
+	children := []widget.Widget{primitives.Expanded(list)}
+	if w.IsOwner() {
+		children = append(children, primitives.HBox(
+			rotheme.ButtonDisabledFn("Make Owner", func() bool { return !w.CanManageMember(w.selectedMember) }, func() {
+				if w.CanManageMember(w.selectedMember) {
+					w.action = ChatRoomWindowAction{MakeOwner: w.selectedMember}
+				}
+			}),
+			rotheme.ButtonDisabledFn("Kick", func() bool { return !w.CanManageMember(w.selectedMember) }, func() {
+				if w.CanManageMember(w.selectedMember) {
+					w.action = ChatRoomWindowAction{Kick: w.selectedMember}
+				}
+			}),
+		).Gap(4).Padding(4).Height(34).CrossAlign(primitives.CrossAxisCenter))
+	}
+	return primitives.Box(children...).Width(chatRoomMembersW).
+		Background(rotheme.Default.Colors.PanelBody).CrossAlign(primitives.CrossAxisStretch)
 }
 
 func (w *ChatRoomWindow) inputWidget(ctx Context) *textfield.Widget {
@@ -397,7 +472,7 @@ func (w *ChatRoomWindow) inputWidget(ctx Context) *textfield.Widget {
 
 func (w *ChatRoomWindow) submit(ctx Context) {
 	message := strings.TrimSpace(w.input)
-	if message == "" {
+	if !w.IsOpen() || message == "" {
 		return
 	}
 	w.action = ChatRoomWindowAction{Message: message}
@@ -410,6 +485,9 @@ func (w *ChatRoomWindow) submit(ctx Context) {
 }
 
 func (w *ChatRoomWindow) requestLeave(ctx Context) {
+	if !w.IsOpen() {
+		return
+	}
 	w.action = ChatRoomWindowAction{Leave: true}
 	w.Close()
 	w.Publish(ctx)
@@ -433,9 +511,12 @@ func (w *ChatRoomWindow) refresh(ctx Context) {
 		w.syncWebIfChanged()
 		return
 	}
+	focused := w.inputField != nil && w.inputField.IsFocused()
 	w.SetContent(w.widgetTree(ctx))
-	w.focusInput()
 	w.Publish(ctx)
+	if focused {
+		w.focusInput()
+	}
 	// No app-wide Invalidate here: SetContent already invalidates the
 	// window's damage rect, and UIApp.Invalidate() maps to the full canvas.
 }
@@ -479,7 +560,11 @@ func (w *ChatRoomWindow) syncWebIfChanged() {
 
 func (w *ChatRoomWindow) focusInput() {
 	if w.inputField != nil {
-		w.inputField.SetFocused(true)
+		if wc := windowWidgetContext(w.ctx); wc != nil {
+			wc.RequestFocus(w.inputField)
+		} else {
+			w.inputField.SetFocused(true)
+		}
 	}
 }
 

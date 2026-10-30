@@ -117,10 +117,24 @@ Goro only searches the locations above; it does not automatically read or write
 config files in system or per-user directories such as `/etc` or `$XDG_CONFIG_HOME`.
 A missing explicit `--config` file is an error.
 
-In-game settings, remembered login IDs, and chat shortcuts are saved to the
+In-game settings, remembered login IDs, chat shortcuts, and window layout are saved to the
 `--config` file when supplied, otherwise to `--data-dir/goro.ini` when `--data-dir`
 is supplied, otherwise to `./goro.ini`. A missing data-directory or working-directory
 file is created when saving preferences.
+
+The `[ui]` section remembers which ordinary game windows are open, whether Basic
+Info and its button menu are collapsed, `shortcut_rows` (1–3), and `skill_tree`
+(`true` for the tree, `false` for the list). These choices determine window sizes;
+the console, shortcut bars, and Stats window also remember their dragged positions
+as `console_position = x,y`, `shortcut_position = x,y`, and `stats_position = x,y`.
+An empty position keeps automatic placement. NPC, shop, storage, and trade dialogs
+still open only through their normal interactions.
+
+Camera zoom is saved as `[ui] camera_zoom` and restored when entering the game.
+Maps with a fixed camera retain their prescribed zoom.
+
+During a session, ordinary windows also keep their dragged positions when closed
+and reopened.
 
 Example `goro.ini`:
 
@@ -308,7 +322,6 @@ These are tutorials on how to setup a development environment.
 - [rAthena server setup](docs/rathena-setup.md)
 - [Hercules server setup](docs/hercules-setup.md)
 - [Client setup](docs/client-setup.md)
-- [Homunculus and mercenary support](docs/companions-20080910.md)
 - [Lua bot scripting](docs/bot-scripting.md)
 
 Runtime data is discovered from, in order:
@@ -358,7 +371,7 @@ Currently implemented (not a claim of complete reference-client parity):
  * Battle and Gameplay
    * Enemies
    * Classic PvP map targeting and rank counter
-   * [War of Emperium (2008 FE/SE client behavior)](docs/woe-20080910.md)
+   * War of Emperium (2008 FE/SE client behavior)
    * Path finding
    * Continuous held-click walking
    * Drops
@@ -405,7 +418,7 @@ Currently implemented (not a claim of complete reference-client parity):
    * Card composition
    * Trading
    * Vending
-   * [Legacy mail with item and Zeny attachments](docs/legacy-mail-20080910.md)
+   * Legacy mail with item and Zeny attachments
    * Show equipment
    * Alchemist crafting
    * Blacksmith repair and weapon refinement

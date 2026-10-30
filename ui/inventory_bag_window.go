@@ -109,7 +109,8 @@ func (w *InventoryBagWindow) Toggle(ctx Context) {
 	w.ClampScroll(ctx.Session)
 	w.snapshot = w.inventorySnapshot(ctx.Session)
 	x, y := inventoryBagDefaultPosition(ctx)
-	w.OpenAt(x, y, w.widgetTree(ctx, nil))
+	w.SetAutoPosition(x, y)
+	w.Open(ctx, w.widgetTree(ctx, nil))
 	w.Publish(ctx)
 }
 

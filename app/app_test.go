@@ -7,6 +7,24 @@ import (
 	"github.com/kivutar/goro/glog"
 )
 
+func TestNewRestoresFogAndAuraSettings(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		g, err := New(config.Config{
+			Headless: true,
+			DataDir:  t.TempDir(),
+			Fog:      config.FogConfig{Enabled: enabled},
+			Gameplay: config.GameplayConfig{SimpleAura: enabled},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(g.Close)
+		if g.session.FogEnabled != enabled || g.session.SimpleAura != enabled {
+			t.Fatalf("fog=%t simple aura=%t, want %t", g.session.FogEnabled, g.session.SimpleAura, enabled)
+		}
+	}
+}
+
 func TestNewForceUserAIEnablesCompanionCustomAI(t *testing.T) {
 	g, err := New(config.Config{
 		DataDir: t.TempDir(),

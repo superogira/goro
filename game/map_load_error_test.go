@@ -15,6 +15,7 @@ import (
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/internal/testutil"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
@@ -105,7 +106,7 @@ func TestMissingMapReturnsToLoginWithoutGameAssets(t *testing.T) {
 
 func TestMissingMapClosesConnectionAndAllowsExplicitLogin(t *testing.T) {
 	ctx := mapRecoveryTestContext(t)
-	netClient, server := newBotTestConnection(t, 20080910)
+	netClient, server := testutil.NewConnection(t, 20080910)
 	ctx.Network = netClient
 	// A configured login server makes unwanted automatic reconnects observable.
 	ctx.Resources.ClientInfo.Connections = []res.Connection{{Address: "127.0.0.1", Port: 1}}
@@ -197,28 +198,109 @@ func TestLoadGATPreservesReadErrors(t *testing.T) {
 }
 
 func TestWorldEnterWithGATStillAcknowledgesSuccessfulLoad(t *testing.T) {
-	for _, source := range []string{"new_1-1.gat", "new_zone01.gat"} {
-		t.Run(source, func(t *testing.T) {
-			ctx := mapRecoveryTestContext(t)
-			netClient, server := newBotTestConnection(t, 20080910)
-			ctx.Network = netClient
-			writeTestGAT(t, ctx.Resources.Root, source)
-			if source != ctx.World.MapName {
-				table := []byte("new_1-1.gat#" + source + "#\n")
-				if err := os.WriteFile(filepath.Join(ctx.Resources.Root, "resnametable.txt"), table, 0600); err != nil {
-					t.Fatal(err)
+	for _, headless := range []bool{false, true} {
+		for _, source := range []string{"new_1-1.gat", "new_zone01.gat"} {
+			t.Run(source, func(t *testing.T) {
+				ctx := mapRecoveryTestContext(t)
+				uiApp := &loadingInputTestApp{}
+				ctx.UIApp = uiApp
+				ctx.Config.Headless = headless
+				netClient, server := testutil.NewConnection(t, 20080910)
+				ctx.Network = netClient
+				writeTestGAT(t, ctx.Resources.Root, source)
+				if source != ctx.World.MapName {
+					table := []byte("new_1-1.gat#" + source + "#\n")
+					if err := os.WriteFile(filepath.Join(ctx.Resources.Root, "resnametable.txt"), table, 0600); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			mode := NewWorldMode()
-			if next := mode.Enter(ctx); next != nil || ctx.World.GAT == nil {
-				t.Fatal("a valid GAT with optional rendering assets missing triggered recovery")
-			}
-			if ctx.World.MapName != "new_1-1.gat" {
-				t.Fatalf("resource alias replaced the server's map identity: %q", ctx.World.MapName)
-			}
-			readBotTestPackets(t, server, network.BuildLoadEndAckPacket())
-		})
+				mode := NewWorldMode()
+				defer mode.Leave()
+				if next := mode.Enter(ctx); next != nil || ctx.World.GAT == nil {
+					t.Fatal("a valid GAT with optional rendering assets missing triggered recovery")
+				}
+				if ctx.World.MapName != "new_1-1.gat" {
+					t.Fatalf("resource alias replaced the server's map identity: %q", ctx.World.MapName)
+				}
+				if !headless {
+					if !uiApp.blocked {
+						t.Fatal("loading left the hidden UI interactive")
+					}
+					if mode.loading == nil {
+						t.Fatal("visual client did not start loading")
+					}
+					if _, err := mode.Update(ctx); err != nil {
+						t.Fatal(err)
+					}
+					if mode.loading.Percent(0, 0) != 0 || mode.mapFade.Phase != maps.FadePrewarm {
+						t.Fatal("loading advanced before its first submitted frame")
+					}
+				} else if mode.loading != nil {
+					t.Fatal("headless client started visual loading")
+				}
+				for i := 0; i < 10 && mode.loading != nil && !mode.loading.Prepared(); i++ {
+					mode.FrameSubmitted()
+					if mode.mapFade.CoveredFrames != 0 {
+						t.Fatal("loading frame counted as scene warmup")
+					}
+					if _, err := mode.Update(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode.loading != nil && !mode.loading.Prepared() {
+					t.Fatal("load never completed")
+				}
+				readBotTestPackets(t, server, network.BuildLoadEndAckPacket())
+				if !headless {
+					if !uiApp.blocked {
+						t.Fatal("UI unblocked before uploads and fade completed")
+					}
+					mode.mapFade.StartIn(time.Now().Add(-maps.FadeInDuration))
+					if _, err := mode.Update(ctx); err != nil {
+						t.Fatal(err)
+					}
+					if mode.loading != nil || uiApp.blocked {
+						t.Fatal("UI remained blocked after the loading screen disappeared")
+					}
+				}
+			})
+		}
 	}
+}
+
+type loadingInputTestApp struct {
+	fakeCursorUIApp
+	blocked bool
+}
+
+func TestLeavingLoadingRestoresUIInput(t *testing.T) {
+	for _, lateUI := range []bool{false, true} {
+		ctx := mapRecoveryTestContext(t)
+		writeTestGAT(t, ctx.Resources.Root, ctx.World.MapName)
+		app := &loadingInputTestApp{}
+		if !lateUI {
+			ctx.UIApp = app
+		}
+		mode := NewWorldMode()
+		mode.Enter(ctx)
+		defer mode.Leave()
+		ctx.UIApp = app
+		if _, err := mode.Update(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !app.blocked {
+			t.Fatal("UI input was not blocked before the first loading frame")
+		}
+		mode.Leave()
+		if app.blocked {
+			t.Fatal("leaving during loading retained the input blocker")
+		}
+	}
+}
+
+func (a *loadingInputTestApp) BlockInput() func() {
+	a.blocked = true
+	return func() { a.blocked = false }
 }
 
 func writeTestGAT(t *testing.T, root, name string) {

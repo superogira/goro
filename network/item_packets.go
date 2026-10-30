@@ -18,6 +18,7 @@ const (
 	PacketCZReqItemRepair          uint16 = 0x01FD
 	PacketCZReqMakingArrow         uint16 = 0x01AE
 	PacketCZReqWeaponRefine        uint16 = 0x0222
+	PacketCZReqCooking             uint16 = 0x025B
 	PacketCZUseItem2               uint16 = 0x0439
 	PacketCZUseItemLegacy          uint16 = 0x00A7
 	PacketCZReqWearEquip           uint16 = 0x00A9
@@ -1314,6 +1315,14 @@ func BuildMakingItemPacket(itemID uint16, material [3]uint16) []byte {
 	return packet
 }
 
+func BuildCookingPacket(makeType, itemID uint16) []byte {
+	packet := make([]byte, 6)
+	binary.LittleEndian.PutUint16(packet[0:2], PacketCZReqCooking)
+	binary.LittleEndian.PutUint16(packet[2:4], makeType)
+	binary.LittleEndian.PutUint16(packet[4:6], itemID)
+	return packet
+}
+
 func BuildRepairItemPacket(item RepairItem) []byte {
 	packet := make([]byte, 15)
 	binary.LittleEndian.PutUint16(packet[0:2], PacketCZReqItemRepair)
@@ -1545,6 +1554,17 @@ func (c *Client) SendMakingItem(itemID uint16, material [3]uint16) error {
 		glog.Debugf("sent CZ_REQMAKINGITEM opcode=0x%04X item=%d material=%v client_date=%d", ID(packet), itemID, material, c.clientDate)
 	} else {
 		glog.Warnf("send CZ_REQMAKINGITEM failed opcode=0x%04X len=%d item=%d material=%v client_date=%d: %v", ID(packet), len(packet), itemID, material, c.clientDate, err)
+	}
+	return err
+}
+
+func (c *Client) SendCooking(makeType, itemID uint16) error {
+	packet := BuildCookingPacket(makeType, itemID)
+	err := c.Send(packet)
+	if err == nil {
+		glog.Debugf("sent CZ_REQ_MAKINGITEM opcode=0x%04X type=%d item=%d client_date=%d", ID(packet), makeType, itemID, c.clientDate)
+	} else {
+		glog.Warnf("send CZ_REQ_MAKINGITEM failed opcode=0x%04X type=%d item=%d client_date=%d: %v", ID(packet), makeType, itemID, c.clientDate, err)
 	}
 	return err
 }

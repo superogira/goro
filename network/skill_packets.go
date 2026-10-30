@@ -15,6 +15,7 @@ const skillGroundMessageLen = 80
 
 const (
 	PacketZCMonsterInfo     uint16 = 0x018C
+	PacketZCSkillCastCancel uint16 = 0x01B9
 	PacketZCAutoSpellList   uint16 = 0x01CD
 	PacketCZSelectAutoSpell uint16 = 0x01CE
 
@@ -286,6 +287,16 @@ func ParseSkillCastNotify(packet Packet) (SkillCastNotify, bool, error) {
 		Property:  binary.LittleEndian.Uint32(packet.Data[16:20]),
 		DelayTime: binary.LittleEndian.Uint32(packet.Data[20:24]),
 	}, true, nil
+}
+
+func ParseSkillCastCancel(packet Packet) (uint32, bool, error) {
+	if packet.ID != PacketZCSkillCastCancel {
+		return 0, false, nil
+	}
+	if len(packet.Data) < 6 {
+		return 0, false, fmt.Errorf("ZC_DISPEL too short: %d", len(packet.Data))
+	}
+	return binary.LittleEndian.Uint32(packet.Data[2:6]), true, nil
 }
 
 func ParseGroundSkillNotify(packet Packet) (GroundSkillNotify, bool, error) {

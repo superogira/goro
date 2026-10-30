@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/skills"
 	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/render"
 	"github.com/kivutar/goro/res"
@@ -20,11 +22,6 @@ type previewRenderTarget interface {
 	DrawImage(*render.Image, *render.DrawImageOptions)
 	DrawTrianglesOwned([]render.Vertex, []uint16, *render.Image, *render.DrawTrianglesOptions)
 }
-
-const (
-	monsterInfoPreviewWidth  = 110
-	monsterInfoPreviewHeight = 160
-)
 
 func (m *WorldMode) DrawInventoryItemIcon(screen *render.Frame, manager *res.Manager, item session.InventoryItem, x, y int) {
 	m.drawInventoryItemIcon(screen, manager, item, x, y)
@@ -40,7 +37,7 @@ func (m *WorldMode) SkillIconImage(manager *res.Manager, skill session.Skill) im
 	}
 	resourceName, ok := manager.SkillResourceName(int(skill.ID))
 	if !ok {
-		resourceName = strings.ToUpper(strings.ReplaceAll(skillLabel(skill), " ", "_"))
+		resourceName = strings.ToUpper(strings.ReplaceAll(skills.SkillLabel(skill), " ", "_"))
 	}
 	key := fmt.Sprintf("__skill_icon_image_%d_%s", skill.ID, resourceName)
 	if m.imageCache == nil {
@@ -97,12 +94,12 @@ func (m *WorldMode) drawEquipmentPreview(screen previewRenderTarget, ctx client.
 	if screen == nil || width <= 0 || height <= 0 {
 		return
 	}
-	view := m.playerView
+	view := m.actorSystem.PlayerView
 	if view == nil && ctx.Resources != nil && ctx.Session != nil {
-		loaded, _ := sprites.LoadPlayer(ctx.Resources, localPlayerVisualCharacter(ctx), ctx.Session.Sex, localPlayerIsAdmin(ctx))
+		loaded, _ := sprites.LoadPlayer(ctx.Resources, actors.LocalPlayerVisualCharacter(ctx), ctx.Session.Sex, actors.LocalPlayerIsAdmin(ctx))
 		view = loaded
 		if loaded != nil {
-			m.playerView = loaded
+			m.actorSystem.PlayerView = loaded
 		}
 	}
 	m.drawHumanoidPreview(screen, view, x, y, width, height)
@@ -132,7 +129,7 @@ func drawBillboardPreview(screen previewRenderTarget, billboard *scene.Billboard
 	if screen == nil || billboard == nil || billboard.Image == nil || width <= 0 || height <= 0 {
 		return
 	}
-	bounds := visibleImageBounds(billboard.Image)
+	bounds := scene.VisibleImageBounds(billboard.Image)
 	if bounds.Empty() {
 		return
 	}
@@ -173,7 +170,7 @@ func (m *WorldMode) monsterInfoPreviewImage(ctx client.Context, class uint16, wi
 		HasObjectType: true,
 		ObjectType:    scene.ActorObjectTypeMob,
 	}
-	view := m.nonPCSpriteView(ctx, actor)
+	view := m.actors().NonPCSpriteView(ctx, actor)
 	state := sprites.State{
 		ActionFamily:   scene.SpriteActionIdle,
 		Direction:      4,

@@ -231,7 +231,8 @@ func (w *HomunculusSkillWindow) Rebind(ctx Context, actions GameActions) {
 func (w *HomunculusSkillWindow) openAtDefault(ctx Context) {
 	x, y := homunculusSkillDefaultPosition(ctx)
 	w.snapshot = w.skillSnapshot(ctx.Session)
-	w.OpenAt(x, y, w.widgetTree(ctx, w.actions))
+	w.SetAutoPosition(x, y)
+	w.Window.Open(ctx, w.widgetTree(ctx, w.actions))
 	w.Publish(ctx)
 }
 

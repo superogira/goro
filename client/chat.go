@@ -29,6 +29,12 @@ func SendChat(ctx Context, input string) error {
 	}
 
 	command, arguments := splitChatCommand(input)
+	if packet, handled, err := buildGMCommand(ctx, command, arguments); handled {
+		if err != nil {
+			return err
+		}
+		return ctx.Network.Send(packet)
+	}
 	switch command {
 	case "/sit":
 		return SetSitting(ctx, true)

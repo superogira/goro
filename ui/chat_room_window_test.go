@@ -6,10 +6,84 @@ import (
 
 	"github.com/gogpu/ui/core/scrollview"
 	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/input"
+	"github.com/kivutar/goro/session"
 )
+
+func TestChatRoomOwnerControlsAndSettingsFocus(t *testing.T) {
+	ctx, _, app := newWindowInstanceTest()
+	ctx.Session = &session.Session{CharID: 1, Selected: session.Character{ID: 1, Name: "Alice"}}
+	var room ChatRoomWindow
+	room.Open(ctx, "Room", 5, true, []string{"Alice", "Bob"})
+	app.Frame()
+	app.Window().DrawTo(&uitest.MockCanvas{})
+	buttons := collectEscapeMenuButtons(room.content)
+	if len(buttons) != 6 {
+		t.Fatalf("owner buttons = %d, want Close, Make Owner, Kick, Send, Settings, Leave", len(buttons))
+	}
+	for _, button := range buttons {
+		bounds := button.ScreenBounds()
+		if bounds.Min.X < float32(room.x) || bounds.Max.X > float32(room.x+room.width) || bounds.Max.Y > float32(room.y+room.height) {
+			t.Fatalf("button outside the room: %+v", bounds)
+		}
+	}
+	x, y := float32(room.x+chatRoomWindowW-chatRoomMembersW+20), float32(room.y+ROWindowTitleHeight+24+22+10)
+	app.Window().HandleEvent(uitest.Click(x, y))
+	app.Window().HandleEvent(uitest.Release(x, y))
+	if room.selectedMember != "Bob" {
+		t.Fatalf("selected member = %q", room.selectedMember)
+	}
+	app.Frame()
+	app.Window().DrawTo(&uitest.MockCanvas{})
+	for i, want := range []ChatRoomWindowAction{{MakeOwner: "Bob"}, {Kick: "Bob"}, {Settings: true}} {
+		button := buttons[[]int{1, 2, 4}[i]]
+		point := button.ScreenBounds().Center()
+		app.Window().HandleEvent(uitest.Click(point.X, point.Y))
+		app.Window().HandleEvent(uitest.Release(point.X, point.Y))
+		if got := room.PopAction(); got != want {
+			t.Fatalf("action = %+v, want %+v", got, want)
+		}
+	}
+	var settings ChatRoomCreateWindow
+	room.OpenSettings(ctx, &settings)
+	app.Frame()
+	if app.Window().Context().FocusedWidget() != settings.titleField {
+		t.Fatal("settings title did not receive focus")
+	}
+	room.AddMessage(ctx, "Bob : hello")
+	app.Frame()
+	if app.Window().Context().FocusedWidget() != settings.titleField || room.inputField.IsFocused() {
+		t.Fatal("incoming message stole focus from settings")
+	}
+	settings.Close()
+	room.SetOwner(ctx, "Bob")
+	if room.IsOwner() || len(collectEscapeMenuButtons(room.content)) != 3 {
+		t.Fatal("ownership loss retained management buttons")
+	}
+}
+
+func TestChatRoomSettingsFormDoesNotCreateAnotherRoom(t *testing.T) {
+	ctx := Context{ScreenW: 800, ScreenH: 600}
+	var form ChatRoomCreateWindow
+	form.OpenEdit(ctx, "Room", 5, false)
+	if form.title != "Room" || form.limit != "5" || form.public {
+		t.Fatal("settings were not prefilled")
+	}
+	form.password = " pass "
+	form.submit(ctx)
+	if action := form.PopAction(); !action.Edit || action.Password != " pass " || action.Title != "Room" {
+		t.Fatalf("edit action = %+v", action)
+	}
+	form.Open(ctx)
+	form.title = "New room"
+	form.submit(ctx)
+	if action := form.PopAction(); action.Edit || action.Password != "" || !action.Public || action.Limit != 20 {
+		t.Fatalf("create retained edit state: %+v", action)
+	}
+}
 
 func TestChatRoomEscapeRequestsLeave(t *testing.T) {
 	inputState := input.NewState()

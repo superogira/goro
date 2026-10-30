@@ -118,9 +118,7 @@ func (m *System) ApplyActorDevotion(ctx client.Context, notify network.ActorDevo
 		if duplicate {
 			continue
 		}
-		if m.AddBetween(ctx, LineLink, notify.SourceID, targetID, now) {
-			m.Active[len(m.Active)-1].Expires = time.Time{}
-		}
+		m.AddPersistentBetween(ctx, LineLink, notify.SourceID, targetID, now)
 	}
 }
 

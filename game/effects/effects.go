@@ -799,6 +799,7 @@ type Instance struct {
 	EffectID                             int
 	ActorID                              uint32
 	TargetID                             uint32
+	castSourceID                         uint32
 	ServerTick                           uint32
 	ActorDirection                       int
 	ActorOrigin                          scene.Point3
@@ -1058,6 +1059,15 @@ func (m *System) AddBetween(ctx client.Context, effectID int, actorID, targetID 
 }
 
 func (m *System) AddBetweenDuration(ctx client.Context, effectID int, actorID, targetID uint32, starts time.Time, durationOverride time.Duration) bool {
+	return m.addBetweenDuration(ctx, effectID, actorID, targetID, starts, durationOverride, false)
+}
+
+// AddPersistentBetween keeps an effect until its owning server state removes it.
+func (m *System) AddPersistentBetween(ctx client.Context, effectID int, actorID, targetID uint32, starts time.Time) bool {
+	return m.addBetweenDuration(ctx, effectID, actorID, targetID, starts, 0, true)
+}
+
+func (m *System) addBetweenDuration(ctx client.Context, effectID int, actorID, targetID uint32, starts time.Time, durationOverride time.Duration, persistent bool) bool {
 	if ctx.World == nil {
 		return false
 	}
@@ -1072,6 +1082,15 @@ func (m *System) AddBetweenDuration(ctx client.Context, effectID int, actorID, t
 	if ctx.Config.Headless {
 		// Scream and Frost Joke still send the caster's chat line.
 		m.applyWorldEffectSideEffects(ctx, Instance{EffectID: effectID, ActorID: actorID}, starts)
+		return false
+	}
+	if effectID == SightTrasher {
+		m.Remove(Sight, actorID)
+		if scene.IsLocalActor(ctx, actorID) {
+			m.Remove(Sight, scene.LocalSkillTarget(ctx))
+		}
+	}
+	if !persistent && !effectEnabled(ctx, effectID) {
 		return false
 	}
 	// SAINTCASTING keeps a visible startup flare even for very short casts.
@@ -1187,12 +1206,6 @@ func (m *System) AddBetweenDuration(ctx client.Context, effectID int, actorID, t
 		effectID == JupitelThunder || effectID == WaterBall2 {
 		initMageProjectile(ctx, &effect)
 	}
-	if effectID == SightTrasher {
-		m.Remove(Sight, actorID)
-		if scene.IsLocalActor(ctx, actorID) {
-			m.Remove(Sight, scene.LocalSkillTarget(ctx))
-		}
-	}
 	if effectID == Stin4 || effectID == Stin5 {
 		destination := EffectWorldAnchor(ctx, effect, starts)
 		effect.ActorOrigin = destination
@@ -1241,15 +1254,20 @@ func (m *System) AddBetweenDuration(ctx client.Context, effectID int, actorID, t
 	if effectID == Peong {
 		effect.taekwonJump = &taekwonJumpParticles{tick: 35}
 	}
+	if persistent {
+		effect.Persistent, effect.Expires = true, time.Time{}
+	}
 	m.Active = append(m.Active, effect)
-	m.ScheduleWorldEffectSound(starts, spec, effect)
-	m.startWorldEffectCameraShake(starts, spec)
+	if effectEnabled(ctx, effectID) {
+		m.ScheduleWorldEffectSound(starts, spec, effect)
+		m.startWorldEffectCameraShake(starts, spec)
+	}
 	m.applyWorldEffectSideEffects(ctx, effect, starts)
 	return true
 }
 
 func (m *System) AddCellLifetime(ctx client.Context, effectID int, actorID uint32, x, y int, starts time.Time, lifetimeOverride time.Duration, persistent bool) bool {
-	if ctx.Config.Headless || ctx.World == nil {
+	if ctx.Config.Headless || ctx.World == nil || !persistent && !effectEnabled(ctx, effectID) {
 		return false
 	}
 	spec, ok := Lookup(effectID)
@@ -1308,8 +1326,10 @@ func (m *System) AddCellLifetime(ctx client.Context, effectID int, actorID uint3
 		Persistent: persistent,
 	}
 	m.Active = append(m.Active, effect)
-	m.ScheduleWorldEffectSound(starts, spec, effect)
-	m.startWorldEffectCameraShake(starts, spec)
+	if effectEnabled(ctx, effectID) {
+		m.ScheduleWorldEffectSound(starts, spec, effect)
+		m.startWorldEffectCameraShake(starts, spec)
+	}
 	return true
 }
 
@@ -1318,7 +1338,7 @@ func (m *System) AddCell(ctx client.Context, effectID int, actorID uint32, x, y 
 }
 
 func (m *System) addCellRotation(ctx client.Context, effectID int, actorID uint32, x, y int, starts time.Time, durationOverride time.Duration, sizeOverride float64, rotationRadiansPerSecond float64) bool {
-	if ctx.Config.Headless || ctx.World == nil {
+	if ctx.Config.Headless || ctx.World == nil || !effectEnabled(ctx, effectID) {
 		return false
 	}
 	spec, ok := Lookup(effectID)
@@ -1368,6 +1388,9 @@ func (m *System) ScheduleWorldEffectSound(starts time.Time, spec Spec, effect In
 	}
 	// Quagmire has one effect per cell; the original only sounds one in twelve.
 	if effect.EffectID == Quagmire && HitEffectRandom(effect, 0, 12) != 0 {
+		return
+	}
+	if effect.EffectID == Kaen && HitEffectRandom(effect, 0, 8) != 0 {
 		return
 	}
 	paths := resolveEffectSFX(spec, effect)
@@ -1710,6 +1733,11 @@ func (m *System) Draw(screen *render.Frame, ctx client.Context, projection scene
 			effect.ActorOrigin = EffectWorldAnchor(ctx, effect, at)
 		}
 		active = append(active, effect)
+		// Keep lifetimes and actor state while hidden so toggling back on cannot
+		// resurrect expired effects or lose a still-active server status.
+		if !effectEnabled(ctx, effect.EffectID) {
+			continue
+		}
 		anchor := EffectWorldAnchor(ctx, effect, now)
 		if effect.EffectID == db.SkillEffectChaseWalkSmoke {
 			anchor = effect.ActorOrigin
@@ -1859,6 +1887,9 @@ func WorldEffectComponentDuplicateProgressForDraw(starts time.Time, component Co
 }
 
 func (m *System) DrawWorldEffectComponent(screen *render.Frame, ctx client.Context, projection scene.Projection, effect Instance, component Component, componentIndex int, worldX, worldY, worldZ, progress float64, componentDuration time.Duration, now time.Time) {
+	if !effectEnabled(ctx, effect.EffectID) {
+		return
+	}
 	switch component.Kind {
 	case ComponentSTR:
 		m.drawSTREffect(screen, ctx, projection, component, effect, worldX, worldY, worldZ, now)

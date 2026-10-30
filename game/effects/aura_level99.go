@@ -86,7 +86,11 @@ func (m *System) RemoveLevel99AuraEffects(actorID uint32) {
 }
 
 func level99AuraEffectIDs(ctx client.Context) []int {
-	if lessEffectsEnabled(ctx) {
+	simple := ctx.Config.Gameplay.SimpleAura
+	if ctx.Session != nil {
+		simple = ctx.Session.SimpleAura
+	}
+	if simple || lessEffectsEnabled(ctx) {
 		return Level99AuraSimpleEffects
 	}
 	return Level99AuraNormalEffects

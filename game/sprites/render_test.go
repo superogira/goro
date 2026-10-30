@@ -433,7 +433,7 @@ func TestSpriteLayerCenterTreatsPositiveYAsScreenDown(t *testing.T) {
 	}
 }
 
-func TestSpriteLayerAngleMatchesHighPriest(t *testing.T) {
+func TestSpriteLayerAngleRotatesClockwise(t *testing.T) {
 	source := render.NewImage(3, 3)
 	source.RGBA().SetRGBA(1, 0, color.RGBA{R: 255, A: 255})
 	target := render.NewImage(21, 21)
@@ -450,7 +450,7 @@ func TestSpriteLayerAngleMatchesHighPriest(t *testing.T) {
 		t.Fatal("rotated layer drew no pixels")
 	}
 	if minX <= 10 || maxX <= 10 {
-		t.Fatalf("positive ACT angle rotated to x=%d..%d, want right of center like HighPriest RenderSprite", minX, maxX)
+		t.Fatalf("positive ACT angle rotated to x=%d..%d, want right of center", minX, maxX)
 	}
 }
 

@@ -11,11 +11,14 @@ import (
 	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/ui/core/scrollview"
 	"github.com/gogpu/ui/core/textfield"
+	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/scripts"
@@ -46,6 +49,7 @@ const (
 )
 
 var (
+	consoleBackground       = widget.RGBA8(14, 18, 24, 188)
 	consoleColorChat        = color.RGBA{R: 235, G: 242, B: 250, A: 255}
 	consoleColorSystem      = color.RGBA{R: 252, G: 221, B: 128, A: 255}
 	consoleColorBlue        = color.RGBA{R: 0, G: 255, B: 255, A: 255}
@@ -79,7 +83,8 @@ type ChatConsole struct {
 	compactAuto    bool
 	lastActivityAt time.Time
 
-	OnGuildWindow func()
+	OnGuildWindow    func()
+	OnInstanceWindow func()
 
 	ctx                       client.Context
 	window                    Window
@@ -343,6 +348,20 @@ func (c *ChatConsole) handleConsoleWebAction(ctx client.Context, action string) 
 	}
 }
 
+func (c *ChatConsole) SavedPosition() config.WindowPosition { return c.window.SavedPosition() }
+
+func (c *ChatConsole) Dragging() bool { return c.window.dragging }
+
+func (c *ChatConsole) RestorePosition(ctx client.Context, position config.WindowPosition) {
+	if !position.Set {
+		return
+	}
+	c.ctx = ctx
+	c.ensureWindow(ctx)
+	c.window.RestorePosition(ctx, position)
+	c.window.Publish(ctx)
+}
+
 // Rebind reconnects the editor callbacks after the console is copied to a new
 // world mode, keeping the same field so its caret and selection survive.
 func (c *ChatConsole) Rebind(ctx client.Context) {
@@ -369,8 +388,7 @@ func (c *ChatConsole) clickedOutside(ctx client.Context) bool {
 	if ctx.Input == nil || !ctx.Input.MouseJustPressed(input.MouseButtonLeft) {
 		return false
 	}
-	x, y, width, height := consoleBounds(ctx.ScreenSize())
-	return !pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, x, y, width, height)
+	return !c.window.pointInside(ctx, ctx.Input.MouseX, ctx.Input.MouseY)
 }
 
 // SetCompactAuto switches the small-screen layout mode: compact size and
@@ -393,6 +411,9 @@ func (c *ChatConsole) compactAutoIdle(now time.Time) bool {
 }
 
 func (c *ChatConsole) ensureWindow(ctx client.Context) {
+	if c.window.dragging {
+		return
+	}
 	screenW, screenH := ctx.ScreenSize()
 	x, y, width, height := consoleBounds(screenW, screenH)
 	if c.compactAuto && !c.active && !c.Active() {
@@ -411,14 +432,17 @@ func (c *ChatConsole) ensureWindow(ctx client.Context) {
 		// pass through it on the way to the escape menu.
 		c.window.CloseOnEsc = false
 		c.window.titleHeight = 0
+		c.window.setTitleButtonCount(0)
+		c.window.SetBackground(consoleBackground)
 		c.window.SetFullRedraw(true)
 	}
 	c.window.SetAutoPosition(x, y)
 	c.window.SetSize(width, height)
+	c.window.keepOnScreen(ctx)
 	if !c.window.IsOpen() {
 		content := c.widgetTree(width, height)
 		c.cacheKey = key
-		c.window.OpenAt(x, y, content)
+		c.window.Open(ctx, content)
 		return
 	}
 	if c.cacheKey != key {
@@ -548,6 +572,11 @@ func (c *ChatConsole) submitCommand(ctx client.Context, text string) bool {
 	}
 	command := strings.ToLower(strings.Fields(text)[0])
 	switch command {
+	case "/instance":
+		if c.OnInstanceWindow != nil {
+			c.OnInstanceWindow()
+		}
+		return true
 	case "/script":
 		c.submitScript(ctx, consoleCommandArgs(text))
 		return true
@@ -600,6 +629,9 @@ func (c *ChatConsole) submitCommand(ctx client.Context, text string) bool {
 		return true
 	case "/mineffect":
 		c.submitLessEffects(ctx)
+		return true
+	case "/fog", "/aura", "/effect":
+		c.submitVisualSetting(ctx, command)
 		return true
 	case "/hoai":
 		c.submitCompanionAI(ctx, true)
@@ -719,6 +751,33 @@ func (c *ChatConsole) submitScreenshot(ctx client.Context) {
 	c.AddSystemMessage("Screenshot: %s", path)
 }
 
+func (c *ChatConsole) submitVisualSetting(ctx client.Context, command string) {
+	if ctx.Session == nil {
+		c.AddErrorMessage("%s failed: no session", strings.TrimPrefix(command, "/"))
+		return
+	}
+	setting, label := &ctx.Session.FogEnabled, "Fog"
+	switch command {
+	case "/aura":
+		setting, label = &ctx.Session.SimpleAura, "Simple Aura"
+	case "/effect":
+		setting, label = &ctx.Session.NoEffects, "Effects"
+	}
+	*setting = !*setting
+	enabled := *setting
+	if command == "/effect" {
+		enabled = !enabled
+	}
+	status := "Off"
+	if enabled {
+		status = "On"
+	}
+	c.AddSystemMessage("%s: %s", label, status)
+	if _, err := ctx.Config.SaveVisualSettings(ctx.Session.FogEnabled, ctx.Session.SimpleAura, ctx.Session.NoEffects); err != nil {
+		glog.Warnf("settings save failed: %v", err)
+	}
+}
+
 func (c *ChatConsole) submitLessEffects(ctx client.Context) {
 	if ctx.Session == nil {
 		c.AddErrorMessage("mineffect failed: no session")
@@ -825,24 +884,20 @@ func (c *ChatConsole) submitGuildEmblem(ctx client.Context, text string) {
 		c.AddErrorMessage("send failed: not connected")
 		return
 	}
+	if ctx.Session == nil || !ctx.Session.Guild.IsMaster {
+		c.AddErrorMessage("Guild emblem upload failed: guild master only.")
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		c.AddErrorMessage("emblem failed: %s", err)
-		return
-	}
-	if len(data) < 2 || data[0] != 'B' || data[1] != 'M' {
-		c.AddErrorMessage("emblem failed: expected BMP file")
-		return
-	}
-	if len(data) > 1783 {
-		c.AddErrorMessage("emblem failed: BMP is too large")
 		return
 	}
 	if err := ctx.Network.SendGuildEmblem(data); err != nil {
 		c.AddErrorMessage("send failed: %s", err)
 		return
 	}
-	c.AddSystemMessage("Guild emblem uploaded.")
+	c.AddSystemMessage("Guild emblem sent.")
 }
 
 func (c *ChatConsole) submitLeaveParty(ctx client.Context) {
@@ -955,7 +1010,7 @@ func (c *ChatConsole) submitWhisperIgnore(ctx client.Context, text string, allow
 		if allow {
 			c.AddErrorMessage("usage: /in character_name")
 		} else {
-			c.AddErrorMessage("usage: /ex character_name")
+			c.submitWhisperIgnoreList(ctx)
 		}
 		return
 	}
@@ -966,6 +1021,16 @@ func (c *ChatConsole) submitWhisperIgnore(ctx client.Context, text string, allow
 	if err := ctx.Network.SendWhisperIgnore(name, allow); err != nil {
 		c.AddErrorMessage("send failed: %s", err)
 		return
+	}
+}
+
+func (c *ChatConsole) submitWhisperIgnoreList(ctx client.Context) {
+	if ctx.Network == nil {
+		c.AddErrorMessage("send failed: not connected")
+		return
+	}
+	if err := ctx.Network.SendWhisperIgnoreList(); err != nil {
+		c.AddErrorMessage("send failed: %s", err)
 	}
 }
 
@@ -1130,6 +1195,8 @@ func (c *ChatConsole) widgetTree(width, height int) widget.Widget {
 	}
 	messageHeight := maxInt(20, height-16-fieldHeight)
 	c.messageH = messageHeight
+	// Leave the input field and scrollbar available for editing and scrolling.
+	c.window.dragBounds = geometry.NewRect(0, 0, float32(width-8-ROScrollbarGutter), float32(6+messageHeight))
 	messageList := primitives.Box(messageWidgets...).
 		Width(float32(contentWidth)).
 		Gap(1).
@@ -1157,7 +1224,7 @@ func (c *ChatConsole) widgetTree(width, height int) widget.Widget {
 		Height(float32(height)).
 		PaddingXY(8, 6).
 		Gap(4).
-		Background(widget.RGBA8(14, 18, 24, 188)).
+		Background(consoleBackground).
 		BorderStyle(1, widget.RGBA8(180, 198, 218, 95)).
 		Rounded(WindowRadius).
 		CrossAlign(primitives.CrossAxisStretch)

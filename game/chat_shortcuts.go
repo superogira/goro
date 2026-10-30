@@ -31,7 +31,7 @@ func (m *WorldMode) PrepareKeyInput(ctx client.Context, code input.KeyCode, mods
 }
 
 func (m *WorldMode) uiInputSuspended() bool {
-	return !m.serverProgress.started.IsZero() || m.mapFade.Phase == maps.FadeOut || m.mapFade.Phase == maps.FadeHold || m.mapFade.Phase == maps.FadePrewarm
+	return m.loading != nil || !m.npcSystem.Progress.Started.IsZero() || m.mapFade.Phase == maps.FadeOut || m.mapFade.Phase == maps.FadeHold || m.mapFade.Phase == maps.FadePrewarm
 }
 
 func (m *WorldMode) suppressShortcutText(ctx client.Context, code input.KeyCode) bool {

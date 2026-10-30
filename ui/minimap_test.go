@@ -170,6 +170,11 @@ func TestMinimapDragsFromTitleBar(t *testing.T) {
 	if m.window.x != wantX || m.window.y != wantY {
 		t.Fatalf("minimap position after resize = %d,%d; want dragged position %d,%d", m.window.x, m.window.y, wantX, wantY)
 	}
+	m.Toggle(ctx)
+	m.Toggle(ctx)
+	if !m.window.IsOpen() || m.window.x != wantX || m.window.y != wantY {
+		t.Fatal("hiding and showing the minimap lost its dragged position")
+	}
 }
 
 func TestMinimapCellToScreenInvertsY(t *testing.T) {

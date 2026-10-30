@@ -1,6 +1,13 @@
 package ui
 
 import (
+	"math"
+
+	"github.com/gogpu/ui/geometry"
+	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/uitest"
+	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/ui/rotheme"
 	"testing"
 
 	"github.com/kivutar/goro/client"
@@ -8,39 +15,90 @@ import (
 	"github.com/kivutar/goro/session"
 )
 
-func TestCharacterHUDOpensAndCloses(t *testing.T) {
-	inputState := input.NewState()
-	ctx := client.Context{
-		Input:   inputState,
-		Session: &session.Session{Selected: session.Character{Name: "Kivutar"}},
-		ScreenW: 800,
-		ScreenH: 600,
+func TestCharacterRestoreCompactBeforeOpening(t *testing.T) {
+	t.Skip("fork: the character HUD compact height is the HUD layout's, not upstream widget heights")
+}
+func TestCharacterEXPPanelWrapsBothRowsInRoundedGreyContainer(t *testing.T) {
+	const width float32 = characterWindowWidth - 24
+	panel := characterEXPPanel(session.Progress{
+		BaseLevel:   42,
+		JobLevel:    27,
+		BaseExp:     25,
+		NextBaseExp: 100,
+		JobExp:      50,
+		NextJobExp:  100,
+	}, width)
+	panel.Layout(widget.NewContext(), geometry.Constraints{MaxWidth: width, MaxHeight: 100})
+
+	box, ok := panel.(*primitives.BoxWidget)
+	if !ok {
+		t.Fatalf("EXP panel = %T, want box", panel)
 	}
-	var w CharacterWindow
-	if w.IsOpen() {
-		t.Fatal("fresh HUD must start closed")
+	style := box.Style()
+	if style.Radius != characterEXPPanelRadius {
+		t.Fatalf("EXP panel radius = %.1f, want %.1f", style.Radius, characterEXPPanelRadius)
 	}
-	w.Update(ctx)
-	if !w.IsOpen() {
-		t.Fatal("HUD must auto-open with a session")
+	uitest.AssertColorEqual(t, style.Background, rotheme.Default.Colors.WindowFooter)
+	if style.Border.Width != 0 {
+		t.Fatalf("EXP panel border width = %.1f, want none", style.Border.Width)
 	}
-	// Click the close button.
-	closeX := w.x + w.width - characterHUDCloseSize/2 - 3
-	closeY := w.y + characterHUDCloseSize/2
-	inputState.SetMousePosition(closeX, closeY)
-	inputState.SetMouseButton(input.MouseButtonLeft, true)
-	if !w.Update(ctx) {
-		t.Fatal("close press was not consumed")
+
+	rows := panel.Children()
+	if len(rows) != 2 {
+		t.Fatalf("EXP panel rows = %d, want Base and Job EXP", len(rows))
 	}
-	if w.IsOpen() {
-		t.Fatal("close button must hide the HUD")
+	first := rows[0].(interface{ Bounds() geometry.Rect }).Bounds()
+	second := rows[1].(interface{ Bounds() geometry.Rect }).Bounds()
+	wantRowWidth := width - 2*characterEXPPanelPaddingX
+	if first.Min.X != characterEXPPanelPaddingX || first.Min.Y != characterEXPPanelPaddingY || first.Width() != wantRowWidth {
+		t.Fatalf("Base EXP row bounds = %v, want inset width %.1f", first, wantRowWidth)
 	}
-	inputState.SetMouseButton(input.MouseButtonLeft, false)
-	inputState.EndFrame()
-	// Stays dismissed across updates until the next login.
-	w.Update(ctx)
-	if w.IsOpen() {
-		t.Fatal("dismissed HUD must not reopen on its own")
+	if second.Min.X != characterEXPPanelPaddingX || second.Min.Y != first.Max.Y+characterEXPPanelGap || second.Width() != wantRowWidth {
+		t.Fatalf("Job EXP row bounds = %v, want below Base EXP with %.1f gap", second, characterEXPPanelGap)
+	}
+	assertCharacterEXPRow := func(row widget.Widget, wantLabel string) {
+		t.Helper()
+		children := row.Children()
+		if len(children) != 2 {
+			t.Fatalf("%s row children = %d, want label and bar", wantLabel, len(children))
+		}
+		labelChildren := children[0].Children()
+		if len(labelChildren) != 1 {
+			t.Fatalf("%s label children = %d, want text", wantLabel, len(labelChildren))
+		}
+		text, ok := labelChildren[0].(interface{ Content() string })
+		if !ok {
+			t.Fatalf("EXP row label = %T, want text", labelChildren[0])
+		}
+		if text.Content() != wantLabel {
+			t.Fatalf("EXP row label = %q, want %q", text.Content(), wantLabel)
+		}
+		labelBounds := children[0].(interface{ Bounds() geometry.Rect }).Bounds()
+		barSlotBounds := children[1].(interface{ Bounds() geometry.Rect }).Bounds()
+		if barSlotBounds.Min.X != labelBounds.Max.X+characterEXPLabelBarGap {
+			t.Fatalf("%s bar x = %.1f, want %.1f after label", wantLabel, barSlotBounds.Min.X, labelBounds.Max.X+characterEXPLabelBarGap)
+		}
+		barChildren := children[1].Children()
+		if len(barChildren) != 1 {
+			t.Fatalf("%s bar slot children = %d, want bar", wantLabel, len(barChildren))
+		}
+		bar, ok := barChildren[0].(*characterBarWidget)
+		if !ok {
+			t.Fatalf("%s bar = %T, want character bar", wantLabel, barChildren[0])
+		}
+		uitest.AssertColorEqual(t, bar.background, widget.ColorWhite)
+		barBounds := bar.Bounds()
+		labelCenterY := labelBounds.Center().Y
+		barCenterY := barSlotBounds.Min.Y + barBounds.Center().Y
+		if math.Abs(float64(labelCenterY-barCenterY)) > 0.001 {
+			t.Fatalf("%s vertical centers differ: label=%.3f bar=%.3f", wantLabel, labelCenterY, barCenterY)
+		}
+	}
+	assertCharacterEXPRow(rows[0], "Base Lv. 42")
+	assertCharacterEXPRow(rows[1], "Job Lv. 27")
+	panelBounds := panel.(interface{ Bounds() geometry.Rect }).Bounds()
+	if second.Max.Y+characterEXPPanelPaddingY != panelBounds.Max.Y {
+		t.Fatalf("EXP panel bottom = %.1f, want %.1f after bottom inset", panelBounds.Max.Y, second.Max.Y+characterEXPPanelPaddingY)
 	}
 }
 

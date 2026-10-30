@@ -7,13 +7,14 @@ import (
 
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 )
 
 func TestQuestPacketsReachSessionAndActivationWaitsForAck(t *testing.T) {
-	netClient, server := newBotTestConnection(t, 20080910)
+	netClient, server := testutil.NewConnection(t, 20080910)
 	ctx := client.Context{Network: netClient, Session: &session.Session{}}
 	mode := &WorldMode{}
 	send := func(id uint16, data []byte) {

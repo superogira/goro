@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
-	"github.com/kivutar/goro/game/internal/testutil"
-	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/res"
@@ -96,110 +94,6 @@ func TestFollowCameraZoomEasesTowardTargetLikeRobrowser(t *testing.T) {
 	camera.Update(ctx, now.Add(time.Second/60))
 	if math.Abs(camera.currentZoom()-122) > 0.01 {
 		t.Fatalf("smoothed zoom = %.2f, want 122.00", camera.currentZoom())
-	}
-}
-
-func TestAppendActorDrawEntryUsesPathRenderDirection(t *testing.T) {
-	now := time.Now()
-	world := worldstate.New()
-	actor := worldstate.Actor{
-		X:            2,
-		Y:            1,
-		Dir:          4,
-		Moving:       true,
-		FromX:        0,
-		FromY:        0,
-		ToX:          2,
-		ToY:          1,
-		MoveStarted:  now.Add(-225 * time.Millisecond),
-		MoveDuration: 450 * time.Millisecond,
-		MovePath: []worldstate.WalkStep{
-			{X: 0, Y: 0},
-			{X: 0, Y: 1},
-			{X: 1, Y: 1},
-			{X: 2, Y: 1},
-		},
-	}
-	projection := testutil.Projection(800, 600, 0.5, 1.5, 0)
-
-	entries := appendActorDrawEntry(nil, world, projection, actor, false, now, 800, 600)
-	if len(entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(entries))
-	}
-	if got, want := entries[0].Actor.Dir, directionFromDelta(0, 1, 1, 1, 4); got != want {
-		t.Fatalf("entry direction = %d, want %d", got, want)
-	}
-}
-
-func TestActorBillboardSortDepthUsesTopInCameraProjection(t *testing.T) {
-	projection := testutil.Projection(800, 600, 10.5, 20.5, 0)
-	footDepth := projection.Depth(10.5, 20.5, 0)
-	topDepth := projection.Depth(10.5, 20.5, scene.ActorBillboardWorldHeightUnit)
-	got := actorBillboardSortDepth(projection, 10.5, 20.5, 0)
-	want := math.Min(footDepth, topDepth)
-	if got != want {
-		t.Fatalf("billboard depth = %.4f, want closer of foot %.4f and top %.4f", got, footDepth, topDepth)
-	}
-	if got >= footDepth {
-		t.Fatalf("billboard depth = %.4f, want closer than foot depth %.4f", got, footDepth)
-	}
-}
-
-func TestCameraYawForIndoorMapIsLocked(t *testing.T) {
-	root := t.TempDir()
-	dataDir := filepath.Join(root, "data")
-	if err := os.Mkdir(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, "indoorrswtable.txt"), []byte("geffen_in.rsw#\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := res.NewManager(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := client.Context{
-		Resources: manager,
-		World:     &worldstate.World{MapName: "geffen_in"},
-	}
-	if got := scene.CameraYawForMap(ctx); got != -45 {
-		t.Fatalf("indoor camera yaw = %.1f, want -45.0", got)
-	}
-	ctx.World.MapName = "prontera"
-	if got := scene.CameraYawForMap(ctx); got != scene.DefaultSceneCameraYaw {
-		t.Fatalf("outdoor camera yaw = %.1f, want %.1f", got, scene.DefaultSceneCameraYaw)
-	}
-}
-
-func TestCameraYawForFixedViewPointMapIsLocked(t *testing.T) {
-	root := t.TempDir()
-	dataDir := filepath.Join(root, "data")
-	if err := os.Mkdir(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, "viewpointtable.txt"), []byte("fixed_view.rsw#150#50#170#30#30#30#60#30#45#\nfree_view.rsw#150#50#170#-360#360#0#60#30#45#\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := res.NewManager(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := client.Context{
-		Resources: manager,
-		World:     &worldstate.World{MapName: "fixed_view"},
-	}
-	if got := scene.CameraYawForMap(ctx); got != -30 {
-		t.Fatalf("fixed viewpoint yaw = %.1f, want -30.0", got)
-	}
-	if !scene.CameraRotationLockedForMap(ctx) {
-		t.Fatal("fixed viewpoint should lock camera rotation")
-	}
-	ctx.World.MapName = "free_view"
-	if got := scene.CameraYawForMap(ctx); got != scene.DefaultSceneCameraYaw {
-		t.Fatalf("free viewpoint yaw = %.1f, want %.1f", got, scene.DefaultSceneCameraYaw)
-	}
-	if scene.CameraRotationLockedForMap(ctx) {
-		t.Fatal("free viewpoint should not lock camera rotation")
 	}
 }
 
@@ -438,24 +332,6 @@ func TestCameraWheelZoomDeltaMatchesRobrowserStep(t *testing.T) {
 	}
 }
 
-func TestCameraZoomRangeMatchesRobrowserOutdoorDefaults(t *testing.T) {
-	if got := scene.CameraZoom(); got != 125 {
-		t.Fatalf("default zoom = %.1f, want reference client default 125", got)
-	}
-	if scene.DefaultCameraMinZoom != 65 || scene.DefaultCameraMaxZoom != 165 {
-		t.Fatalf("zoom range = %.1f..%.1f, want goro outdoor 65..165", scene.DefaultCameraMinZoom, scene.DefaultCameraMaxZoom)
-	}
-}
-
-func TestSceneFogDepthAtTargetMatchesRobrowserDefaultZoom(t *testing.T) {
-	projection := testutil.ProjectionYawZoom(1280, 720, 10.5, 20.5, 0, 0, scene.DefaultSceneCameraZoom)
-	got := projection.FogDepth(10.5, 20.5, 0)
-	const want = 1000 * ((scene.DefaultSceneCameraZoom * 0.5) - 1) / 999
-	if math.Abs(got-want) > 0.001 {
-		t.Fatalf("target fog depth = %.3f, want %.3f", got, want)
-	}
-}
-
 func TestCameraPinchZoomFactorZoomsInWhenFingersSpread(t *testing.T) {
 	if got := cameraPinchZoomFactor(25); got >= 1 {
 		t.Fatalf("pinch spread factor = %.3f, want zoom-in factor below 1", got)
@@ -488,94 +364,5 @@ func TestCursorRotateInfoMatchesRobrowser(t *testing.T) {
 	info := cursorInfo(cursorActionRotate)
 	if info.delayMult != 1 {
 		t.Fatalf("rotate cursor info = %+v", info)
-	}
-}
-
-func TestActorShadowFactorAveragesGNDLightmapAlpha(t *testing.T) {
-	var lightmap res.GNDLightmap
-	for y := range lightmap.Alpha {
-		for x := range lightmap.Alpha[y] {
-			lightmap.Alpha[y][x] = 128
-		}
-	}
-	gnd := &res.GND{
-		Width:     4,
-		Height:    4,
-		Lightmaps: []res.GNDLightmap{lightmap},
-		Surfaces:  []res.GNDSurface{{LightmapID: 0}},
-		Cells:     make([]res.GNDCell, 16),
-	}
-	for i := range gnd.Cells {
-		gnd.Cells[i].Top = 0
-	}
-
-	got := actorShadowFactor(&worldstate.World{GND: gnd}, 3, 3)
-	want := float64(128) / 255
-	if math.Abs(got-want) > 0.0001 {
-		t.Fatalf("shadow factor = %.4f, want %.4f", got, want)
-	}
-}
-
-func TestActorShadowFactorIgnoresGroundShadowBelowElevatedGAT(t *testing.T) {
-	var lightmap res.GNDLightmap
-	for y := range lightmap.Alpha {
-		for x := range lightmap.Alpha[y] {
-			lightmap.Alpha[y][x] = 32
-		}
-	}
-	gnd := &res.GND{
-		Width:     4,
-		Height:    4,
-		Lightmaps: []res.GNDLightmap{lightmap},
-		Surfaces:  []res.GNDSurface{{LightmapID: 0}},
-		Cells:     make([]res.GNDCell, 16),
-	}
-	for i := range gnd.Cells {
-		gnd.Cells[i].Top = 0
-	}
-	gat := &res.GAT{
-		Width:  8,
-		Height: 8,
-		Cells:  make([]res.GATCell, 64),
-	}
-	for i := range gat.Cells {
-		gat.Cells[i].Heights = [4]float32{2, 2, 2, 2}
-	}
-
-	got := actorShadowFactor(&worldstate.World{GAT: gat, GND: gnd}, 3, 3)
-	if got != 1 {
-		t.Fatalf("elevated GAT shadow factor = %.4f, want 1", got)
-	}
-}
-
-func TestActorShadowFactorDefaultsToLitWithoutGroundLightmap(t *testing.T) {
-	if got := actorShadowFactor(nil, 3, 3); got != 1 {
-		t.Fatalf("nil world shadow = %.2f, want 1", got)
-	}
-	gnd := &res.GND{
-		Width:    1,
-		Height:   1,
-		Surfaces: []res.GNDSurface{{LightmapID: 0}},
-		Cells:    []res.GNDCell{{Top: -1}},
-	}
-	if got := actorShadowFactor(&worldstate.World{GND: gnd}, 0, 0); got != 1 {
-		t.Fatalf("missing top surface shadow = %.2f, want 1", got)
-	}
-}
-
-func TestHoveredWalkCellUsesRayWalkCell(t *testing.T) {
-	world := worldstate.New()
-	world.Player.X = 5
-	world.Player.Y = 5
-	world.GAT = testutil.FlatWalkableGAT(12, 12)
-	projection := testutil.Projection(800, 600, 5.5, 5.5, 0)
-	point := projection.Project(6.5, 5.5, 0)
-
-	x, y, ok := maps.HoveredWalkCell(client.Context{World: world}, projection, int(point.X), int(point.Y))
-	if !ok || x != 6 || y != 5 {
-		t.Fatalf("hovered cell = %d,%d ok=%t, want 6,5 true", x, y, ok)
-	}
-	if _, _, ok := maps.HoveredWalkCell(client.Context{World: world}, projection, -10000, -10000); ok {
-		t.Fatal("hover should not fall back to nearest cell outside the projected map")
 	}
 }

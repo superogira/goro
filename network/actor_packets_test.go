@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestParseActorComboDelay(t *testing.T) {
+	for _, delay := range []uint32{0, 1250, 0xffffffff} {
+		data := make([]byte, 10)
+		binary.LittleEndian.PutUint16(data, PacketZCComboDelay)
+		binary.LittleEndian.PutUint32(data[2:], 2000001)
+		binary.LittleEndian.PutUint32(data[6:], delay)
+		notify, ok, err := ParseActorComboDelay(Packet{ID: PacketZCComboDelay, Data: data})
+		if err != nil || !ok || notify.ID != 2000001 || notify.DelayTime != delay {
+			t.Fatalf("delay %d: notify=%+v ok=%v err=%v", delay, notify, ok, err)
+		}
+	}
+	for size := 0; size < 10; size++ {
+		if _, ok, err := ParseActorComboDelay(Packet{ID: PacketZCComboDelay, Data: make([]byte, size)}); ok || err == nil {
+			t.Fatalf("accepted truncated packet of %d bytes", size)
+		}
+	}
+	if _, ok, err := ParseActorComboDelay(Packet{ID: 0x01D1}); ok || err != nil {
+		t.Fatalf("unrelated packet: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestParseActorStandEntry2(t *testing.T) {
 	data := make([]byte, 54)
 	binary.LittleEndian.PutUint16(data[0:2], 0x01D8)

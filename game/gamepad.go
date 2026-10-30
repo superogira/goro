@@ -1,6 +1,9 @@
 package game
 
 import (
+	"github.com/kivutar/goro/game/npc"
+	"github.com/kivutar/goro/game/actors"
+	"github.com/kivutar/goro/game/skills"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/game/scene"
 	"fmt"
@@ -674,7 +677,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 					m.ui.hotbar.addSkill(skill.ID)
 					slot := ((m.ui.hotbar.fill + hotbarSlotCount - 1) % hotbarSlotCount) + 1
 					m.pushHotbarSlot(ctx, slot-1)
-					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, skillLabel(skill)))
+					render.ShowScreenNotice(fmt.Sprintf("Hotbar %d: %s", slot, skills.SkillLabel(skill)))
 				}
 			}
 			return true
@@ -780,7 +783,7 @@ func (m *WorldMode) updateGamepadControls(ctx client.Context, pointerBlocked boo
 	if m.ui.console.Active() || m.ui.keyboardInputBlocked(ctx) {
 		return false
 	}
-	if m.pendingSkill.skill.ID != 0 || m.pendingPetCapture.active {
+	if m.skillSystem.Pending.Skill.ID != 0 || m.petSystem.PendingCapture.Active {
 		return false
 	}
 	// Plain-screen shortcuts: Y opens the inventory (the window branches
@@ -843,10 +846,10 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 	bestDistance := math.Inf(1)
 	var bestActor world.Actor
 	for _, actor := range ctx.World.Actors {
-		if _, dead := m.actorDeaths[actor.ID]; dead {
+		if _, dead := m.actorSystem.ActorDeaths[actor.ID]; dead {
 			continue
 		}
-		if !actorCanBeAttackClicked(ctx, actor) {
+		if !actors.ActorCanBeAttackClicked(ctx, actor) {
 			continue
 		}
 		actorX, actorY := scene.ActorRenderPosition(actor, now)
@@ -883,10 +886,10 @@ func (m *WorldMode) gamepadPrimaryAction(ctx client.Context, now time.Time) bool
 	bestTalkDistance := math.Inf(1)
 	var bestTalkActor world.Actor
 	for _, actor := range ctx.World.Actors {
-		if _, dead := m.actorDeaths[actor.ID]; dead {
+		if _, dead := m.actorSystem.ActorDeaths[actor.ID]; dead {
 			continue
 		}
-		if !cursorActorCanTalk(actor) {
+		if !npc.CanTalk(actor) {
 			continue
 		}
 		actorX, actorY := scene.ActorRenderPosition(actor, now)

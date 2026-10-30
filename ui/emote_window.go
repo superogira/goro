@@ -56,7 +56,8 @@ func (w *EmoteWindow) OpenWindow(ctx Context, console *ChatConsole) {
 	w.page = clampEmotePage(w.page)
 	w.contentKey = w.renderKey(ctx)
 	x, y := emoteDefaultPosition(ctx)
-	w.OpenAt(x, y, w.widgetTree(ctx, console))
+	w.SetAutoPosition(x, y)
+	w.Open(ctx, w.widgetTree(ctx, console))
 	w.Publish(ctx)
 }
 

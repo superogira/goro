@@ -7,6 +7,7 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/ui/rotheme"
 )
@@ -271,6 +272,7 @@ type Window struct {
 	width        int
 	height       int
 	titleHeight  int
+	dragBounds   geometry.Rect
 	positioned   bool
 	userMoved    bool
 	dragging     bool
@@ -297,7 +299,12 @@ func (w *Window) EnsureWindow(width, height int) bool {
 	if w.width != 0 {
 		return false
 	}
+	position := w.SavedPosition()
 	*w = NewWindow(width, height)
+	if position.Set {
+		w.x, w.y = position.X, position.Y
+		w.userMoved, w.positioned = true, true
+	}
 	return true
 }
 
@@ -334,6 +341,7 @@ func (w *Window) Open(ctx client.Context, content widget.Widget) {
 	w.ctx = ctx
 	w.open = true
 	w.ensurePosition(ctx)
+	w.keepOnScreen(ctx)
 	w.SetContent(content)
 }
 
@@ -500,12 +508,7 @@ func (w *Window) Update(ctx client.Context) bool {
 		}
 		return true
 	}
-	inside := pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, w.x, w.y, w.width, w.height)
-	// Stacking check: an overlapped window must not consume a press aimed at
-	// the window above it — only the topmost overlay at the point is inside.
-	if manager, ok := ctx.UIManager.(interface{ OverlayAt(int, int) widget.Widget }); ok && w.published != nil {
-		inside = manager.OverlayAt(ctx.Input.MouseX, ctx.Input.MouseY) == w.published
-	}
+	inside := w.pointInside(ctx, ctx.Input.MouseX, ctx.Input.MouseY)
 	if !ctx.Input.MouseJustPressed(input.MouseButtonLeft) {
 		return inside
 	}
@@ -513,7 +516,12 @@ func (w *Window) Update(ctx client.Context) bool {
 		return false
 	}
 	w.Raise(ctx)
-	if pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, w.x, w.y, w.width, w.titleHeight) {
+	dragBounds := w.dragBounds
+	if dragBounds.IsEmpty() {
+		dragBounds = geometry.NewRect(0, 0, float32(w.width), float32(w.titleHeight))
+	}
+	if pointInRect(ctx.Input.MouseX-w.x, ctx.Input.MouseY-w.y,
+		int(dragBounds.Min.X), int(dragBounds.Min.Y), int(dragBounds.Width()), int(dragBounds.Height())) {
 		if w.titleButtonHit(ctx.Input.MouseX, ctx.Input.MouseY) {
 			return true
 		}
@@ -551,6 +559,13 @@ func (w *Window) escapePressed(ctx client.Context) bool {
 	}
 	top := topEscapeOverlay(ctx)
 	return top == nil || top == w.published
+}
+
+func (w *Window) pointInside(ctx client.Context, x, y int) bool {
+	if manager, ok := ctx.UIManager.(interface{ OverlayAt(int, int) widget.Widget }); ok && w.published != nil {
+		return manager.OverlayAt(x, y) == w.published
+	}
+	return pointInRect(x, y, w.x, w.y, w.width, w.height)
 }
 
 func (w *Window) ensurePosition(ctx client.Context) {
@@ -599,7 +614,7 @@ func (w *Window) placeNew(ctx client.Context, x, y int) {
 func (w *Window) setOpacity(opacity float32) {
 	changed := w.opacity != opacity
 	w.opacity = opacity
-	if w.titleHeight <= 0 {
+	if w.titleHeight <= 0 && w.dragBounds.IsEmpty() {
 		return
 	}
 	if box, ok := w.content.(*primitives.BoxWidget); ok {
@@ -654,6 +669,36 @@ func (w *Window) setPosition(ctx client.Context, x, y int) {
 	w.placed = nil
 	damage := windowFrameRect(oldX, oldY, w.width, w.height).Union(windowFrameRect(x, y, w.width, w.height)).Expand(windowDirtyPadding)
 	invalidateWindowRect(ctx, damage)
+}
+
+func (w *Window) keepOnScreen(ctx client.Context) {
+	screenW, screenH := ctx.ScreenSize()
+	x := clampWindowInt(w.x, windowScreenMargin, maxInt(windowScreenMargin, screenW-w.width-windowScreenMargin))
+	y := clampWindowInt(w.y, windowScreenMargin, maxInt(windowScreenMargin, screenH-w.height-windowScreenMargin))
+	w.setPosition(ctx, x, y)
+}
+
+func (w *Window) Dragging() bool { return w.dragging }
+
+func (w *Window) SavedPosition() config.WindowPosition {
+	if !w.userMoved {
+		return config.WindowPosition{}
+	}
+	return config.WindowPosition{X: w.x, Y: w.y, Set: true}
+}
+
+// RestorePosition also works before a closed window has been initialized.
+// Open clamps the saved coordinates once the window's dimensions are known.
+func (w *Window) RestorePosition(ctx client.Context, position config.WindowPosition) {
+	if !position.Set {
+		return
+	}
+	w.userMoved, w.positioned = true, true
+	w.setPosition(ctx, position.X, position.Y)
+	if w.IsOpen() {
+		w.keepOnScreen(ctx)
+	}
+	w.Publish(ctx)
 }
 
 func (w *Window) setDragPosition(ctx client.Context, x, y int) {

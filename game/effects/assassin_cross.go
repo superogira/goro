@@ -53,7 +53,7 @@ func (m *System) drawSoulBreaker(screen *render.Frame, ctx client.Context, compo
 			angle := yaw + math.Pi/4 + float64(3-j)*math.Pi/2
 			corners[j] = scene.Add3(center, scene.Point3{X: 4 * math.Cos(angle), Z: 4 * math.Sin(angle)})
 		}
-		// The 2008 renderer uses normal alpha and pale blue, unlike later dhxj.
+		// The 2008 renderer uses normal alpha and pale blue.
 		appendEffectQuad(&vertices, &indices, texture, corners, color.RGBA{200, 200, 255, uint8(alpha)})
 	}
 	if len(indices) > 0 {

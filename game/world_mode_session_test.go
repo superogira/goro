@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/effects"
 	"github.com/kivutar/goro/game/internal/testutil"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/social"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
@@ -27,7 +29,7 @@ import (
 )
 
 func actorDisplayName(ctx client.Context, actor worldstate.Actor, isPlayer bool) string {
-	labels := actorDisplayLabels(ctx, actor, isPlayer)
+	labels := actors.ActorDisplayLabels(ctx, actor, isPlayer)
 	if len(labels) == 0 {
 		return ""
 	}
@@ -35,112 +37,11 @@ func actorDisplayName(ctx client.Context, actor worldstate.Actor, isPlayer bool)
 }
 
 func (m *WorldMode) hoveredActorDisplayName(ctx client.Context, actor worldstate.Actor, now time.Time) string {
-	labels := m.hoveredActorDisplayLabels(ctx, actor, now)
+	labels := m.actors().HoveredActorDisplayLabels(ctx, actor, now)
 	if len(labels) == 0 {
 		return ""
 	}
 	return labels[0]
-}
-
-func TestApplyActorNameAckUpdatesWorldActor(t *testing.T) {
-	world := worldstate.New()
-	world.UpsertActor(worldstate.Actor{ID: 300, Job: 1002})
-	ctx := client.Context{
-		Session: &session.Session{AccountID: 100, CharID: 200},
-		World:   world,
-	}
-
-	applyActorNameAck(ctx, network.ActorNameAck{ID: 300, Name: "Guide#prontera", PartyName: "Adventurers", GuildName: "Knights"})
-
-	if got := world.Actors[300].Name; got != "Guide" {
-		t.Fatalf("actor name = %q, want Guide", got)
-	}
-	if got := world.Actors[300].PartyName; got != "Adventurers" {
-		t.Fatalf("actor party = %q, want Adventurers", got)
-	}
-	if got := world.Actors[300].GuildName; got != "Knights" {
-		t.Fatalf("actor guild = %q, want Knights", got)
-	}
-}
-
-func TestApplyActorNameAckUpdatesLocalPlayer(t *testing.T) {
-	world := worldstate.New()
-	ctx := client.Context{
-		Session: &session.Session{AccountID: 100, CharID: 200},
-		World:   world,
-	}
-
-	applyActorNameAck(ctx, network.ActorNameAck{ID: 200, Name: "Kivutar", PartyName: "Adventurers", GuildName: "Goro"})
-
-	if got := world.Player.Name; got != "Kivutar" {
-		t.Fatalf("player name = %q, want Kivutar", got)
-	}
-	if got := world.Player.PartyName; got != "Adventurers" {
-		t.Fatalf("player party = %q, want Adventurers", got)
-	}
-	if got := world.Player.GuildName; got != "Goro" {
-		t.Fatalf("player guild = %q, want Goro", got)
-	}
-}
-
-func TestApplyActorNameAckPreservesLocalGuildOnEmptyNameAck(t *testing.T) {
-	world := worldstate.New()
-	world.Player.GuildName = "Goro"
-	ctx := client.Context{
-		Session: &session.Session{AccountID: 100, CharID: 200, GuildName: "Goro"},
-		World:   world,
-	}
-
-	applyActorNameAck(ctx, network.ActorNameAck{ID: 200, Name: "Kivutar"})
-
-	if got := world.Player.GuildName; got != "Goro" {
-		t.Fatalf("player guild = %q, want Goro", got)
-	}
-	if got := ctx.Session.GuildName; got != "Goro" {
-		t.Fatalf("session guild = %q, want Goro", got)
-	}
-}
-
-func TestApplyActorNameAckClearsGuildStateFromAuthoritativeEmptyGuildName(t *testing.T) {
-	s := &session.Session{AccountID: 200, GuildID: 9, GuildName: "Goro", EmblemVersion: 4, Guild: session.Guild{ID: 9, Name: "Goro"}}
-	w := &worldstate.World{Player: worldstate.Actor{ID: 200, GuildID: 9, GuildName: "Goro", EmblemVersion: 4}}
-	ctx := client.Context{Session: s, World: w}
-
-	applyActorNameAck(ctx, network.ActorNameAck{ID: 200, Name: "Kivutar", HasGuildName: true})
-
-	if w.Player.GuildID != 0 || w.Player.GuildName != "" || w.Player.EmblemVersion != 0 {
-		t.Fatalf("player guild state = %+v, want cleared", w.Player)
-	}
-	if s.GuildID != 0 || s.GuildName != "" || s.EmblemVersion != 0 || s.Guild.ID != 0 {
-		t.Fatalf("session guild id=%d name=%q emblem=%d nested=%+v, want cleared", s.GuildID, s.GuildName, s.EmblemVersion, s.Guild)
-	}
-}
-
-func TestApplyActorNameAckClearsRemotePartyName(t *testing.T) {
-	world := worldstate.New()
-	world.UpsertActor(worldstate.Actor{ID: 300, Name: "Alice", PartyName: "Old Party"})
-	ctx := client.Context{
-		Session: &session.Session{AccountID: 100, CharID: 200},
-		World:   world,
-	}
-
-	applyActorNameAck(ctx, network.ActorNameAck{ID: 300, Name: "Alice"})
-
-	if got := world.Actors[300].PartyName; got != "" {
-		t.Fatalf("actor party = %q, want cleared", got)
-	}
-}
-
-func TestApplyActorNameAckClearsRemoteGuildFromAuthoritativeEmptyName(t *testing.T) {
-	world := worldstate.New()
-	world.UpsertActor(worldstate.Actor{ID: 300, Name: "Alice", GuildID: 9, GuildName: "Goro", EmblemVersion: 4})
-	ctx := client.Context{Session: &session.Session{AccountID: 100, CharID: 200}, World: world}
-
-	applyActorNameAck(ctx, network.ActorNameAck{ID: 300, Name: "Alice", HasGuildName: true})
-
-	if actor := world.Actors[300]; actor.GuildID != 0 || actor.GuildName != "" || actor.EmblemVersion != 0 {
-		t.Fatalf("remote actor guild state = %+v, want cleared", actor)
-	}
 }
 
 func TestHandleMapChangeSameServerUpdatesMapAndResetsActors(t *testing.T) {
@@ -159,8 +60,8 @@ func TestHandleMapChangeSameServerUpdatesMapAndResetsActors(t *testing.T) {
 		ScreenH:   720,
 	}
 	mode := &WorldMode{}
-	mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 10, Message: "Warping..."})
-	if !mode.ui.npcDialog.Update(ctx) {
+	mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 10, Message: "Warping..."})
+	if !mode.ui.npc.Dialog.Update(ctx) {
 		t.Fatal("npc dialog did not publish before map change")
 	}
 	if len(uiManager.overlays) == 0 {
@@ -268,7 +169,7 @@ func TestNextWorldModeCarriesAndRebindsWhisperWindow(t *testing.T) {
 		ScreenH:   720,
 	}
 	mode := &WorldMode{}
-	mode.ui.whisperWindows.Open(ctx, "Alice")
+	mode.ui.social.WhisperWindows.Open(ctx, "Alice")
 	manager := ctx.UIManager.(*worldModeTestUIManager)
 	if len(manager.overlays) != 1 {
 		t.Fatalf("whisper overlays before map change = %d, want 1", len(manager.overlays))
@@ -276,7 +177,7 @@ func TestNextWorldModeCarriesAndRebindsWhisperWindow(t *testing.T) {
 	previousOverlay := manager.overlays[0]
 
 	next := mode.nextWorldMode()
-	if !next.ui.whisperWindows.IsOpen() {
+	if !next.ui.social.WhisperWindows.IsOpen() {
 		t.Fatal("next world mode did not carry open whisper window")
 	}
 	next.rebindPersistentUI(ctx)
@@ -288,7 +189,7 @@ func TestNextWorldModeCarriesAndRebindsWhisperWindow(t *testing.T) {
 		t.Fatal("whisper rebind replaced its stable overlay")
 	}
 
-	next.ui.whisperWindows.Find("Alice").AddError(ctx, "send failed")
+	next.ui.social.WhisperWindows.Find("Alice").AddError(ctx, "send failed")
 	if len(manager.overlays) != 1 {
 		t.Fatalf("whisper overlays after refresh = %d, want 1", len(manager.overlays))
 	}
@@ -303,7 +204,7 @@ func TestNextWorldModeCarriesAndRebindsFriendSettingsWindow(t *testing.T) {
 		ScreenH:   720,
 	}
 	mode := &WorldMode{}
-	mode.ui.friendSettings.Open(ctx)
+	mode.ui.social.FriendSettings.Open(ctx)
 	manager := ctx.UIManager.(*worldModeTestUIManager)
 	if len(manager.overlays) != 1 {
 		t.Fatalf("friend settings overlays before map change = %d, want 1", len(manager.overlays))
@@ -311,7 +212,7 @@ func TestNextWorldModeCarriesAndRebindsFriendSettingsWindow(t *testing.T) {
 	previousOverlay := manager.overlays[0]
 
 	next := mode.nextWorldMode()
-	if !next.ui.friendSettings.IsOpen() {
+	if !next.ui.social.FriendSettings.IsOpen() {
 		t.Fatal("next world mode did not carry open friend settings window")
 	}
 	next.rebindPersistentUI(ctx)
@@ -336,7 +237,7 @@ func TestNextWorldModeCarriesAndRebindsPartySettingsWindow(t *testing.T) {
 		ScreenH:   720,
 	}
 	mode := &WorldMode{}
-	mode.ui.partySettings.Open(ctx)
+	mode.ui.social.PartySettings.Open(ctx)
 	manager := ctx.UIManager.(*worldModeTestUIManager)
 	if len(manager.overlays) != 1 {
 		t.Fatalf("party settings overlays before map change = %d, want 1", len(manager.overlays))
@@ -344,7 +245,7 @@ func TestNextWorldModeCarriesAndRebindsPartySettingsWindow(t *testing.T) {
 	previousOverlay := manager.overlays[0]
 
 	next := mode.nextWorldMode()
-	if !next.ui.partySettings.IsOpen() {
+	if !next.ui.social.PartySettings.IsOpen() {
 		t.Fatal("next world mode did not carry open party settings window")
 	}
 	next.rebindPersistentUI(ctx)
@@ -365,8 +266,8 @@ func TestNextWorldModeCarriesAndRebindsPartyHelperWindows(t *testing.T) {
 		ScreenH:   720,
 	}
 	mode := &WorldMode{}
-	mode.ui.partyCreate.Open(ctx)
-	mode.ui.partyInvite.Open(ctx)
+	mode.ui.social.PartyCreate.Open(ctx)
+	mode.ui.social.PartyInvite.Open(ctx)
 	manager := ctx.UIManager.(*worldModeTestUIManager)
 	if len(manager.overlays) != 2 {
 		t.Fatalf("party helper overlays before map change = %d, want 2", len(manager.overlays))
@@ -375,8 +276,8 @@ func TestNextWorldModeCarriesAndRebindsPartyHelperWindows(t *testing.T) {
 	previousInvite := manager.overlays[1]
 
 	next := mode.nextWorldMode()
-	if !next.ui.partyCreate.IsOpen() || !next.ui.partyInvite.IsOpen() {
-		t.Fatalf("next world mode did not carry helper windows create=%t invite=%t", next.ui.partyCreate.IsOpen(), next.ui.partyInvite.IsOpen())
+	if !next.ui.social.PartyCreate.IsOpen() || !next.ui.social.PartyInvite.IsOpen() {
+		t.Fatalf("next world mode did not carry helper windows create=%t invite=%t", next.ui.social.PartyCreate.IsOpen(), next.ui.social.PartyInvite.IsOpen())
 	}
 	next.rebindPersistentUI(ctx)
 
@@ -423,71 +324,19 @@ func TestMapCellUpdateChangesGATWalkability(t *testing.T) {
 	world.GAT = testutil.PathGAT(3, 3, nil)
 	mode := &WorldMode{hoveredWalk: hoveredWalkCellCache{valid: true}}
 
-	mode.applyMapCellUpdate(client.Context{World: world}, network.MapCellUpdate{MapName: "geffen", X: 1, Y: 2, RawType: 5})
+	data := make([]byte, 24)
+	binary.LittleEndian.PutUint16(data[0:2], 0x0192)
+	binary.LittleEndian.PutUint16(data[2:4], 1)
+	binary.LittleEndian.PutUint16(data[4:6], 2)
+	binary.LittleEndian.PutUint16(data[6:8], 5)
+	copy(data[8:24], "geffen.gat")
+	mode.handleNetworkPacket(client.Context{World: world}, network.Packet{ID: 0x0192, Data: data}, time.Now())
 
 	if world.GAT.Walkable(1, 2) {
 		t.Fatalf("updated cell should not be walkable: %+v", world.GAT.Cells[2*world.GAT.Width+1])
 	}
 	if mode.hoveredWalk.valid {
 		t.Fatal("hovered walk cache should be invalidated")
-	}
-}
-
-func TestActorDisplayNameUsesSelectedCharacterForPlayer(t *testing.T) {
-	ctx := client.Context{Session: &session.Session{CharID: 200, Selected: session.Character{ID: 200, Name: "Kivutar"}}}
-
-	if got := actorDisplayName(ctx, worldstate.Actor{Name: "Player"}, true); got != "Kivutar" {
-		t.Fatalf("display name = %q, want Kivutar", got)
-	}
-}
-
-func TestActorDisplayNameIncludesPartyName(t *testing.T) {
-	ctx := client.Context{Session: &session.Session{
-		CharID:   200,
-		Selected: session.Character{ID: 200, Name: "Kivutar"},
-		Party: session.Party{
-			Name:    "Goro",
-			Members: []session.PartyMember{{AccountID: 300, Name: "Alice"}},
-		},
-	}}
-
-	if got := actorDisplayName(ctx, worldstate.Actor{Name: "Player", PartyName: "Goro"}, true); got != "Kivutar (Goro)" {
-		t.Fatalf("local display name = %q, want Kivutar (Goro)", got)
-	}
-	if got := actorDisplayName(ctx, worldstate.Actor{ID: 300, Name: "Alice", PartyName: "Other Party"}, false); got != "Alice (Other Party)" {
-		t.Fatalf("remote display name = %q, want Alice (Other Party)", got)
-	}
-	if got := actorDisplayName(ctx, worldstate.Actor{ID: 400, Name: "Bob"}, false); got != "Bob" {
-		t.Fatalf("remote without packet party name = %q, want Bob", got)
-	}
-}
-
-func TestActorDisplayLabelsIncludeGuildNameOnSecondLine(t *testing.T) {
-	ctx := client.Context{Session: &session.Session{CharID: 200, Selected: session.Character{ID: 200, Name: "Kivutar"}}}
-
-	labels := actorDisplayLabels(ctx, worldstate.Actor{Name: "Player", GuildName: "Knights"}, true)
-	if len(labels) != 2 || labels[0] != "Kivutar" || labels[1] != "Knights" {
-		t.Fatalf("local labels = %#v, want Kivutar / Knights", labels)
-	}
-
-	labels = actorDisplayLabels(ctx, worldstate.Actor{ID: 300, Name: "Alice", GuildName: "Knights", HasObjectType: true, ObjectType: scene.ActorObjectTypePC}, false)
-	if len(labels) != 2 || labels[0] != "Alice" || labels[1] != "Knights" {
-		t.Fatalf("actor labels = %#v, want Alice / Knights", labels)
-	}
-
-	labels = actorDisplayLabels(ctx, worldstate.Actor{Name: "Poring", GuildName: "Knights", HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}, false)
-	if len(labels) != 1 || labels[0] != "Poring" {
-		t.Fatalf("mob labels = %#v, want Poring only", labels)
-	}
-}
-
-func TestActorNameLabelColorUsesYellowForAdmin(t *testing.T) {
-	want := color.RGBA{R: 255, G: 255, B: 0, A: 255}
-	if got := actorNameLabelColor(worldstate.Actor{IsAdmin: true}, true); got != want {
-		t.Fatalf("local admin label color = %+v, want %+v", got, want)
-	}
-	if got := actorNameLabelColor(worldstate.Actor{IsAdmin: true}, false); got != want {
-		t.Fatalf("remote admin label color = %+v, want %+v", got, want)
 	}
 }
 
@@ -501,7 +350,7 @@ func TestGuildCreationWaitsForBelongingBeforeOpeningGuildWindow(t *testing.T) {
 	}
 	var mode WorldMode
 
-	mode.handleGuildCreationResult(ctx, network.GuildCreationResult{Result: 0})
+	mode.social().HandleGuildCreationResult(ctx, network.GuildCreationResult{Result: 0})
 
 	if got := ctx.Session.GuildName; got != "" {
 		t.Fatalf("session guild = %q before belonging, want empty", got)
@@ -512,14 +361,14 @@ func TestGuildCreationWaitsForBelongingBeforeOpeningGuildWindow(t *testing.T) {
 	if got := ctx.Session.PendingGuildName; got != "Knights" {
 		t.Fatalf("pending guild = %q before belonging, want Knights", got)
 	}
-	if !mode.guildOpenPending {
+	if !mode.socialSystem.GuildOpenPending {
 		t.Fatal("guild window open was not deferred")
 	}
-	if mode.ui.guildWindow.IsOpen() {
+	if mode.ui.social.GuildWindow.IsOpen() {
 		t.Fatal("guild window opened before belonging")
 	}
 
-	mode.handleGuildBelonging(ctx, network.GuildBelonging{GuildID: 9, GuildName: "Knights"})
+	mode.social().HandleGuildBelonging(ctx, network.GuildBelonging{GuildID: 9, GuildName: "Knights"})
 
 	if got := ctx.Session.GuildID; got != 9 {
 		t.Fatalf("session guild ID = %d, want 9", got)
@@ -533,10 +382,10 @@ func TestGuildCreationWaitsForBelongingBeforeOpeningGuildWindow(t *testing.T) {
 	if got := ctx.Session.PendingGuildName; got != "" {
 		t.Fatalf("pending guild = %q after belonging, want empty", got)
 	}
-	if mode.guildOpenPending {
+	if mode.socialSystem.GuildOpenPending {
 		t.Fatal("deferred guild window open was not consumed")
 	}
-	if !mode.ui.guildWindow.IsOpen() {
+	if !mode.ui.social.GuildWindow.IsOpen() {
 		t.Fatal("guild window did not open after belonging")
 	}
 }
@@ -549,12 +398,12 @@ func TestGuildCreationOpensWhenBelongingArrivedFirst(t *testing.T) {
 	}
 	var mode WorldMode
 
-	mode.handleGuildCreationResult(ctx, network.GuildCreationResult{Result: 0})
+	mode.social().HandleGuildCreationResult(ctx, network.GuildCreationResult{Result: 0})
 
-	if mode.guildOpenPending {
+	if mode.socialSystem.GuildOpenPending {
 		t.Fatal("guild window open remained pending after membership was known")
 	}
-	if !mode.ui.guildWindow.IsOpen() {
+	if !mode.ui.social.GuildWindow.IsOpen() {
 		t.Fatal("guild window did not open with known membership")
 	}
 }
@@ -564,7 +413,7 @@ func TestHandleGuildNoticeUpdatesSessionAndAddsGuildConsoleMessages(t *testing.T
 	mode := &WorldMode{}
 	ctx := client.Context{Session: sessionState}
 
-	mode.handleGuildNotice(ctx, network.GuildNotice{
+	mode.social().HandleGuildNotice(ctx, network.GuildNotice{
 		Subject: " Maintenance ",
 		Notice:  " Gather in Prontera. ",
 	})
@@ -592,7 +441,7 @@ func TestHandleGuildNoticeSkipsEmptyConsoleLines(t *testing.T) {
 	mode := &WorldMode{}
 	ctx := client.Context{Session: &session.Session{}}
 
-	mode.handleGuildNotice(ctx, network.GuildNotice{
+	mode.social().HandleGuildNotice(ctx, network.GuildNotice{
 		Subject: " ",
 		Notice:  " Guild event tonight.\nMeet in Prontera. ",
 	})
@@ -606,7 +455,7 @@ func TestHandleGuildNoticeSkipsEmptyConsoleLines(t *testing.T) {
 func TestApplyGuildChatAddsGuildConsoleMessage(t *testing.T) {
 	mode := &WorldMode{}
 
-	applyGuildChat(network.GuildChat{Message: " Kivutar : hello guild "}, &mode.ui.console)
+	social.ApplyGuildChat(network.GuildChat{Message: " Kivutar : hello guild "}, &mode.ui.console)
 
 	messages := mode.ui.console.Messages()
 	if len(messages) != 1 || messages[0].Text != "Kivutar : hello guild" {
@@ -615,44 +464,6 @@ func TestApplyGuildChatAddsGuildConsoleMessage(t *testing.T) {
 	wantColor := color.RGBA{R: 180, G: 255, B: 180, A: 255}
 	if messages[0].Color != wantColor {
 		t.Fatalf("guild chat color = %+v, want %+v", messages[0].Color, wantColor)
-	}
-}
-
-func TestActorDisplayNameUsesServerNameBeforeFallback(t *testing.T) {
-	ctx := client.Context{Resources: &res.Manager{}}
-	actor := worldstate.Actor{Name: "Kafra Employee#izlude", Job: 1002}
-
-	if got := actorDisplayName(ctx, actor, false); got != "Kafra Employee" {
-		t.Fatalf("display name = %q, want Kafra Employee", got)
-	}
-}
-
-func TestActorDisplayNameUsesImportedMonsterFallback(t *testing.T) {
-	ctx := client.Context{Resources: &res.Manager{}}
-	actor := worldstate.Actor{Job: 1002}
-
-	if got := actorDisplayName(ctx, actor, false); got != "Poring" {
-		t.Fatalf("display name = %q, want Poring from imported DB", got)
-	}
-}
-
-func TestActorDisplayNameDoesNotLabelUnnamedPlayerJob(t *testing.T) {
-	ctx := client.Context{Resources: &res.Manager{}}
-	actor := worldstate.Actor{Job: 0}
-
-	if got := actorDisplayName(ctx, actor, false); got != "" {
-		t.Fatalf("display name = %q, want empty", got)
-	}
-}
-
-func TestHoverActorServerNameLookupIncludesCompanions(t *testing.T) {
-	for _, actor := range []worldstate.Actor{
-		{HasObjectType: true, ObjectType: scene.ActorObjectTypeHomunculus},
-		{HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary},
-	} {
-		if !shouldUseServerNameForHoverActor(actor) {
-			t.Fatalf("companion actor should request server name: %+v", actor)
-		}
 	}
 }
 
@@ -692,25 +503,6 @@ func TestHoveredActorDisplayNameUsesServerNameForMonster(t *testing.T) {
 	}
 }
 
-func TestFormatConsoleMessageUsesMsgStringTable(t *testing.T) {
-	root := t.TempDir()
-	dataDir := filepath.Join(root, "data")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, "msgstringtable.txt"), []byte("ignored#\nYou got %d items.#\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := res.NewManager(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := formatConsoleMessage(manager, network.ChatMessage{MessageID: 1, Value: 3})
-	if got != "You got 3 items." {
-		t.Fatalf("message = %q", got)
-	}
-}
-
 func TestExitRefusalMessageUsesOriginalMessageFallback(t *testing.T) {
 	mode := &WorldMode{}
 
@@ -746,17 +538,6 @@ func TestExitRefusalMessageUsesMsgString502(t *testing.T) {
 	messages := mode.ui.console.Messages()
 	if len(messages) != 1 || messages[0].Text != "Please wait 10 seconds before exiting." {
 		t.Fatalf("console messages = %+v", messages)
-	}
-}
-
-func TestColoredConsoleMessageUsesPacketColor(t *testing.T) {
-	console := &gameui.ChatConsole{}
-	addConsoleMessage(console, nil, network.ChatMessage{Text: "Experience Gained Base:1 (0.01%) Job:1 (0.01%)", Color: 0x00B5FFB5, HasColor: true})
-
-	messages := console.Messages()
-	wantColor := color.RGBA{R: 0xB5, G: 0xFF, B: 0xB5, A: 255}
-	if len(messages) != 1 || messages[0].Text != "Experience Gained Base:1 (0.01%) Job:1 (0.01%)" || messages[0].Color != wantColor {
-		t.Fatalf("messages = %+v, want color %+v", messages, wantColor)
 	}
 }
 
@@ -823,20 +604,6 @@ func TestFormatPickupConsoleMessageFallback(t *testing.T) {
 	got := formatPickupConsoleMessage(nil, network.ItemPickupAck{ItemID: 938, Amount: 0})
 	if got != "You got item 938 1." {
 		t.Fatalf("pickup message = %q", got)
-	}
-}
-
-func TestActorDisplayNameDoesNotLabelWarpPortal(t *testing.T) {
-	ctx := client.Context{Resources: &res.Manager{}}
-	for _, job := range []int16{scene.ActorJobWarpPortal, scene.ActorJobWarpPortalActive, scene.ActorJobWarpPortalWaiting} {
-		actor := worldstate.Actor{Job: job}
-
-		if got := actorDisplayName(ctx, actor, false); got != "" {
-			t.Fatalf("job %d display name = %q, want empty", job, got)
-		}
-		if !isWarpActor(actor) {
-			t.Fatalf("job %d expected warp actor classification", job)
-		}
 	}
 }
 
@@ -1009,7 +776,7 @@ func TestAutoSpellListPacketOpensModalChooser(t *testing.T) {
 	if next, stop := mode.handleNetworkPacket(ctx, network.Packet{ID: network.PacketZCAutoSpellList, Data: data}, time.Now()); next != nil || stop {
 		t.Fatalf("auto spell list changed mode: next=%T stop=%t", next, stop)
 	}
-	if !mode.ui.autoSpellWindow.IsOpen() {
+	if !mode.ui.battle.AutoSpell.IsOpen() {
 		t.Fatal("auto spell list did not open the chooser")
 	}
 	if !mode.ui.interactionModalOpen() {
@@ -1070,22 +837,6 @@ func TestUseItemAckFailureDoesNotChangeInventory(t *testing.T) {
 	}
 }
 
-func TestUseItemAckAddsItemUseEffect(t *testing.T) {
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	sessionState := &session.Session{AccountID: 2000000}
-	mode := &WorldMode{}
-	ctx := client.Context{Session: sessionState, World: world}
-
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 501, AID: 2000000, Amount: 2, Result: 1})
-	if len(mode.effects().Active) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
-	}
-	if effect := mode.effects().Active[0]; effect.ActorID != 2000000 || effect.EffectID != effects.PotionRed || effect.X != 10 || effect.Y != 20 {
-		t.Fatalf("effect = %+v", effect)
-	}
-}
-
 func TestUseItemAckYellowPotionSchedulesHealSound(t *testing.T) {
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
@@ -1093,7 +844,7 @@ func TestUseItemAckYellowPotionSchedulesHealSound(t *testing.T) {
 	mode := &WorldMode{}
 	ctx := client.Context{Session: sessionState, World: world}
 
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 503, AID: 2000000, Amount: 2, Result: 1})
+	mode.effects().AddItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 503, AID: 2000000, Amount: 2, Result: 1})
 	if len(mode.effects().Active) != 1 {
 		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
@@ -1119,7 +870,7 @@ func TestUseItemAckStatFoodSchedulesHealSound(t *testing.T) {
 	mode := &WorldMode{}
 	ctx := client.Context{Session: sessionState, World: world}
 
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12041, AID: 2000000, Amount: 2, Result: 1})
+	mode.effects().AddItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12041, AID: 2000000, Amount: 2, Result: 1})
 	if len(mode.effects().Active) != 1 {
 		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
 	}
@@ -1138,146 +889,11 @@ func TestUseItemAckStatFoodSchedulesHealSound(t *testing.T) {
 	}
 }
 
-func TestMercenaryPotionItemEffectsTargetVisibleMercenary(t *testing.T) {
-	testCases := []struct {
-		name     string
-		itemID   uint16
-		effectID int
-	}{
-		{"red", 12184, effects.Food},
-		{"blue", 12185, effects.Food},
-		{"concentration", 12241, effects.ItemFast},
-		{"awakening", 12242, effects.ItemFast2},
-		{"berserk", 12243, effects.ItemFast3},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			world := worldstate.New()
-			world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-			world.UpsertActor(worldstate.Actor{ID: 400, X: 13, Y: 24, HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary})
-			sessionState := &session.Session{
-				AccountID: 2000000,
-				Mercenary: session.Companion{
-					ID:     400,
-					Active: true,
-				},
-			}
-			mode := &WorldMode{}
-			ctx := client.Context{Session: sessionState, World: world}
-
-			mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: tc.itemID, AID: 2000000, Amount: 2, Result: 1})
-
-			if len(mode.effects().Active) != 1 {
-				t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
-			}
-			if effect := mode.effects().Active[0]; effect.ActorID != 400 || effect.EffectID != tc.effectID || effect.X != 13 || effect.Y != 24 {
-				t.Fatalf("effect = %+v", effect)
-			}
-		})
-	}
-}
-
-func TestMercenaryPotionItemEffectsFallbackToAckActorWithoutMercenary(t *testing.T) {
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	sessionState := &session.Session{AccountID: 2000000}
-	mode := &WorldMode{}
-	ctx := client.Context{Session: sessionState, World: world}
-
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12184, AID: 2000000, Amount: 2, Result: 1})
-
-	if len(mode.effects().Active) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
-	}
-	if effect := mode.effects().Active[0]; effect.ActorID != 2000000 || effect.EffectID != effects.Food || effect.X != 10 || effect.Y != 20 {
-		t.Fatalf("effect = %+v", effect)
-	}
-}
-
-func TestRemoteMercenaryPotionItemEffectKeepsAckActor(t *testing.T) {
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.UpsertActor(worldstate.Actor{ID: 400, X: 13, Y: 24, HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary})
-	world.UpsertActor(worldstate.Actor{ID: 1100, X: 30, Y: 40})
-	sessionState := &session.Session{
-		AccountID: 2000000,
-		Mercenary: session.Companion{
-			ID:     400,
-			Active: true,
-		},
-	}
-	mode := &WorldMode{}
-	ctx := client.Context{Session: sessionState, World: world}
-
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 12184, AID: 1100, Amount: 2, Result: 1})
-
-	if len(mode.effects().Active) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
-	}
-	if effect := mode.effects().Active[0]; effect.ActorID != 1100 || effect.EffectID != effects.Food || effect.X != 30 || effect.Y != 40 {
-		t.Fatalf("effect = %+v", effect)
-	}
-}
-
-func TestUseItemAckDispatchesAllMappedItemEffectArrays(t *testing.T) {
-	const itemID uint16 = 65000
-	itemEffectSpecs[itemID] = itemEffectSpec{
-		effectIDs:         []int{effects.PotionRed, effects.Blessing},
-		effectIDsOnCaster: []int{effects.Endure},
-	}
-	defer delete(itemEffectSpecs, itemID)
-
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	world.Actors[1100] = worldstate.Actor{ID: 1100, X: 12, Y: 22}
-	mode := &WorldMode{}
-	ctx := client.Context{Session: &session.Session{AccountID: 2000000}, World: world}
-
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: itemID, AID: 1100, Amount: 2, Result: 1})
-
-	want := []struct {
-		effectID int
-		actorID  uint32
-		x        int
-		y        int
-	}{
-		{effects.PotionRed, 1100, 12, 22},
-		{effects.Blessing, 1100, 12, 22},
-		{effects.Endure, 1100, 12, 22},
-	}
-	if len(mode.effects().Active) != len(want) {
-		t.Fatalf("world effects = %d, want %d: %+v", len(mode.effects().Active), len(want), mode.effects().Active)
-	}
-	for i, wantEffect := range want {
-		got := mode.effects().Active[i]
-		if got.EffectID != wantEffect.effectID || got.ActorID != wantEffect.actorID || got.X != wantEffect.x || got.Y != wantEffect.y {
-			t.Fatalf("effect %d = %+v, want %+v", i, got, wantEffect)
-		}
-	}
-}
-
-func TestButterflyWingEffectIsPinnedAtUsePosition(t *testing.T) {
-	world := worldstate.New()
-	world.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
-	sessionState := &session.Session{AccountID: 2000000}
-	mode := &WorldMode{}
-	ctx := client.Context{Session: sessionState, World: world}
-
-	mode.addItemUseEffect(ctx, network.UseItemAck{Index: 12, ItemID: 602, AID: 2000000, Amount: 1, Result: 1})
-	world.Player.X = 30
-	world.Player.Y = 40
-
-	if len(mode.effects().Active) != 1 {
-		t.Fatalf("world effects = %d, want 1", len(mode.effects().Active))
-	}
-	if effect := mode.effects().Active[0]; effect.ActorID != 0 || effect.EffectID != effects.Teleportation || effect.X != 10 || effect.Y != 20 {
-		t.Fatalf("effect = %+v", effect)
-	}
-}
-
 func TestMapTextureUploadsWaitForSubmissionBeforeFade(t *testing.T) {
 	m, ctx := mapTextureFixture(t)
-	m.mapScene.PreloadTextures(ctx)
+	for _, load := range m.mapScene.TextureLoadTasks(ctx) {
+		load()
+	}
 	m.mapFade.StartPrewarm()
 	f := render.NewFrame(100, 100)
 	now := time.Now()
@@ -1316,7 +932,9 @@ func TestMapTextureUploadsWaitForSubmissionBeforeFade(t *testing.T) {
 
 func TestLeavingWorldReleasesMapTextures(t *testing.T) {
 	m, ctx := mapTextureFixture(t)
-	m.mapScene.PreloadTextures(ctx)
+	for _, load := range m.mapScene.TextureLoadTasks(ctx) {
+		load()
+	}
 	old := append([]*render.Image(nil), m.mapScene.Images.Uploads...)
 	manager := &Manager{ctx: ctx, mode: m}
 	manager.enter(&mapTextureExitMode{})
@@ -1403,11 +1021,11 @@ func TestSpriteUpscalingChangesTextureWithoutMovingBillboard(t *testing.T) {
 		m := &WorldMode{mapScene: maps.System{UpscaleTextures: true}}
 		defer m.Leave()
 		base := &scene.Billboard{Image: render.NewImage(31, 23), AnchorX: 12.5, AnchorY: 19}
-		billboard := cartOffsetBillboard(base, 7, -3)
+		billboard := actors.CartOffsetBillboard(base, 7, -3)
 		projection := testutil.Projection(800, 600, 10.5, 20.5, 3)
 		draw := func() reflect.Value {
 			frame := render.NewFrame(800, 600)
-			m.drawActorSpriteBillboardTintAlpha3D(frame, projection, billboard, 10.5, 20.5, 3, 1.7, 0.6, 0.8, color.RGBA{R: 90, G: 160, B: 255, A: 200}, render.BlendSourceOver)
+			m.actors().DrawActorSpriteBillboardTintAlpha3D(frame, projection, billboard, 10.5, 20.5, 3, 1.7, 0.6, 0.8, color.RGBA{R: 90, G: 160, B: 255, A: 200}, render.BlendSourceOver)
 			commands := reflect.ValueOf(frame).Elem().FieldByName("worldBillboards")
 			if commands.Len() != 1 {
 				t.Fatal("missing billboard command")
@@ -1441,4 +1059,15 @@ func TestSpriteUpscalingChangesTextureWithoutMovingBillboard(t *testing.T) {
 func mapTextureFixture(t *testing.T) (*WorldMode, client.Context) {
 	t.Helper()
 	return &WorldMode{mapScene: maps.System{Textures: make(map[string]*render.Image), TextureMiss: make(map[string]struct{})}}, testutil.MapTextureContext(t)
+}
+
+func TestMapInfoNotifyAddsServerRestrictionToConsole(t *testing.T) {
+	mode := &WorldMode{}
+
+	mode.applyMapInfoNotify(network.MapInfoNotify{Result: 1})
+
+	messages := mode.ui.console.Messages()
+	if len(messages) != 1 || messages[0].Text != "Saved point cannot be memorized." {
+		t.Fatalf("console messages = %+v", messages)
+	}
 }

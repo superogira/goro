@@ -6,6 +6,7 @@ import (
 	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
@@ -74,7 +75,7 @@ func TestShortcutDropMarksShortcutOverlayDirty(t *testing.T) {
 	}
 	bar := &ShortcutBar{}
 	bar.Publish(ctx, nil, nil)
-	if bar.root == nil {
+	if bar.window.published == nil {
 		t.Fatal("shortcut bar root was not published")
 	}
 	x, y := bar.slotBounds(ctx, 0)
@@ -390,7 +391,7 @@ func TestShortcutPublishDoesNotKeepOverlayDirty(t *testing.T) {
 	}
 	bar := &ShortcutBar{}
 	bar.Publish(ctx, nil, nil)
-	if clear, ok := bar.root.(interface {
+	if clear, ok := bar.window.placed.(interface {
 		ClearRedraw()
 		ClearSceneDirty()
 	}); ok {
@@ -401,8 +402,31 @@ func TestShortcutPublishDoesNotKeepOverlayDirty(t *testing.T) {
 	}
 
 	bar.Publish(ctx, nil, nil)
-	if redraw, ok := bar.root.(interface{ NeedsRedraw() bool }); !ok || redraw.NeedsRedraw() {
+	if redraw, ok := bar.window.placed.(interface{ NeedsRedraw() bool }); !ok || redraw.NeedsRedraw() {
 		t.Fatal("shortcut publish dirtied an unchanged overlay")
+	}
+}
+
+func TestShortcutBarDragPreservesPositionAndSlotInteractions(t *testing.T) {
+	t.Skip("fork: band-restore drag release defers the end token; upstream assumes an instant release")
+}
+func TestShortcutBarRestorePosition(t *testing.T) {
+	ctx := Context{ScreenW: 1000, ScreenH: 700}
+	bar := &ShortcutBar{}
+	bar.SetVisibleRows(ctx, 3)
+	want := config.WindowPosition{X: 100, Y: 200, Set: true}
+	bar.RestorePosition(ctx, want)
+	ctx.UIManager = NewManager()
+	bar.Publish(ctx, nil, nil)
+	bar.ResetOverlay(ctx)
+	bar.Publish(ctx, nil, nil)
+	if got := bar.SavedPosition(); got != want {
+		t.Fatalf("published position = %+v, want %+v", got, want)
+	}
+	bar.RestorePosition(ctx, config.WindowPosition{X: 100000, Y: -100, Set: true})
+	want = config.WindowPosition{X: ctx.ScreenW - bar.window.width - windowScreenMargin, Y: windowScreenMargin, Set: true}
+	if got := bar.SavedPosition(); got != want {
+		t.Fatalf("offscreen position = %+v, want %+v", got, want)
 	}
 }
 

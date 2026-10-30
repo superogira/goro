@@ -37,6 +37,9 @@ func TestSceneFogFromMapUsesReferenceClientScaleAndFullStrength(t *testing.T) {
 	if got := projection.RenderCameraWithFog(fog).Fog.Strength; got != 1 {
 		t.Fatalf("fog strength = %.2f, want full reference-client strength", got)
 	}
+	if disabled := FogFromMap(manager, "prontera", config.FogConfig{Enabled: false}); disabled.Enabled {
+		t.Fatal("disabled fog still enabled on a foggy map")
+	}
 }
 
 func TestSceneFogFromMapUsesEinbrochWeatherTint(t *testing.T) {

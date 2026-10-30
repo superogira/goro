@@ -19,6 +19,25 @@ import (
 	"github.com/kivutar/goro/ui/rotheme"
 )
 
+func TestSkillWindowRestoreTreeBeforeOpening(t *testing.T) {
+	ctx := Context{Session: session.New(), ScreenW: 800, ScreenH: 600}
+	w := &SkillWindow{}
+	w.SetTreeMode(ctx, true)
+	w.OpenWindow(ctx)
+	if !w.TreeMode() || w.width != skillGridWindowWidth || w.height != skillGridWindowHeight {
+		t.Fatalf("restored tree size = %dx%d", w.width, w.height)
+	}
+	w.close(ctx)
+	w.OpenWindow(ctx)
+	if !w.TreeMode() || w.width != skillGridWindowWidth {
+		t.Fatal("reopening lost tree mode")
+	}
+	w.SetTreeMode(ctx, false)
+	if w.TreeMode() || w.width != skillWindowWidth || w.height != skillWindowHeight {
+		t.Fatalf("restored list size = %dx%d", w.width, w.height)
+	}
+}
+
 func TestCanIncreaseSkillRequiresPointsAndFlag(t *testing.T) {
 	s := &session.Session{Skills: session.Skills{Points: 1}}
 	if !canIncreaseSkill(s, session.Skill{ID: 1, Upgradable: true}) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/internal/testutil"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/game/scene"
@@ -22,7 +23,7 @@ func TestRemoteActorUpdatePreservesExistingMovement(t *testing.T) {
 			started := time.Unix(100, 0)
 			w := worldstate.New()
 			ctx := client.Context{World: w}
-			upsertActorAt(ctx, worldstate.Actor{
+			actors.UpsertActorAt(ctx, worldstate.Actor{
 				ID: 300, X: 30, Y: 20, FromX: 10, FromY: 20, ToX: 30, ToY: 20,
 				Moving: true, Speed: 150,
 			}, started)
@@ -31,14 +32,14 @@ func TestRemoteActorUpdatePreservesExistingMovement(t *testing.T) {
 			update.Dir = 4
 			update.EffectState = db.EffectStateFalcon
 			update.HasState = true
-			upsertActorAt(ctx, update, started.Add(elapsed))
+			actors.UpsertActorAt(ctx, update, started.Add(elapsed))
 			if got := w.Actors[300]; !reflect.DeepEqual(got, update) {
 				t.Fatalf("state update changed movement: started=%v, want %v; actor=%+v", got.MoveStarted, before.MoveStarted, got)
 			}
 
 			// A subsequent movement packet must still start a new path.
 			now := started.Add(elapsed)
-			upsertNetworkActor(ctx, network.ActorEntry{
+			actors.UpsertNetworkActor(ctx, network.ActorEntry{
 				ID: 300, X: 30, Y: 25, FromX: 30, FromY: 20, ToX: 30, ToY: 25,
 				Moving: true, Speed: 150,
 			})
@@ -76,7 +77,7 @@ func TestSkillPacketsDoNotReplayCompletedCasterWalk(t *testing.T) {
 				w := worldstate.New()
 				w.Player = worldstate.Actor{ID: 100, X: 34, Y: 20}
 				ctx := client.Context{World: w, Session: sess}
-				upsertActorAt(ctx, worldstate.Actor{
+				actors.UpsertActorAt(ctx, worldstate.Actor{
 					ID: 300, Job: db.JobAcolyte, Appearance: true,
 					X: 30, Y: 20, FromX: 10, FromY: 20, ToX: 30, ToY: 20,
 					Moving: true, Speed: 150, MoveStartTick: 1000, HasMoveStartTick: true,
@@ -111,10 +112,10 @@ func TestSkillPacketsDoNotReplayCompletedCasterWalk(t *testing.T) {
 				if x, y := scene.ActorRenderPosition(actor, time.Now()); x != 30 || y != 20 {
 					t.Fatalf("skill teleported caster to %v,%v; want 30,20", x, y)
 				}
-				if actor.Dir != directionFromDelta(30, 20, 34, 20, before.Dir) {
+				if actor.Dir != actors.DirectionFromDelta(30, 20, 34, 20, before.Dir) {
 					t.Fatal("caster did not turn toward the skill target")
 				}
-				if _, ok := mode.actorAnims[300]; !ok {
+				if _, ok := mode.actorSystem.ActorAnims[300]; !ok {
 					t.Fatal("skill animation did not start")
 				}
 			})
@@ -149,9 +150,9 @@ func TestWalkPathStoresFinalSegmentDirection(t *testing.T) {
 	})
 	path := maps.WalkPath(gat, 0, 0, 2, 0)
 	w := worldstate.New()
-	setPlayerMovementPathAt(client.Context{World: w}, path, 0, 0, 2, 0, directionFromDelta(0, 0, 2, 0, 0), time.Now(), 0)
+	setPlayerMovementPathAt(client.Context{World: w}, path, 0, 0, 2, 0, actors.DirectionFromDelta(0, 0, 2, 0, 0), time.Now(), 0)
 
-	if got, want := w.Player.Dir, directionFromDelta(2, 1, 2, 0, 0); got != want {
+	if got, want := w.Player.Dir, actors.DirectionFromDelta(2, 1, 2, 0, 0); got != want {
 		t.Fatalf("player dir = %d, want final segment dir %d; path=%+v", got, want, w.Player.MovePath)
 	}
 	if w.Dir != w.Player.Dir {
@@ -164,7 +165,7 @@ func TestRemoteMoveUpdateUsesExistingActorSpeed(t *testing.T) {
 	w := worldstate.New()
 	w.Actors[300] = worldstate.Actor{ID: 300, X: 0, Y: 0, Speed: 500}
 
-	upsertActorAt(client.Context{World: w}, worldstate.Actor{
+	actors.UpsertActorAt(client.Context{World: w}, worldstate.Actor{
 		ID:     300,
 		X:      4,
 		Y:      0,
@@ -191,7 +192,7 @@ func TestRemoteMoveUpdateUsesServerMoveStartTick(t *testing.T) {
 	w := worldstate.New()
 	w.Actors[300] = worldstate.Actor{ID: 300, X: 0, Y: 0, Speed: 500}
 
-	upsertActorAt(client.Context{World: w, Session: s}, worldstate.Actor{
+	actors.UpsertActorAt(client.Context{World: w, Session: s}, worldstate.Actor{
 		ID:               300,
 		X:                4,
 		Y:                0,

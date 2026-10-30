@@ -29,6 +29,7 @@ type MakingItemWindow struct {
 	scrollY      state.Signal[float32]
 	selectedRow  int
 	items        []network.MakingItemOption
+	makeType     uint16 // Zero for forging; nonzero types use the cooking reply.
 	lastClickAt  time.Time
 	lastClickRow int
 	icons        map[identifyItemIconKey]image.Image
@@ -38,12 +39,18 @@ type MakingItemWindow struct {
 func (w *MakingItemWindow) OpenList(ctx Context, list network.MakingItemList) {
 	w.EnsureWindow(makingItemWindowWidth, makingItemWindowHeight)
 	w.items = append(w.items[:0], list.Items...)
+	w.makeType = list.Type
 	w.selectedRow = 0
 	w.lastClickRow = -1
 	w.lastClickAt = time.Time{}
 	w.ensureScrollSignal().Set(0)
 	w.clampScroll()
 	if len(w.items) == 0 {
+		if w.makeType != 0 && ctx.Network != nil {
+			if err := w.sendRequest(ctx, makingItemCancelID, [3]uint16{}); err != nil {
+				glog.Warnf("empty cooking list cancel failed: %v", err)
+			}
+		}
 		w.Close()
 		w.Publish(ctx)
 		return
@@ -134,7 +141,7 @@ func (w *MakingItemWindow) tableWidget(ctx Context) *rotheme.TableViewWidget {
 }
 
 func (w *MakingItemWindow) confirm(ctx Context) {
-	if w.selectedRow < 0 || w.selectedRow >= len(w.items) {
+	if !w.IsOpen() || w.selectedRow < 0 || w.selectedRow >= len(w.items) {
 		return
 	}
 	item := w.items[w.selectedRow]
@@ -180,7 +187,7 @@ func (w *MakingItemWindow) makeItem(ctx Context, itemID uint16, material [3]uint
 		glog.Warnf("item creation failed: not connected")
 		return
 	}
-	if err := ctx.Network.SendMakingItem(itemID, material); err != nil {
+	if err := w.sendRequest(ctx, itemID, material); err != nil {
 		glog.Warnf("item creation failed: %v", err)
 		return
 	}
@@ -189,12 +196,22 @@ func (w *MakingItemWindow) makeItem(ctx Context, itemID uint16, material [3]uint
 }
 
 func (w *MakingItemWindow) cancel(ctx Context) {
+	if !w.IsOpen() {
+		return
+	}
 	if ctx.Network != nil {
-		if err := ctx.Network.SendMakingItem(makingItemCancelID, [3]uint16{}); err != nil {
+		if err := w.sendRequest(ctx, makingItemCancelID, [3]uint16{}); err != nil {
 			glog.Warnf("item creation cancel failed: %v", err)
 		}
 	}
 	w.Close()
+}
+
+func (w *MakingItemWindow) sendRequest(ctx Context, itemID uint16, material [3]uint16) error {
+	if w.makeType != 0 {
+		return ctx.Network.SendCooking(w.makeType, itemID)
+	}
+	return ctx.Network.SendMakingItem(itemID, material)
 }
 
 func (w *MakingItemWindow) itemTableRows(ctx Context, items []network.MakingItemOption) []itemTableRow {

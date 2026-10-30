@@ -10,6 +10,7 @@ import (
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/config"
+	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -149,7 +150,7 @@ func TestConsoleSubmitsWhileShortcutEditorIsOpen(t *testing.T) {
 
 func TestChatShortcutAllPhysicalSlotsSendOnce(t *testing.T) {
 	ctx := chatShortcutTestContext(t)
-	conn, server := newBotTestConnection(t, 20080910)
+	conn, server := testutil.NewConnection(t, 20080910)
 	ctx.Network = conn
 	ctx.Session.Selected.Name = "Tester"
 	ctx.Input.SetKeyCode(gpucontext.KeyLeftAlt, true)

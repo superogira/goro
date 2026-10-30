@@ -203,6 +203,35 @@ itemsnap = true
 	}
 }
 
+func TestVisualSettingsSurviveOtherSettingsAndRespectCLI(t *testing.T) {
+	isolateUserConfig(t)
+	cfg := defaultConfig()
+	cfg.ConfigPath = filepath.Join(t.TempDir(), "goro.ini")
+	if _, err := cfg.SaveUISettings(UISettings{ShortcutRows: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.SaveVisualSettings(false, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.SaveUserSettings(UserSettings{VSync: true}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadConfig([]string{"--config", cfg.ConfigPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Fog.Enabled || !saved.Gameplay.SimpleAura || !saved.Gameplay.NoEffects || !saved.Render.VSync || saved.UI.ShortcutRows != 3 {
+		t.Fatalf("preferences overwritten: fog=%t simple aura=%t vsync=%t shortcut rows=%d", saved.Fog.Enabled, saved.Gameplay.SimpleAura, saved.Render.VSync, saved.UI.ShortcutRows)
+	}
+	overridden, err := LoadConfig([]string{"--config", cfg.ConfigPath, "--fog=true", "--no-effects=false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !overridden.Fog.Enabled || overridden.Gameplay.NoEffects {
+		t.Fatal("saved visual preferences overrode the command line")
+	}
+}
+
 func TestSaveUserSettingsPreservesUnrelatedINI(t *testing.T) {
 	isolateUserConfig(t)
 	path := filepath.Join(t.TempDir(), "goro.ini")

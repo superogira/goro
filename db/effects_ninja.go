@@ -112,7 +112,9 @@ func issenEffectSpec() EffectSpec {
 }
 
 func kaenEffectSpec() EffectSpec {
-	return ninjaSpriteEffectSpec(effectKaen)
+	spec := ninjaSpriteEffectSpec(effectKaen)
+	spec.SFX = []string{"effect\\화염진.wav"}
+	return spec
 }
 
 func bakuEffectSpec() EffectSpec {

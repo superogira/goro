@@ -16,8 +16,12 @@ const (
 	PacketCZWhisper             uint16 = 0x0096
 	PacketCZWhisperIgnore       uint16 = 0x00CF
 	PacketCZWhisperIgnoreAll    uint16 = 0x00D0
+	PacketCZWhisperIgnoreList   uint16 = 0x00D3
 	PacketCZCreateChatRoom      uint16 = 0x00D5
 	PacketCZEnterChatRoom       uint16 = 0x00D9
+	PacketCZChangeChatRoom      uint16 = 0x00DE
+	PacketCZChangeChatRoomOwner uint16 = 0x00E0
+	PacketCZKickChatRoomMember  uint16 = 0x00E2
 	PacketCZExitChatRoom        uint16 = 0x00E3
 	PacketZCNotifyChat          uint16 = 0x008D
 	PacketZCNotifyPlayerChat    uint16 = 0x008E
@@ -25,9 +29,11 @@ const (
 	PacketZCAckWhisper          uint16 = 0x0098
 	PacketZCWhisperIgnoreAck    uint16 = 0x00D1
 	PacketZCWhisperAllAck       uint16 = 0x00D2
+	PacketZCWhisperIgnoreList   uint16 = 0x00D4
 	PacketZCAckCreateChatRoom   uint16 = 0x00D6
 	PacketZCChatRoomBoard       uint16 = 0x00D7
 	PacketZCDestroyChatRoom     uint16 = 0x00D8
+	PacketZCRefuseEnterRoom     uint16 = 0x00DA
 	PacketZCChatRoomChanged     uint16 = 0x00DF
 	PacketZCChatRoomEnter       uint16 = 0x00DB
 	PacketZCChatRoomJoin        uint16 = 0x00DC
@@ -80,6 +86,10 @@ type ChatRoomCreate struct {
 }
 
 type ChatRoomCreateAck struct {
+	Result uint8
+}
+
+type ChatRoomEnterRefused struct {
 	Result uint8
 }
 
@@ -185,6 +195,10 @@ func BuildWhisperIgnoreAllPacket(allow bool) []byte {
 	return []byte{byte(PacketCZWhisperIgnoreAll), byte(PacketCZWhisperIgnoreAll >> 8), whisperAllowByte(allow)}
 }
 
+func BuildWhisperIgnoreListPacket() []byte {
+	return []byte{byte(PacketCZWhisperIgnoreList), byte(PacketCZWhisperIgnoreList >> 8)}
+}
+
 func BuildCreateChatRoomPacket(room ChatRoomCreate) []byte {
 	title := strings.TrimSpace(room.Title)
 	if title == "" || room.Limit == 0 {
@@ -202,13 +216,42 @@ func BuildCreateChatRoomPacket(room ChatRoomCreate) []byte {
 	if room.Public {
 		packet[6] = 1
 	}
-	writeFixedCString(packet[7:15], strings.TrimSpace(room.Password))
+	writeFixedCString(packet[7:15], room.Password)
 	copy(packet[15:], titleBytes)
 	return packet
 }
 
 func BuildExitChatRoomPacket() []byte {
 	return []byte{byte(PacketCZExitChatRoom), byte(PacketCZExitChatRoom >> 8)}
+}
+
+func BuildChangeChatRoomPacket(room ChatRoomCreate) []byte {
+	packet := BuildCreateChatRoomPacket(room)
+	if packet != nil {
+		binary.LittleEndian.PutUint16(packet[:2], PacketCZChangeChatRoom)
+	}
+	return packet
+}
+
+func BuildChangeChatRoomOwnerPacket(name string) []byte {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	packet := make([]byte, 30)
+	binary.LittleEndian.PutUint16(packet[:2], PacketCZChangeChatRoomOwner)
+	// Role zero grants ownership.
+	writeFixedName(packet[6:30], name)
+	return packet
+}
+
+func BuildKickChatRoomMemberPacket(name string) []byte {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	packet := make([]byte, 26)
+	binary.LittleEndian.PutUint16(packet[:2], PacketCZKickChatRoomMember)
+	writeFixedName(packet[2:26], name)
+	return packet
 }
 
 func BuildEnterChatRoomPacket(roomID uint32, password string) []byte {
@@ -218,7 +261,7 @@ func BuildEnterChatRoomPacket(roomID uint32, password string) []byte {
 	packet := make([]byte, 14)
 	binary.LittleEndian.PutUint16(packet[0:2], PacketCZEnterChatRoom)
 	binary.LittleEndian.PutUint32(packet[2:6], roomID)
-	writeFixedCString(packet[6:14], strings.TrimSpace(password))
+	writeFixedCString(packet[6:14], password)
 	return packet
 }
 
@@ -375,6 +418,23 @@ func ParseWhisperIgnoreAck(packet Packet) (WhisperIgnoreAck, bool, error) {
 	}
 }
 
+func ParseWhisperIgnoreList(packet Packet) ([]string, bool, error) {
+	if packet.ID != PacketZCWhisperIgnoreList {
+		return nil, false, nil
+	}
+	data := packet.Data
+	if len(data) < 4 || int(binary.LittleEndian.Uint16(data[2:4])) != len(data) || (len(data)-4)%24 != 0 {
+		return nil, false, fmt.Errorf("ZC_WHISPER_LIST invalid length: %d", len(data))
+	}
+	names := make([]string, 0, (len(data)-4)/24)
+	for offset := 4; offset < len(data); offset += 24 {
+		if name := packetCString(data[offset : offset+24]); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, true, nil
+}
+
 func ParseChatRoomCreateAck(packet Packet) (ChatRoomCreateAck, bool, error) {
 	if packet.ID != PacketZCAckCreateChatRoom {
 		return ChatRoomCreateAck{}, false, nil
@@ -400,6 +460,16 @@ func ParseChatRoomBoard(packet Packet) (ChatRoomBoard, bool, error) {
 		Public:  packet.Data[16] != 0,
 		Title:   packetCString(packet.Data[17:]),
 	}, true, nil
+}
+
+func ParseChatRoomEnterRefused(packet Packet) (ChatRoomEnterRefused, bool, error) {
+	if packet.ID != PacketZCRefuseEnterRoom {
+		return ChatRoomEnterRefused{}, false, nil
+	}
+	if len(packet.Data) < 3 {
+		return ChatRoomEnterRefused{}, false, fmt.Errorf("ZC_REFUSE_ENTER_ROOM too short: %d", len(packet.Data))
+	}
+	return ChatRoomEnterRefused{Result: packet.Data[2]}, true, nil
 }
 
 func ParseChatRoomDestroy(packet Packet) (ChatRoomDestroy, bool, error) {
@@ -574,6 +644,10 @@ func (c *Client) SendWhisperIgnoreAll(allow bool) error {
 	return err
 }
 
+func (c *Client) SendWhisperIgnoreList() error {
+	return c.Send(BuildWhisperIgnoreListPacket())
+}
+
 func (c *Client) SendCreateChatRoom(room ChatRoomCreate) error {
 	packet := BuildCreateChatRoomPacket(room)
 	if len(packet) == 0 {
@@ -597,6 +671,30 @@ func (c *Client) SendExitChatRoom() error {
 		glog.Warnf("send CZ_EXIT_ROOM failed opcode=0x%04X client_date=%d: %v", ID(packet), c.clientDate, err)
 	}
 	return err
+}
+
+func (c *Client) SendChangeChatRoom(room ChatRoomCreate) error {
+	packet := BuildChangeChatRoomPacket(room)
+	if packet == nil {
+		return fmt.Errorf("empty chat room")
+	}
+	return c.Send(packet)
+}
+
+func (c *Client) SendChangeChatRoomOwner(name string) error {
+	packet := BuildChangeChatRoomOwnerPacket(name)
+	if packet == nil {
+		return fmt.Errorf("empty chat room member")
+	}
+	return c.Send(packet)
+}
+
+func (c *Client) SendKickChatRoomMember(name string) error {
+	packet := BuildKickChatRoomMemberPacket(name)
+	if packet == nil {
+		return fmt.Errorf("empty chat room member")
+	}
+	return c.Send(packet)
 }
 
 func (c *Client) SendEnterChatRoom(roomID uint32, password string) error {

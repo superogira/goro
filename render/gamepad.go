@@ -127,6 +127,9 @@ func (f *fanoutEventSource) setMouseButton(controller bool, button gpucontext.Mo
 	if isDown == wasDown {
 		return
 	}
+	if f.blocked {
+		return
+	}
 	listeners := f.mouseRelease
 	if isDown {
 		listeners = f.mousePress

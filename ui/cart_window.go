@@ -70,10 +70,10 @@ func (w *CartWindow) OpenWindow(ctx Context) {
 	w.ClampScroll(ctx.Session)
 	w.snapshot = w.cartSnapshot(ctx.Session)
 	x, y := cartDefaultPosition(ctx)
+	w.SetAutoPosition(x, y)
 	if !w.IsOpen() {
-		w.OpenAt(x, y, w.widgetTree(ctx, nil))
+		w.Open(ctx, w.widgetTree(ctx, nil))
 	} else {
-		w.SetAutoPosition(x, y)
 		w.SetContent(w.widgetTree(ctx, w.itemInfo))
 	}
 	if ctx.Session != nil {

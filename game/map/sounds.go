@@ -10,18 +10,22 @@ import (
 	"github.com/kivutar/goro/glog"
 )
 
-func (m *System) PreloadMapSounds(ctx client.Context) {
+func SoundLoadTasks(ctx client.Context) []func() {
 	if ctx.Audio == nil || ctx.World == nil || ctx.World.RSW == nil {
-		return
+		return nil
 	}
+	var tasks []func()
 	for _, sound := range ctx.World.RSW.Sounds {
 		if sound.Volume <= 0 {
 			continue
 		}
-		if err := ctx.Audio.PreloadSFX(sound.File); err != nil {
-			glog.Debugf("preload map sound %s: %v", sound.File, err)
-		}
+		tasks = append(tasks, func() {
+			if err := ctx.Audio.PreloadSFX(sound.File); err != nil {
+				glog.Debugf("preload map sound %s: %v", sound.File, err)
+			}
+		})
 	}
+	return tasks
 }
 
 func (m *System) ProcessMapSounds(ctx client.Context, now time.Time, schedule func(time.Time, float64, float64, float64, ...string)) {

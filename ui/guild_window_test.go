@@ -35,7 +35,7 @@ func TestGuildSkillTooltipHidesWhenCursorLeavesTable(t *testing.T) {
 	window.EnsureWindow(guildWindowWidth, guildWindowHeight)
 	window.showSkillTooltip(Context{}, session.Skill{ID: db.SkillGdApproval, Name: "Approval", Level: 1}, 100, 120)
 
-	window.updateSkillTooltipHover(Context{Input: &input.State{MouseX: window.x - 10, MouseY: window.y - 10}})
+	window.updateTooltipHover(Context{Input: &input.State{MouseX: window.x - 10, MouseY: window.y - 10}})
 
 	if window.tooltip.Open() {
 		t.Fatal("tooltip should close when cursor leaves the guild skills table")
@@ -248,6 +248,19 @@ func TestGuildWindowSnapshotIncludesLocalRights(t *testing.T) {
 	s.Guild.Right = 0x10
 	if after := guildWindowSnapshot(s); after == before {
 		t.Fatal("guild rights change did not invalidate guild window snapshot")
+	}
+}
+
+func TestGuildWindowRefreshesWhenRankPermissionsArrive(t *testing.T) {
+	s := &session.Session{AccountID: 10, CharID: 11, Guild: session.Guild{
+		Right:     0x11,
+		Members:   []session.GuildMember{{AccountID: 10, CharID: 11, PositionID: 1}},
+		Positions: []session.GuildPosition{{PositionID: 1, PosName: "Member"}},
+	}}
+	before := guildWindowSnapshot(s)
+	s.Guild.Positions[0].HasPermissions = true
+	if guildSessionInfo(s).Right != 0 || guildWindowSnapshot(s) == before {
+		t.Fatal("server-confirmed zero permissions did not refresh the window")
 	}
 }
 
@@ -791,5 +804,107 @@ func TestGuildSkillDragUsesLearnedRatherThanPendingLevel(t *testing.T) {
 
 	if !window.dragActive || window.dragSkill.Level != 1 {
 		t.Fatalf("dragged guild skill = %+v, want learned level 1", window.dragSkill)
+	}
+}
+
+func TestGuildMemberContributionsDoNotOverflow(t *testing.T) {
+	members := []session.GuildMember{{MemberExp: 3_000_000_000}, {MemberExp: 2_000_000_000}}
+	total := guildMembersTotalExp(members)
+	if total != 5_000_000_000 {
+		t.Fatalf("total = %d, want 5000000000", total)
+	}
+	for i, want := range []string{"60 %", "40 %"} {
+		if got := guildMemberDevotion(members[i].MemberExp, total); got != want {
+			t.Fatalf("member %d devotion = %q, want %q", i, got, want)
+		}
+	}
+	if got := guildMemberDevotion(0, 0); got != "0 %" {
+		t.Fatalf("empty guild devotion = %q", got)
+	}
+}
+
+func TestGuildMemberTooltipShowsUnabridgedDetails(t *testing.T) {
+	member := session.GuildMember{CharName: "A very long member name", PositionID: 1, Job: 1, Level: 80, MemberExp: 123456789, Memo: "A full note"}
+	guild := session.Guild{Positions: []session.GuildPosition{{PositionID: 1, PosName: "A very long rank title"}}, Members: []session.GuildMember{member}}
+	w := &GuildWindow{tab: guildWindowTabMembers}
+	w.EnsureWindow(guildWindowWidth, guildWindowHeight)
+	w.ensureGuildMemberScrollSignal()
+	x, y, _, _ := w.guildTableBounds(Context{})
+	ctx := Context{Input: &input.State{MouseX: x + 10, MouseY: y + guildTableHeaderH + 4}}
+	w.handleGuildMemberRowEvent(ctx, guild, guild.Members, 0, event.NewMouseEvent(event.MouseMove, event.ButtonNone, 0, geometry.Pt(10, 4), geometry.Pt(10, 4), 0))
+	for _, want := range []string{member.CharName, "A very long rank title", "Swordman", "123456789", member.Memo} {
+		if !strings.Contains(w.tooltip.Text(), want) {
+			t.Fatalf("tooltip = %q, missing %q", w.tooltip.Text(), want)
+		}
+	}
+	w.updateTooltipHover(ctx)
+	if !w.tooltip.Open() {
+		t.Fatal("tooltip disappeared over member")
+	}
+	ctx.Input.MouseY += guildTableRowH
+	w.updateTooltipHover(ctx)
+	if w.tooltip.Open() {
+		t.Fatal("tooltip remained over empty table space")
+	}
+	w.handleRowTooltip(ctx, "details", 1, event.NewMouseEvent(event.MouseMove, event.ButtonNone, 0, geometry.Point{}, geometry.Point{}, 0))
+	w.memberScrollY.Set(1)
+	w.updateTooltipHover(ctx)
+	if w.tooltip.Open() {
+		t.Fatal("tooltip retained stale row after scrolling")
+	}
+}
+
+func TestGuildTableBoundsRespectFooterAndTabGap(t *testing.T) {
+	w := &GuildWindow{tab: guildWindowTabMembers}
+	w.EnsureWindow(guildWindowWidth, guildWindowHeight)
+	_, y, _, height := w.guildTableBounds(Context{})
+	if y != w.y+ROWindowTitleHeight+guildWindowTabHeight+2 || y+height != w.y+w.height {
+		t.Fatalf("table y=%d height=%d", y, height)
+	}
+	_, _, _, masterHeight := w.guildTableBounds(Context{Session: &session.Session{Guild: session.Guild{IsMaster: true}}})
+	if height-masterHeight != ROWindowFooterHeight {
+		t.Fatalf("footer height = %d", height-masterHeight)
+	}
+}
+
+func TestGuildWindowRefreshesMemberPortraitChanges(t *testing.T) {
+	s := &session.Session{Guild: session.Guild{Members: []session.GuildMember{{HeadType: 1, Sex: 1, CurrentState: 1}}}}
+	for _, field := range []*uint16{&s.Guild.Members[0].HeadType, &s.Guild.Members[0].HeadPalette, &s.Guild.Members[0].Sex} {
+		before := guildWindowSnapshot(s)
+		*field++
+		if guildWindowSnapshot(s) == before {
+			t.Fatal("appearance change did not refresh member list")
+		}
+	}
+}
+
+func TestGuildMemberContextWhisperNeedsNoManagementRights(t *testing.T) {
+	ctx, _, app := newWindowInstanceTest()
+	ctx.Session = &session.Session{AccountID: 1, CharID: 2}
+	member := session.GuildMember{AccountID: 3, CharID: 4, CharName: "Alice Smith"}
+	w := &GuildWindow{}
+	for _, online := range []uint32{0, 1} {
+		member.CurrentState = online
+		if !w.handleGuildMemberRowEvent(ctx, session.Guild{}, []session.GuildMember{member}, 0,
+			event.NewMouseEvent(event.MousePress, event.ButtonRight, 0, geometry.Point{}, geometry.Pt(100, 100), 0)) {
+			t.Fatal("ordinary member could not open context menu")
+		}
+		app.Frame()
+		app.Window().DrawTo(&uitest.MockCanvas{})
+		x := float32(w.memberContext.x + 30)
+		y := float32(w.memberContext.y + contextMenuPadding + contextMenuRowH/2)
+		app.Window().HandleEvent(uitest.Click(x, y))
+		app.Window().HandleEvent(uitest.Release(x, y))
+		w.drainMemberContextAction()
+		action := w.PopAction().MemberAction
+		if action == nil || action.Kind != GuildMemberActionWhisper || action.Member.CharName != member.CharName || w.memberContext.IsOpen() {
+			t.Fatalf("whisper action = %+v", action)
+		}
+	}
+	if guildMemberContextMenuRows(true, true, true) != 0 || guildMemberContextMenuRows(false, true, false) != 1 {
+		t.Fatal("self context menu changed")
+	}
+	if guildMemberContextMenuRows(true, false, true) != 2 {
+		t.Fatal("guild master menu must offer both Whisper and Expel")
 	}
 }

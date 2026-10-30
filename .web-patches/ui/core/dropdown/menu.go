@@ -32,6 +32,7 @@ func newMenuWidget(
 	items []ItemDef,
 	selectedIndex int,
 	maxVisible int,
+	itemHeight float32,
 	painter Painter,
 	onSelect func(index int),
 ) *menuWidget {
@@ -40,7 +41,7 @@ func newMenuWidget(
 		selectedIndex:    selectedIndex,
 		highlightedIndex: selectedIndex,
 		maxVisible:       maxVisible,
-		itemHeight:       menuItemHeight,
+		itemHeight:       itemHeight,
 		painter:          painter,
 		onSelect:         onSelect,
 	}

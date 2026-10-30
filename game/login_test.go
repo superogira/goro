@@ -9,6 +9,8 @@ import (
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/actors"
+	"github.com/kivutar/goro/game/internal/testutil"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
@@ -96,7 +98,7 @@ func TestLoginMapChangeResetsWorldForChangedSelectedCharacter(t *testing.T) {
 	if world.Player.ID != 150001 || world.Player.Job != db.JobWizard {
 		t.Fatalf("world player = %+v, want selected wizard", world.Player)
 	}
-	if world.Player.HasCart || world.Player.Opt3State != 0 || world.Player.EffectState&actorEffectCartMask != 0 {
+	if world.Player.HasCart || world.Player.Opt3State != 0 || world.Player.EffectState&actors.ActorEffectCartMask != 0 {
 		t.Fatalf("old local state leaked after login map change: %+v", world.Player)
 	}
 	if len(world.Actors) != 0 {
@@ -223,7 +225,7 @@ func TestLoginActorBootstrapRestoresWeddingVisualState(t *testing.T) {
 	if sessionState.Selected.Option&db.EffectStateWedding == 0 {
 		t.Fatalf("selected option = 0x%08X, want wedding", sessionState.Selected.Option)
 	}
-	if got := localPlayerVisualJob(ctx); got != db.JobMarried {
+	if got := actors.LocalPlayerVisualJob(ctx); got != db.JobMarried {
 		t.Fatalf("visual job = %d, want married job %d", got, db.JobMarried)
 	}
 }
@@ -280,7 +282,7 @@ func TestCharacterSwitchKeepsConsolePublishableAfterLoginClear(t *testing.T) {
 }
 
 func TestLoginPacketFlowHandsBootstrapStateToWorld(t *testing.T) {
-	netClient, server := newBotTestConnection(t, 20080910)
+	netClient, server := testutil.NewConnection(t, 20080910)
 	ctx := client.Context{
 		Network: netClient, Session: &session.Session{AccountID: 2000000, CharID: 150000},
 		World: worldstate.New(), Resources: &res.Manager{ClientInfo: res.ClientInfo{Connections: []res.Connection{{Address: "127.0.0.1"}}}},
@@ -291,7 +293,9 @@ func TestLoginPacketFlowHandsBootstrapStateToWorld(t *testing.T) {
 	mode.Enter(ctx)
 	enter := make([]byte, 11)
 	binary.LittleEndian.PutUint16(enter, 0x0073)
-	stream := append(enter, testParameterChangePacket(network.StatusSpeed, 112).Data...)
+	stream := []byte{0x3A, 0x01, 9, 0}
+	stream = append(stream, enter...)
+	stream = append(stream, testParameterChangePacket(network.StatusSpeed, 112).Data...)
 	stream = append(stream, testMapChangePacket("geffen", 81, 179).Data...)
 	if _, err := server.Write(stream); err != nil {
 		t.Fatal(err)
@@ -305,6 +309,9 @@ func TestLoginPacketFlowHandsBootstrapStateToWorld(t *testing.T) {
 	}
 	if !ctx.Session.Playing || ctx.World.MapName != "geffen" || ctx.Session.PlayerX != 81 || ctx.Session.PlayerY != 179 || ctx.World.Player.Speed != 112 {
 		t.Fatalf("login bootstrap was not applied: session=%+v player=%+v", ctx.Session.Movement, ctx.World.Player)
+	}
+	if ctx.Session.AttackRange != 9 || ctx.World.Player.AttackRange != 9 {
+		t.Fatalf("login lost server attack range: session=%d player=%d", ctx.Session.AttackRange, ctx.World.Player.AttackRange)
 	}
 	// Even after the fade has elapsed, an opaque frame must be presented first.
 	time.Sleep(550 * time.Millisecond)

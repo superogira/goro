@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -545,6 +546,22 @@ func TestBuildMakingItemPacket(t *testing.T) {
 		binary.LittleEndian.Uint16(packet[8:10]),
 	}; got != [3]uint16{1000, 990, 5} {
 		t.Fatalf("making item material = %v", got)
+	}
+}
+
+func TestBuildCookingPacket(t *testing.T) {
+	for _, tt := range []struct {
+		makeType uint16
+		itemID   uint16
+		want     []byte
+	}{
+		{1, 12001, []byte{0x5b, 0x02, 1, 0, 0xe1, 0x2e}},
+		{3, 12114, []byte{0x5b, 0x02, 3, 0, 0x52, 0x2f}},
+		{1, 0xffff, []byte{0x5b, 0x02, 1, 0, 0xff, 0xff}},
+	} {
+		if got := BuildCookingPacket(tt.makeType, tt.itemID); !bytes.Equal(got, tt.want) {
+			t.Fatalf("cooking packet = %x, want %x", got, tt.want)
+		}
 	}
 }
 

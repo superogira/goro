@@ -1,7 +1,6 @@
 package game
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -15,11 +14,13 @@ import (
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/bot"
 	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/game/login"
 	maps "github.com/kivutar/goro/game/map"
 	"github.com/kivutar/goro/game/scene"
+	"github.com/kivutar/goro/game/skills"
 	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
@@ -89,8 +90,8 @@ func wasdControlsTestContext(t *testing.T) client.Context {
 	ctx.World.Player = worldstate.Actor{ID: 100, X: 10, Y: 20}
 	ctx.World.Actors[300] = worldstate.Actor{ID: 300, X: 11, Y: 20, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}
 	ctx.World.Actors[301] = worldstate.Actor{ID: 301, X: 11, Y: 21, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}
-	skill := session.Skill{ID: db.SkillACDouble, Type: skillTargetEnemy, Level: 3, Range: 9}
-	heal := session.Skill{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 3, Range: 9}
+	skill := session.Skill{ID: db.SkillACDouble, Type: skills.SkillTargetEnemy, Level: 3, Range: 9}
+	heal := session.Skill{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 3, Range: 9}
 	ctx.Session.Skills.List = []session.Skill{skill, heal}
 	ctx.Session.Hotkeys = session.Hotkeys{Loaded: true, Version: 1, Slots: []session.HotkeySlot{
 		{Type: network.HotkeyTypeSkill, ID: uint32(skill.ID), Level: 3},
@@ -151,7 +152,7 @@ func TestWASDKeyboardAndGamepadUseSameTargeting(t *testing.T) {
 			for _, order := range []string{"target_first", "skill_first", "ineligible", "cancel", "repeat_skill", "attack_nearest", "attack_selected"} {
 				t.Run(selector+"/"+caster+"/"+order, func(t *testing.T) {
 					ctx := wasdControlsTestContext(t)
-					conn, server := newBotTestConnection(t, 20080910)
+					conn, server := testutil.NewConnection(t, 20080910)
 					ctx.Network = conn
 					skill, heal := ctx.Session.Skills.List[0], ctx.Session.Skills.List[1]
 					mode := NewWorldMode()
@@ -219,7 +220,7 @@ func TestWASDArmingSkillPreservesMovementRelease(t *testing.T) {
 		for _, release := range []string{"same_frame", "next_frame"} {
 			t.Run(device+"/"+release, func(t *testing.T) {
 				ctx := wasdControlsTestContext(t)
-				conn, server := newBotTestConnection(t, 20080910)
+				conn, server := testutil.NewConnection(t, 20080910)
 				ctx.Network = conn
 				mode := NewWorldMode()
 				loadKeyboardTestBot(t, ctx, mode)
@@ -263,7 +264,7 @@ func TestWASDArmingSkillPreservesMovementRelease(t *testing.T) {
 					pad.Buttons[input.GamepadSouth] = true
 				}
 				frame()
-				if mode.pendingSkill.skill.ID == 0 || mode.pendingSkill.targetID != 0 {
+				if mode.skillSystem.Pending.Skill.ID == 0 || mode.skillSystem.Pending.TargetID != 0 {
 					t.Fatal("skill was not left armed")
 				}
 				setMovement(false)
@@ -294,14 +295,14 @@ func TestWASDInvalidSkillTargetReleasesConfirmation(t *testing.T) {
 				case "removed":
 					mode.removeActorNow(ctx, 300)
 				case "dead":
-					mode.actorDeaths = map[uint32]time.Time{300: time.Now()}
+					mode.actorSystem.ActorDeaths = map[uint32]time.Time{300: time.Now()}
 				case "hidden":
 					actor := ctx.World.Actors[300]
 					actor.EffectState = db.EffectStateHide
 					ctx.World.Actors[300] = actor
 				}
 				wasdControlPress(t, ctx, mode, device, "confirm")
-				if mode.scriptHighlight.id != 0 || mode.pendingSkill.skill.ID == 0 {
+				if mode.scriptHighlight.id != 0 || mode.skillSystem.Pending.Skill.ID == 0 {
 					t.Fatal("failed confirmation should clear the target and keep the skill armed")
 				}
 				if device == "keyboard" {
@@ -328,7 +329,7 @@ func TestWASDSkillChaseTakesOverMovement(t *testing.T) {
 		for _, order := range []string{"target_first", "skill_first"} {
 			t.Run(device+"/"+order, func(t *testing.T) {
 				ctx := wasdControlsTestContext(t)
-				conn, server := newBotTestConnection(t, 20080910)
+				conn, server := testutil.NewConnection(t, 20080910)
 				ctx.Network = conn
 				clear(ctx.World.Actors)
 				ctx.World.Actors[300] = worldstate.Actor{ID: 300, X: 30, Y: 20, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}
@@ -348,7 +349,7 @@ func TestWASDSkillChaseTakesOverMovement(t *testing.T) {
 				mode.walkCooldownUntil = time.Time{}
 				ctx.Input.SetKeyCode(gpucontext.KeyW, false)
 				wasdControlPress(t, ctx, mode, device, castAction)
-				if mode.pendingSkill.targetID != 300 {
+				if mode.skillSystem.Pending.TargetID != 300 {
 					t.Fatal("skill did not start chasing its target")
 				}
 				chase, _ := network.BuildWalkToXYPacketForClientDate(20, 20, 20080910)
@@ -401,13 +402,13 @@ func wasdMovementFrame(t *testing.T, ctx client.Context, mode *WorldMode, device
 func TestWASDSkillsResumeHeldMovementAfterServerStop(t *testing.T) {
 	for _, device := range []string{"keyboard", "gamepad"} {
 		for _, skill := range []session.Skill{
-			{ID: db.SkillALAngelus, Type: skillTargetSelf, Level: 3},
-			{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 3, Range: 9},
-			{ID: db.SkillMGFirewall, Type: skillTargetPlace, Level: 3, Range: 9},
+			{ID: db.SkillALAngelus, Type: skills.SkillTargetSelf, Level: 3},
+			{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 3, Range: 9},
+			{ID: db.SkillMGFirewall, Type: skills.SkillTargetPlace, Level: 3, Range: 9},
 		} {
-			t.Run(device+"/"+skillLabel(skill), func(t *testing.T) {
+			t.Run(device+"/"+skills.SkillLabel(skill), func(t *testing.T) {
 				ctx := wasdControlsTestContext(t)
-				conn, server := newBotTestConnection(t, 20080910)
+				conn, server := testutil.NewConnection(t, 20080910)
 				ctx.Network = conn
 				ctx.Session.Skills.List = []session.Skill{skill}
 				ctx.Session.Hotkeys.Slots[0] = session.HotkeySlot{Type: network.HotkeyTypeSkill, ID: uint32(skill.ID), Level: 3}
@@ -420,9 +421,9 @@ func TestWASDSkillsResumeHeldMovementAfterServerStop(t *testing.T) {
 				ctx.World.Player = worldstate.Actor{ID: 100, X: 10, Y: 28, FromX: 10, FromY: 20, ToX: 10, ToY: 28,
 					Moving: true, MoveStarted: time.Now(), MoveDuration: 8 * time.Second}
 				frame(true)
-				if !isSelfTargetSkill(skill) {
+				if !skills.IsSelfTargetSkill(skill) {
 					frame(false)
-					if isGroundTargetSkill(skill) {
+					if skills.IsGroundTargetSkill(skill) {
 						if err := mode.skills().UseGround(ctx, skill, 12, 20, "", "target"); err != nil {
 							t.Fatal(err)
 						}
@@ -430,7 +431,7 @@ func TestWASDSkillsResumeHeldMovementAfterServerStop(t *testing.T) {
 						frame(true) // Confirm the already highlighted self target.
 					}
 				}
-				if isGroundTargetSkill(skill) {
+				if skills.IsGroundTargetSkill(skill) {
 					readBotTestPackets(t, server, network.BuildUseSkillToGroundPacketForClientDate(skill.ID, 3, 12, 20, 20080910))
 				} else {
 					readBotTestPackets(t, server, network.BuildUseSkillToIDPacketForClientDate(skill.ID, 3, 100, 20080910))
@@ -457,9 +458,9 @@ func TestWASDGroundSkillChaseSurvivesMovementRelease(t *testing.T) {
 	for _, device := range []string{"keyboard", "gamepad"} {
 		t.Run(device, func(t *testing.T) {
 			ctx := wasdControlsTestContext(t)
-			conn, server := newBotTestConnection(t, 20080910)
+			conn, server := testutil.NewConnection(t, 20080910)
 			ctx.Network = conn
-			skill := session.Skill{ID: db.SkillMGFirewall, Type: skillTargetPlace, Level: 3, Range: 9}
+			skill := session.Skill{ID: db.SkillMGFirewall, Type: skills.SkillTargetPlace, Level: 3, Range: 9}
 			ctx.Session.Skills.List = []session.Skill{skill}
 			ctx.Session.Hotkeys.Slots[0] = session.HotkeySlot{Type: network.HotkeyTypeSkill, ID: uint32(skill.ID), Level: 3}
 			mode := NewWorldMode()
@@ -492,12 +493,12 @@ func TestWASDGroundSkillChaseSurvivesMovementRelease(t *testing.T) {
 			applySelfMoveAck(ctx, network.SelfMoveAck{FromX: 10, FromY: 20, ToX: 20, ToY: 20})
 			mode.walkCooldownUntil = time.Time{}
 			assertNoBotTestPacket(t, server, func() error { frame(false, false); return nil })
-			if !mode.pendingSkill.ground {
+			if !mode.skillSystem.Pending.Ground {
 				t.Fatal("ground skill chase was canceled")
 			}
 			ctx.World.Player.MoveStarted = time.Now().Add(-ctx.World.Player.MoveDuration - time.Millisecond)
 			mode.skills().UpdatePendingTarget(ctx, "test", false)
-			mode.pendingSkill.readyAt = time.Now().Add(-time.Millisecond)
+			mode.skillSystem.Pending.ReadyAt = time.Now().Add(-time.Millisecond)
 			mode.skills().ProcessPendingTarget(ctx)
 			readBotTestPackets(t, server, network.BuildUseSkillToGroundPacketForClientDate(skill.ID, 3, 30, 20, 20080910))
 		})
@@ -508,7 +509,7 @@ func TestWASDGamepadMovementAttackAndLoot(t *testing.T) {
 	for _, name := range []string{"stick", "dpad", "keyboard_and_stick", "attack", "nearest_attack", "loot"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := chatShortcutTestContext(t)
-			conn, server := newBotTestConnection(t, 20080910)
+			conn, server := testutil.NewConnection(t, 20080910)
 			ctx.Network = conn
 			ctx.Config.Script.Path = "builtin:wasd"
 			ctx.World = worldstate.New()
@@ -557,15 +558,15 @@ func TestWASDGamepadMovementAttackAndLoot(t *testing.T) {
 
 func TestWASDGamepadSkillChordUsesSelectedEnemyWithoutAttackOrLoot(t *testing.T) {
 	ctx := chatShortcutTestContext(t)
-	conn, server := newBotTestConnection(t, 20080910)
+	conn, server := testutil.NewConnection(t, 20080910)
 	ctx.Network = conn
 	ctx.Config.Script.Path = "builtin:wasd"
 	ctx.World = worldstate.New()
 	ctx.World.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
 	ctx.Session.AccountID = ctx.World.Player.ID
 	ctx.World.Actors[300] = worldstate.Actor{ID: 300, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
-	skill := session.Skill{ID: db.SkillACDouble, Type: skillTargetEnemy, Level: 3, Range: 9}
-	selfSkill := session.Skill{ID: db.SkillALAngelus, Type: skillTargetSelf, Level: 3}
+	skill := session.Skill{ID: db.SkillACDouble, Type: skills.SkillTargetEnemy, Level: 3, Range: 9}
+	selfSkill := session.Skill{ID: db.SkillALAngelus, Type: skills.SkillTargetSelf, Level: 3}
 	ctx.Session.Skills.List = []session.Skill{skill, selfSkill}
 	ctx.Session.Hotkeys = session.Hotkeys{Loaded: true, Version: 1, Slots: []session.HotkeySlot{
 		{Type: network.HotkeyTypeSkill, ID: uint32(skill.ID), Level: 3},
@@ -615,12 +616,12 @@ func TestWASDGamepadSkillChordUsesSelectedEnemyWithoutAttackOrLoot(t *testing.T)
 	pad.Buttons[input.GamepadEast] = true
 	pad.Axes[input.GamepadRightTrigger] = 1
 	ctx.Input.SetGamepad(pad)
-	mode.pendingSkill = pendingSkillTarget{skill: skill}
+	mode.skillSystem.Pending = skills.PendingTarget{Skill: skill}
 	assertNoBotTestPacket(t, server, func() error {
 		mode.bot.HandleGamepad(ctx, 1.0/60)
 		return nil
 	})
-	if mode.pendingSkill.skill.ID != skill.ID {
+	if mode.skillSystem.Pending.Skill.ID != skill.ID {
 		t.Fatal("empty hotbar slot changed the armed skill")
 	}
 	ctx.Input.EndFrame()
@@ -630,7 +631,7 @@ func TestWASDGamepadSkillChordUsesSelectedEnemyWithoutAttackOrLoot(t *testing.T)
 	mode.bot.HandleGamepad(ctx, 1.0/60)
 	readBotTestPackets(t, server, network.BuildUseSkillToIDPacketForClientDate(selfSkill.ID, 3, ctx.Session.AccountID, 20080910))
 	assertNoBotTestPacket(t, server, func() error { return nil })
-	if mode.pendingSkill.skill.ID != skill.ID {
+	if mode.skillSystem.Pending.Skill.ID != skill.ID {
 		t.Fatal("self skill also cast the previously armed targeted skill")
 	}
 }
@@ -649,7 +650,7 @@ func TestWASDGamepadDpadSkillChordsDoNotBecomeMovement(t *testing.T) {
 		for _, contents := range []string{"skill", "empty"} {
 			t.Run(tc.name+"/"+contents, func(t *testing.T) {
 				ctx := wasdControlsTestContext(t)
-				conn, server := newBotTestConnection(t, 20080910)
+				conn, server := testutil.NewConnection(t, 20080910)
 				ctx.Network = conn
 				skill := ctx.Session.Skills.List[0]
 				ctx.Session.Hotkeys.Slots = make([]session.HotkeySlot, 9)
@@ -702,7 +703,7 @@ func TestWASDKeyboardSkillTargetSurvivesWithoutGamepad(t *testing.T) {
 	ctx.World.Player = worldstate.Actor{ID: 2000000, X: 10, Y: 20}
 	ctx.World.Actors[300] = worldstate.Actor{ID: 300, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	mode := NewWorldMode()
-	mode.pendingSkill = pendingSkillTarget{skill: session.Skill{ID: db.SkillACDouble, Type: skillTargetEnemy, Level: 3, Range: 9}}
+	mode.skillSystem.Pending = skills.PendingTarget{Skill: session.Skill{ID: db.SkillACDouble, Type: skills.SkillTargetEnemy, Level: 3, Range: 9}}
 	loadKeyboardTestBot(t, ctx, mode)
 	ctx.Input.SetKeyCode(gpucontext.KeyTab, true)
 	botKeyPressForTest(t, mode.bot, gpucontext.KeyTab)
@@ -716,7 +717,7 @@ func TestWASDGamepadHealTargetsRespectNoShift(t *testing.T) {
 	for _, override := range []string{"none", "shift", "noshift"} {
 		t.Run(override, func(t *testing.T) {
 			ctx := chatShortcutTestContext(t)
-			conn, server := newBotTestConnection(t, 20080910)
+			conn, server := testutil.NewConnection(t, 20080910)
 			ctx.Network = conn
 			ctx.Config.Script.Path = "builtin:wasd"
 			ctx.World = worldstate.New()
@@ -727,13 +728,13 @@ func TestWASDGamepadHealTargetsRespectNoShift(t *testing.T) {
 			ctx.World.Actors[301] = worldstate.Actor{ID: 301, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 			ctx.World.Actors[302] = worldstate.Actor{ID: 302, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true, EffectState: db.EffectStateHide}
 			ctx.World.Actors[303] = worldstate.Actor{ID: 303, X: 11, Y: 20, Job: scene.ActorJobHiddenWarpNPC}
-			skill := session.Skill{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 3, Range: 9}
+			skill := session.Skill{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 3, Range: 9}
 			ctx.Session.Skills.List = []session.Skill{skill}
 			ctx.Session.Hotkeys = session.Hotkeys{Loaded: true, Version: 1, Slots: []session.HotkeySlot{
 				{Type: network.HotkeyTypeSkill, ID: uint32(skill.ID), Level: 3},
 			}}
 			mode := NewWorldMode()
-			mode.actorDeaths = map[uint32]time.Time{301: time.Now()}
+			mode.actorSystem.ActorDeaths = map[uint32]time.Time{301: time.Now()}
 			loadKeyboardTestBot(t, ctx, mode)
 			pad := input.GamepadFrame{ID: "test"}
 			pad.Axes[input.GamepadRightTrigger] = 1
@@ -781,7 +782,7 @@ func TestWASDGamepadTargetCyclingKeepsEnemyAndSkillSelectionsSeparate(t *testing
 	ctx.World.Actors[302] = worldstate.Actor{ID: 302, X: 10, Y: 21, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	ctx.World.Actors[303] = worldstate.Actor{ID: 303, X: 10, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	mode := NewWorldMode()
-	mode.actorDeaths = map[uint32]time.Time{303: time.Now()}
+	mode.actorSystem.ActorDeaths = map[uint32]time.Time{303: time.Now()}
 	loadKeyboardTestBot(t, ctx, mode)
 	pad := input.GamepadFrame{ID: "test"}
 	press := func(button input.GamepadButton, want uint32) {
@@ -804,9 +805,9 @@ func TestWASDGamepadTargetCyclingKeepsEnemyAndSkillSelectionsSeparate(t *testing
 	}
 	press(input.GamepadLeftShoulder, 300)
 
-	mode.pendingSkill = pendingSkillTarget{skill: session.Skill{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 1}}
+	mode.skillSystem.Pending = skills.PendingTarget{Skill: session.Skill{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 1}}
 	press(input.GamepadRightShoulder, ctx.Session.AccountID)
-	mode.pendingSkill = pendingSkillTarget{}
+	mode.skillSystem.Pending = skills.PendingTarget{}
 	mode.bot.HandleGamepad(ctx, 1.0/60)
 	if mode.scriptHighlight.id != 300 {
 		t.Fatal("ending skill targeting lost the selected enemy")
@@ -830,7 +831,7 @@ func TestWASDGamepadUIClickDoesNotBecomeAnAttackWhenPointerLeavesWindow(t *testi
 	for _, name := range []string{"selected", "nearest"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := chatShortcutTestContext(t)
-			conn, server := newBotTestConnection(t, 20080910)
+			conn, server := testutil.NewConnection(t, 20080910)
 			ctx.Network = conn
 			ctx.Config.Script.Path = "builtin:wasd"
 			ctx.World = worldstate.New()
@@ -898,12 +899,12 @@ func TestWASDGamepadCameraMovementAndDialogFocus(t *testing.T) {
 	}
 	zoom := mode.camera.targetZoom()
 	ctx.Input.EndFrame()
-	mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
-	mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+	mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
+	mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
 	pad.Buttons[input.GamepadSouth] = true
 	ctx.Input.SetGamepad(pad)
 	capture = mode.bot.HandleGamepad(ctx, 0.02)
-	if mode.ui.npcDialog.IsOpen() || !capture.Buttons[input.GamepadSouth] || mode.camera.yawOffset != 2 || mode.camera.targetZoom() != zoom {
+	if mode.ui.npc.Dialog.IsOpen() || !capture.Buttons[input.GamepadSouth] || mode.camera.yawOffset != 2 || mode.camera.targetZoom() != zoom {
 		t.Fatal("NPC confirmation did not take priority over camera/gameplay")
 	}
 	ctx.Input.EndFrame()
@@ -927,8 +928,8 @@ func TestWASDGamepadNPCDialogYieldsToDisconnect(t *testing.T) {
 			ctx.World = worldstate.New()
 			mode := NewWorldMode()
 			loadKeyboardTestBot(t, ctx, mode)
-			mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
-			mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+			mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
+			mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
 			login.OpenDisconnectDialog(ctx, &mode.ui.disconnectDialog, "Disconnected")
 			ctx.Input.EndFrame()
 			pad := input.GamepadFrame{ID: "test"}
@@ -938,7 +939,7 @@ func TestWASDGamepadNPCDialogYieldsToDisconnect(t *testing.T) {
 			if capture.Buttons[input.GamepadSouth] || capture.Buttons[input.GamepadEast] || capture.Pointer {
 				t.Fatal("NPC captured pointer controls belonging to the disconnect alert")
 			}
-			if !mode.ui.npcDialog.IsOpen() || !mode.ui.disconnectDialog.IsOpen() {
+			if !mode.ui.npc.Dialog.IsOpen() || !mode.ui.disconnectDialog.IsOpen() {
 				t.Fatal("controller acted on a dialog instead of leaving input to the pointer")
 			}
 
@@ -952,7 +953,7 @@ func TestWASDGamepadNPCDialogYieldsToDisconnect(t *testing.T) {
 			pad.Buttons[button] = true
 			ctx.Input.SetGamepad(pad)
 			capture = mode.bot.HandleGamepad(ctx, 1.0/60)
-			if !capture.Buttons[button] || mode.ui.npcDialog.IsOpen() {
+			if !capture.Buttons[button] || mode.ui.npc.Dialog.IsOpen() {
 				t.Fatal("NPC controls did not resume after the alert closed")
 			}
 			if mode.bot.Disabled {
@@ -966,17 +967,17 @@ func TestNPCDialogModalPriorityForKeyboardAndGamepad(t *testing.T) {
 	for _, name := range []string{"friend", "trade", "party", "pet", "homunculus", "mercenary"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := chatShortcutTestContext(t)
-			ctx.Network, _ = newBotTestConnection(t, 20080910)
+			ctx.Network, _ = testutil.NewConnection(t, 20080910)
 			ctx.Config.Script.Path = "builtin:wasd"
 			ctx.World = worldstate.New()
 			mode := NewWorldMode()
 			loadKeyboardTestBot(t, ctx, mode)
-			mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
-			mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
-			mode.ui.npcDialog.Update(ctx) // Publish before testing keyboard dispatch.
+			mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
+			mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+			mode.ui.npc.Dialog.Update(ctx) // Publish before testing keyboard dispatch.
 			modal := map[string]*gameui.ConfirmModal{
-				"friend": &mode.ui.friendRequest, "trade": &mode.ui.tradeRequest,
-				"party": &mode.ui.partyInfo, "pet": &mode.ui.petConfirm,
+				"friend": &mode.ui.social.FriendRequest, "trade": &mode.ui.social.TradeRequest,
+				"party": &mode.ui.social.PartyInfo, "pet": &mode.ui.pet.Confirm,
 				"homunculus": &mode.ui.companions.HomunculusConfirm, "mercenary": &mode.ui.companions.MercenaryConfirm,
 			}[name]
 			modal.OpenAlert(ctx, name, "Confirm", nil)
@@ -985,14 +986,14 @@ func TestNPCDialogModalPriorityForKeyboardAndGamepad(t *testing.T) {
 			pad.Buttons[input.GamepadSouth] = true
 			ctx.Input.SetGamepad(pad)
 			capture := mode.bot.HandleGamepad(ctx, 1.0/60)
-			if capture.Buttons[input.GamepadSouth] || capture.Buttons[input.GamepadEast] || !mode.ui.npcDialog.IsOpen() {
+			if capture.Buttons[input.GamepadSouth] || capture.Buttons[input.GamepadEast] || !mode.ui.npc.Dialog.IsOpen() {
 				t.Fatal("NPC stole controller input from the modal")
 			}
 			ctx.Input.SetKeyCode(gpucontext.KeyEnter, true)
 			if _, err := mode.Update(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if modal.IsOpen() || !mode.ui.npcDialog.IsOpen() {
+			if modal.IsOpen() || !mode.ui.npc.Dialog.IsOpen() {
 				t.Fatal("Enter did not confirm only the higher-priority modal")
 			}
 			// An ordinary window must not become a blanket blocker for NPCs.
@@ -1006,7 +1007,7 @@ func TestNPCDialogModalPriorityForKeyboardAndGamepad(t *testing.T) {
 			pad.Buttons[input.GamepadSouth] = true
 			ctx.Input.SetGamepad(pad)
 			capture = mode.bot.HandleGamepad(ctx, 1.0/60)
-			if !capture.Buttons[input.GamepadSouth] || mode.ui.npcDialog.IsOpen() || mode.bot.Disabled {
+			if !capture.Buttons[input.GamepadSouth] || mode.ui.npc.Dialog.IsOpen() || mode.bot.Disabled {
 				t.Fatal("NPC controller input did not resume after confirming the modal")
 			}
 		})
@@ -1019,25 +1020,25 @@ func TestNPCDialogKeyboardYieldsToGuildPrompt(t *testing.T) {
 	t.Cleanup(func() { ctx.Network.Close() })
 	ctx.World = worldstate.New()
 	mode := NewWorldMode()
-	mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
-	mode.ui.npcDialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
-	mode.ui.npcDialog.Update(ctx)
+	mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogSay, NPCID: 100, Message: "Hello"})
+	mode.ui.npc.Dialog.Apply(network.NPCDialog{Kind: network.NPCDialogClose, NPCID: 100})
+	mode.ui.npc.Dialog.Update(ctx)
 	// This modal's Update runs after NPC dispatch, so ordering alone cannot
 	// give it priority. The shared eligibility check must protect it too.
-	mode.ui.guildMemberPrompt.Open(ctx, "Guild", "Reason", "", 40)
+	mode.ui.social.GuildMemberPrompt.Open(ctx, "Guild", "Reason", "", 40)
 	ctx.Input.EndFrame()
 	ctx.Input.SetKeyCode(gpucontext.KeyEscape, true)
 	if _, err := mode.Update(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if mode.ui.guildMemberPrompt.IsOpen() || !mode.ui.npcDialog.IsOpen() {
+	if mode.ui.social.GuildMemberPrompt.IsOpen() || !mode.ui.npc.Dialog.IsOpen() {
 		t.Fatal("Escape did not cancel only the guild prompt above the NPC")
 	}
 }
 
 func TestWASDGamepadMovementFollowsRotatedCamera(t *testing.T) {
 	ctx := chatShortcutTestContext(t)
-	conn, server := newBotTestConnection(t, 20080910)
+	conn, server := testutil.NewConnection(t, 20080910)
 	ctx.Network = conn
 	ctx.Config.Script.Path = "builtin:wasd"
 	ctx.World = worldstate.New()
@@ -1056,7 +1057,7 @@ func TestWASDGamepadMovementFollowsRotatedCamera(t *testing.T) {
 
 func TestWASDGamepadDeadzoneAndFocusedChat(t *testing.T) {
 	ctx := chatShortcutTestContext(t)
-	conn, server := newBotTestConnection(t, 20080910)
+	conn, server := testutil.NewConnection(t, 20080910)
 	ctx.Network = conn
 	ctx.Config.Script.Path = "builtin:wasd"
 	ctx.World = worldstate.New()
@@ -1084,7 +1085,7 @@ func TestWASDGamepadDeadzoneAndFocusedChat(t *testing.T) {
 }
 
 func TestWASDGamepadDisconnectStopsWalking(t *testing.T) {
-	conn, server := newBotTestConnection(t, 20080910)
+	conn, server := testutil.NewConnection(t, 20080910)
 	state := input.NewState()
 	world := worldstate.New()
 	world.GAT = testutil.FlatWalkableGAT(64, 64)
@@ -1162,7 +1163,7 @@ func TestWASDControlsBeforeChatPreparation(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("battle_%t/%s", battle, tc.name), func(t *testing.T) {
 				ctx := chatShortcutTestContext(t)
-				conn, server := newBotTestConnection(t, 20080910)
+				conn, server := testutil.NewConnection(t, 20080910)
 				ctx.Network = conn
 				ctx.Session.BattleMode = battle
 				ctx.Config.Script.Path = filepath.Join("..", "scripts", "wasd.lua")
@@ -1589,7 +1590,7 @@ end
 		t.Fatal(err)
 	}
 
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 
 	sess := session.New()
 	sess.AccountID = 0x11223344
@@ -1624,7 +1625,7 @@ end
 		t.Fatal(err)
 	}
 
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	sess := session.New()
 	sess.Dead = true
 	sess.Inventory.Items = []session.InventoryItem{{
@@ -1664,7 +1665,7 @@ end
 		t.Fatal(err)
 	}
 
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	sess := session.New()
 	sess.AccountID = 0x11223344
 	sess.Selected.Name = "Kivutar"
@@ -1697,7 +1698,7 @@ end
 }
 
 func TestLuaBotCanStartLongWalkFromPhysicalKey(t *testing.T) {
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	inputState := input.NewState()
 	keyW, ok := input.KeyCodeFromName("KeyW")
 	if !ok {
@@ -1797,7 +1798,7 @@ func TestLuaBotCanStartLongWalkFromPhysicalKey(t *testing.T) {
 }
 
 func TestLuaBotCanWalkDiagonally(t *testing.T) {
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	inputState := input.NewState()
 	for _, name := range []string{"KeyW", "KeyD"} {
 		code, ok := input.KeyCodeFromName(name)
@@ -1831,7 +1832,7 @@ func TestLuaBotCanWalkDiagonally(t *testing.T) {
 }
 
 func TestLuaBotHeldSpaceLootsNearbyItemsInDistanceOrder(t *testing.T) {
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	inputState := input.NewState()
 	space, ok := input.KeyCodeFromName("Space")
 	if !ok {
@@ -1888,7 +1889,7 @@ func TestLuaBotHeldSpaceLootsNearbyItemsInDistanceOrder(t *testing.T) {
 }
 
 func TestLuaBotHeldFightsNearbyEnemiesInDistanceOrder(t *testing.T) {
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	inputState := input.NewState()
 	keyF, ok := input.KeyCodeFromName("KeyF")
 	if !ok {
@@ -1965,10 +1966,11 @@ end
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: sess.CharID, X: 10, Y: 20}
 	world.Actors[300] = worldstate.Actor{ID: 300, X: 12, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
-	mode := &WorldMode{pendingSkill: pendingSkillTarget{
-		skill:    session.Skill{ID: db.SkillACDouble, Name: "Double Strafe", Type: skillTargetEnemy, Level: 3, Range: 9},
-		maxLevel: 10,
-	}}
+	mode := &WorldMode{skillSystem: skills.System{Pending: skills.PendingTarget{
+		Skill:    session.Skill{ID: db.SkillACDouble, Name: "Double Strafe", Type: skills.SkillTargetEnemy, Level: 3, Range: 9},
+		MaxLevel: 10,
+	}},
+	}
 	bot, err := newLuaScript(client.Context{Session: sess, World: world}, mode, path)
 	if err != nil {
 		t.Fatal(err)
@@ -1990,7 +1992,7 @@ end
 }
 
 func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	inputState := input.NewState()
 	tab, ok := input.KeyCodeFromName("Tab")
 	if !ok {
@@ -2014,11 +2016,8 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 	world.Actors[301] = worldstate.Actor{ID: 301, X: 11, Y: 20, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	world.Actors[302] = worldstate.Actor{ID: 302, X: 10, Y: 21, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 	world.Actors[400] = worldstate.Actor{ID: 400, X: 10, Y: 19, ObjectType: scene.ActorObjectTypePC, HasObjectType: true}
-	skill := session.Skill{ID: db.SkillACDouble, Type: skillTargetEnemy, Level: 3, Range: 9}
-	mode := &WorldMode{
-		pendingSkill: pendingSkillTarget{skill: skill, maxLevel: 10},
-		actorDeaths:  map[uint32]time.Time{302: time.Now().Add(time.Second)},
-	}
+	skill := session.Skill{ID: db.SkillACDouble, Type: skills.SkillTargetEnemy, Level: 3, Range: 9}
+	mode := &WorldMode{skillSystem: skills.System{Pending: skills.PendingTarget{Skill: skill, MaxLevel: 10}}, actorSystem: actors.System{ActorDeaths: map[uint32]time.Time{302: time.Now().Add(time.Second)}}}
 	bot, err := newLuaScript(
 		client.Context{Input: inputState, Network: networkClient, Session: sess, World: world},
 		mode,
@@ -2052,7 +2051,7 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 		for _, code := range []input.KeyCode{tab, enter} {
 			inputState.SetKeyCode(code, true)
 			botKeyPressForTest(t, bot, code)
-			if !inputState.KeyCodeJustPressed(code) || mode.scriptHighlight.id != 301 || mode.pendingSkill.skill.ID != skill.ID {
+			if !inputState.KeyCodeJustPressed(code) || mode.scriptHighlight.id != 301 || mode.skillSystem.Pending.Skill.ID != skill.ID {
 				t.Fatalf("%s+%s changed skill targeting or consumed the shortcut", name, input.KeyCodeName(code))
 			}
 			inputState.SetKeyCode(code, false)
@@ -2090,8 +2089,8 @@ func TestWASDLuaCyclesAndUsesPendingSkillTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	readBotTestPackets(t, serverConn, network.BuildUseSkillToIDPacketForClientDate(skill.ID, uint16(skill.Level), 301, 20080910))
-	if mode.pendingSkill.skill.ID != 0 {
-		t.Fatalf("pending skill remained after Enter: %+v", mode.pendingSkill)
+	if mode.skillSystem.Pending.Skill.ID != 0 {
+		t.Fatalf("pending skill remained after Enter: %+v", mode.skillSystem.Pending)
 	}
 	if mode.scriptHighlight.id != 0 {
 		t.Fatalf("script highlight remained after Enter: %+v", mode.scriptHighlight)
@@ -2114,9 +2113,10 @@ func TestWASDLuaCyclesFriendlySkillTargets(t *testing.T) {
 	world.Player = worldstate.Actor{ID: sess.CharID, X: 10, Y: 20}
 	world.Actors[300] = worldstate.Actor{ID: 300, Name: "Alice", X: 11, Y: 20, ObjectType: scene.ActorObjectTypePC, HasObjectType: true}
 	world.Actors[301] = worldstate.Actor{ID: 301, Name: "Lif", X: 12, Y: 20, ObjectType: scene.ActorObjectTypeHomunculus, HasObjectType: true}
-	mode := &WorldMode{pendingSkill: pendingSkillTarget{
-		skill: session.Skill{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 7, Range: 9},
-	}}
+	mode := &WorldMode{skillSystem: skills.System{Pending: skills.PendingTarget{
+		Skill: session.Skill{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 7, Range: 9},
+	}},
+	}
 	bot, err := newLuaScript(
 		client.Context{Input: inputState, Session: sess, World: world},
 		mode,
@@ -2157,7 +2157,7 @@ func TestWASDHealReverseCycleThenConfirm(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := chatShortcutTestContext(t)
-			conn, server := newBotTestConnection(t, 20080910)
+			conn, server := testutil.NewConnection(t, 20080910)
 			ctx.Network = conn
 			ctx.Config.Script.Path = "builtin:wasd"
 			ctx.Session.AccountID, ctx.Session.CharID = 100, 200
@@ -2166,8 +2166,8 @@ func TestWASDHealReverseCycleThenConfirm(t *testing.T) {
 			ctx.World.Player = worldstate.Actor{ID: 200, X: 10, Y: 20}
 			ctx.World.Actors[300] = worldstate.Actor{ID: 300, X: 11, Y: 20, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}
 			mode := NewWorldMode()
-			skill := session.Skill{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 3, Range: 9}
-			mode.pendingSkill = pendingSkillTarget{skill: skill}
+			skill := session.Skill{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 3, Range: 9}
+			mode.skillSystem.Pending = skills.PendingTarget{Skill: skill}
 			loadKeyboardTestBot(t, ctx, mode)
 			tab, _ := input.KeyCodeFromName("Tab")
 			shift, _ := input.KeyCodeFromName(tc.shift)
@@ -2209,9 +2209,10 @@ func TestWASDLuaLeavesUnrelatedTargetingKeysAlone(t *testing.T) {
 	if !ok {
 		t.Fatal("Tab was not recognized")
 	}
-	mode := &WorldMode{pendingSkill: pendingSkillTarget{
-		skill: session.Skill{ID: db.SkillACDouble, Type: skillTargetEnemy, Level: 3, Range: 9},
-	}}
+	mode := &WorldMode{skillSystem: skills.System{Pending: skills.PendingTarget{
+		Skill: session.Skill{ID: db.SkillACDouble, Type: skills.SkillTargetEnemy, Level: 3, Range: 9},
+	}},
+	}
 	bot, err := newLuaScript(
 		client.Context{Input: inputState},
 		mode,
@@ -2233,8 +2234,8 @@ func TestWASDLuaLeavesUnrelatedTargetingKeysAlone(t *testing.T) {
 
 	inputState.SetKeyCode(enter, false)
 	inputState.EndFrame()
-	mode.pendingSkill = pendingSkillTarget{
-		skill: session.Skill{ID: 18, Type: skillTargetPlace, Level: 1, Range: 9},
+	mode.skillSystem.Pending = skills.PendingTarget{
+		Skill: session.Skill{ID: 18, Type: skills.SkillTargetPlace, Level: 1, Range: 9},
 	}
 	inputState.SetKeyCode(tab, true)
 	botKeyPressForTest(t, bot, tab)
@@ -2247,7 +2248,7 @@ func TestWASDLuaLeavesUnrelatedTargetingKeysAlone(t *testing.T) {
 }
 
 func TestExampleLuaBotUsesPotionRestsAndResumes(t *testing.T) {
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	sess := session.New()
 	sess.AccountID = 0x11223344
 	sess.Selected.Name = "Kivutar"
@@ -2328,7 +2329,7 @@ end
 	sess.CharID = 2000000
 	sess.Skills.List = []session.Skill{{
 		ID:    db.SkillACDouble,
-		Type:  skillTargetEnemy,
+		Type:  skills.SkillTargetEnemy,
 		Level: 10,
 		Range: 9,
 		Name:  "Double Strafe",
@@ -2348,8 +2349,8 @@ end
 		t.Fatal(err)
 	}
 
-	if mode.pendingSkill.targetID != 300 || mode.pendingSkill.skill.ID != db.SkillACDouble {
-		t.Fatalf("pending skill = %+v, want AC_DOUBLE target 300", mode.pendingSkill)
+	if mode.skillSystem.Pending.TargetID != 300 || mode.skillSystem.Pending.Skill.ID != db.SkillACDouble {
+		t.Fatalf("pending skill = %+v, want AC_DOUBLE target 300", mode.skillSystem.Pending)
 	}
 }
 
@@ -2366,11 +2367,11 @@ end
 		t.Fatal(err)
 	}
 
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	sess := session.New()
 	sess.AccountID = 2000000
 	sess.CharID = 150000
-	sess.Skills.List = []session.Skill{{ID: db.SkillALAngelus, Type: skillTargetSelf, Level: 5, Name: "Angelus"}}
+	sess.Skills.List = []session.Skill{{ID: db.SkillALAngelus, Type: skills.SkillTargetSelf, Level: 5, Name: "Angelus"}}
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: sess.AccountID, X: 10, Y: 20}
 	ctx := client.Context{Session: sess, Network: networkClient, World: world}
@@ -2406,12 +2407,12 @@ end
 		t.Fatal(err)
 	}
 
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	sess := session.New()
 	sess.AccountID = 2000000
 	sess.Skills.List = []session.Skill{{
 		ID:    db.SkillALHeal,
-		Type:  skillTargetFriend,
+		Type:  skills.SkillTargetFriend,
 		Level: 7,
 		Range: 9,
 		Name:  "Heal",
@@ -2459,12 +2460,12 @@ end
 		t.Fatal(err)
 	}
 
-	networkClient, serverConn := newBotTestConnection(t, 20080910)
+	networkClient, serverConn := testutil.NewConnection(t, 20080910)
 	sess := session.New()
 	sess.AccountID = 2000000
 	sess.Skills.List = []session.Skill{
-		{ID: db.SkillAMPotionpitcher, Type: skillTargetFriend, Level: 5, Range: 9, Name: "Potion Pitcher"},
-		{ID: db.SkillALBlessing, Type: skillTargetFriend, Level: 10, Range: 9, Name: "Blessing"},
+		{ID: db.SkillAMPotionpitcher, Type: skills.SkillTargetFriend, Level: 5, Range: 9, Name: "Potion Pitcher"},
+		{ID: db.SkillALBlessing, Type: skills.SkillTargetFriend, Level: 10, Range: 9, Name: "Blessing"},
 	}
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: sess.AccountID, X: 10, Y: 20}
@@ -2506,8 +2507,8 @@ end
 	sess := session.New()
 	sess.AccountID = 2000000
 	sess.Skills.List = []session.Skill{
-		{ID: db.SkillALHeal, Type: skillTargetFriend, Level: 7, Range: 9, Name: "Heal"},
-		{ID: db.SkillSMBash, Type: skillTargetEnemy, Level: 10, Range: 1, Name: "Bash"},
+		{ID: db.SkillALHeal, Type: skills.SkillTargetFriend, Level: 7, Range: 9, Name: "Heal"},
+		{ID: db.SkillSMBash, Type: skills.SkillTargetEnemy, Level: 10, Range: 1, Name: "Bash"},
 	}
 	world := worldstate.New()
 	world.Player = worldstate.Actor{ID: sess.AccountID, X: 10, Y: 20}
@@ -2532,7 +2533,7 @@ func TestLuaBotDoesNotExposeDyingEnemies(t *testing.T) {
 	world.Player = worldstate.Actor{ID: sess.CharID, X: 10, Y: 20}
 	world.Actors[300] = worldstate.Actor{ID: 300, Name: "Poring", X: 12, Y: 21, ObjectType: scene.ActorObjectTypeMob, HasObjectType: true}
 
-	mode := &WorldMode{actorDeaths: map[uint32]time.Time{300: time.Now().Add(time.Second)}}
+	mode := &WorldMode{actorSystem: actors.System{ActorDeaths: map[uint32]time.Time{300: time.Now().Add(time.Second)}}}
 	path := scriptTestFile(t, `function tick() assert(#goro.enemies() == 0) end`)
 	script, err := newLuaScript(client.Context{Session: sess, World: world}, mode, path)
 	if err != nil {
@@ -2542,54 +2543,6 @@ func TestLuaBotDoesNotExposeDyingEnemies(t *testing.T) {
 	if err := script.Tick(); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func newBotTestConnection(t *testing.T, clientDate int) (*network.Client, net.Conn) {
-	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	accepted := make(chan net.Conn, 1)
-	acceptErr := make(chan error, 1)
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			acceptErr <- err
-			return
-		}
-		accepted <- conn
-	}()
-
-	networkClient := network.NewClient(clientDate, false)
-	port := listener.Addr().(*net.TCPAddr).Port
-	if err := networkClient.Connect(context.Background(), "127.0.0.1", port); err != nil {
-		listener.Close()
-		t.Fatal(err)
-	}
-
-	var serverConn net.Conn
-	select {
-	case serverConn = <-accepted:
-	case err := <-acceptErr:
-		networkClient.Close()
-		listener.Close()
-		t.Fatal(err)
-	case <-time.After(time.Second):
-		networkClient.Close()
-		listener.Close()
-		t.Fatal("timed out accepting bot test connection")
-	}
-	if err := listener.Close(); err != nil {
-		networkClient.Close()
-		serverConn.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		networkClient.Close()
-		serverConn.Close()
-	})
-	return networkClient, serverConn
 }
 
 var readBotTestPackets = testutil.ReadPackets

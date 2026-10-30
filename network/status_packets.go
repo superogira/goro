@@ -7,7 +7,8 @@ import (
 )
 
 const (
-	PacketZCNotifyExp uint16 = 0x07F6
+	PacketZCAttackRange uint16 = 0x013A
+	PacketZCNotifyExp   uint16 = 0x07F6
 
 	StatusSpeed         uint16 = 0
 	StatusBaseExp       uint16 = 1
@@ -126,6 +127,16 @@ type StatusEffectChange struct {
 	Duration    time.Duration
 	HasValues   bool
 	Values      [3]int32
+}
+
+func ParseAttackRange(packet Packet) (int, bool, error) {
+	if packet.ID != PacketZCAttackRange {
+		return 0, false, nil
+	}
+	if len(packet.Data) < 4 {
+		return 0, false, fmt.Errorf("ZC_ATTACK_RANGE too short: %d", len(packet.Data))
+	}
+	return int(int16(binary.LittleEndian.Uint16(packet.Data[2:4]))), true, nil
 }
 
 func ParseParameterChange(packet Packet) (ParameterChange, bool, error) {

@@ -35,7 +35,7 @@ func initSoulLinkerProjectile(ctx client.Context, effect *Instance) {
 	effect.HasActorTransform = true
 }
 
-// dhxj PrimSTIN: three startup ticks, nine accelerating fade-in ticks,
+// Estin uses three startup ticks, nine accelerating fade-in ticks,
 // then faster acceleration while fading. Distances are converted to cells.
 func EstinHead(process int) (distance, alpha float64) {
 	if process <= 0 {

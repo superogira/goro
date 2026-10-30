@@ -134,11 +134,11 @@ func (m *WorldMode) processNonPCMotionSound(ctx client.Context, actor worldstate
 	if actor.ID == 0 || res.HasPlayerJobToken(int(actor.Job)) || !actorWithinSoundRange(ctx, actor, now) {
 		return
 	}
-	view := m.nonPCSpriteView(ctx, actor)
+	view := m.actors().NonPCSpriteView(ctx, actor)
 	if view == nil || view.Act == nil {
 		return
 	}
-	state := m.nonPCSpriteState(actor, now)
+	state := m.actors().NonPCSpriteState(actor, now)
 	switch state.ActionFamily {
 	case sprites.ActionNonPCAttack, sprites.ActionNonPCHurt:
 		return

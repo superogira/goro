@@ -73,6 +73,9 @@ func NewWithResources(cfg config.Config, resource *res.Manager) *Game {
 	g.session.NoShift = cfg.Gameplay.NoShift
 	g.session.NoCtrl = cfg.Gameplay.NoCtrl
 	g.session.LessEffects = cfg.Gameplay.LessEffects
+	g.session.NoEffects = cfg.Gameplay.NoEffects
+	g.session.FogEnabled = cfg.Fog.Enabled
+	g.session.SimpleAura = cfg.Gameplay.SimpleAura
 	g.session.SnapTargets = cfg.Gameplay.SnapTargets
 	g.session.SnapItems = cfg.Gameplay.SnapItems
 	g.session.SnapRadius = cfg.Gameplay.SnapRadius

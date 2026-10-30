@@ -4,10 +4,49 @@ import (
 	"testing"
 
 	uiapp "github.com/gogpu/ui/app"
+	"github.com/gogpu/ui/core/textfield"
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/uitest"
 	"github.com/kivutar/goro/client"
 )
+
+func TestPasswordPromptPreservesPasswordAndResetsForText(t *testing.T) {
+	var window TextPromptWindow
+	ctx := client.Context{ScreenW: 800, ScreenH: 600}
+	for _, password := range []string{"", " pass ", "12345678"} {
+		window.OpenPassword(ctx, "Private room", "Password", 8)
+		if window.inputType != textfield.TypePassword {
+			t.Fatal("password is not masked")
+		}
+		window.value = password
+		window.submit(ctx)
+		if action := window.PopAction(); !action.Submitted || action.Text != password {
+			t.Fatalf("password action = %+v", action)
+		}
+	}
+	window.Open(ctx, "Message", "Message", "", 79)
+	window.submit(ctx)
+	if !window.IsOpen() || window.inputType != textfield.TypeText || window.PopAction().Submitted {
+		t.Fatal("password mode leaked into a regular text prompt")
+	}
+}
+
+func TestPasswordPromptCancelButtons(t *testing.T) {
+	for _, index := range []int{0, 2} {
+		ctx, _, app := newWindowInstanceTest()
+		var window TextPromptWindow
+		window.OpenPassword(ctx, "Private room", "Password", 8)
+		app.Frame()
+		app.Window().DrawTo(&uitest.MockCanvas{})
+		buttons := collectEscapeMenuButtons(window.content)
+		point := buttons[index].ScreenBounds().Center()
+		app.Window().HandleEvent(uitest.Click(point.X, point.Y))
+		app.Window().HandleEvent(uitest.Release(point.X, point.Y))
+		if action := window.PopAction(); !action.Cancelled || action.Submitted || window.IsOpen() {
+			t.Fatalf("button %d: action = %+v", index, action)
+		}
+	}
+}
 
 func TestTextPromptWindowSubmitPublishesAction(t *testing.T) {
 	var window TextPromptWindow

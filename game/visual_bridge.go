@@ -4,12 +4,12 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
-	"github.com/kivutar/goro/db"
 	"github.com/kivutar/goro/game/effects"
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/game/sprites"
+	"github.com/kivutar/goro/glog"
+	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/render"
-	worldstate "github.com/kivutar/goro/world"
 )
 
 func (m *WorldMode) effects() *effects.System {
@@ -53,16 +53,6 @@ func (m *WorldMode) EffectSpriteTexture(image *render.Image) *render.Image {
 	return m.spriteTexture(image)
 }
 
-func (m *WorldMode) starFusionHeight(actor worldstate.Actor, now time.Time) float64 {
-	active := false
-	job := scene.ActorVisualJob(actor)
-	if job == db.JobStar2 || job == db.JobStar2B {
-		anim, ok := m.actorAnimation(actor.ID, now)
-		active = ok && anim.actionFamily != scene.SpriteActionIdle && anim.actionFamily != scene.SpriteActionWalk
-	}
-	return m.effects().FusionHeight(actor, now, active)
-}
-
 func (m *WorldMode) spriteTexture(src *render.Image) *render.Image {
 	if !m.mapScene.UpscaleTextures || src == nil {
 		return src
@@ -71,4 +61,44 @@ func (m *WorldMode) spriteTexture(src *render.Image) *render.Image {
 		m.spriteUpscaler = sprites.NewUpscaler()
 	}
 	return m.spriteUpscaler.Texture(src, m.mapScene.Images.Own)
+}
+
+func (m *WorldMode) applySpecialEffectNotify(ctx client.Context, notify network.SpecialEffectNotify) {
+	effectID := effects.SpecialEffectID(notify.EffectID)
+	if effectID <= 0 {
+		return
+	}
+	if scene.IsLocalActor(ctx, notify.AID) {
+		switch notify.EffectID {
+		case network.SpecialEffectBaseLevelUp,
+			network.SpecialEffectSuperNoviceBaseLevelUp,
+			network.SpecialEffectTaekwonBaseLevelUp:
+			m.ui.levelUpNotifications.NotifyBase()
+		case network.SpecialEffectJobLevelUp,
+			network.SpecialEffectSuperNoviceJobLevelUp:
+			m.ui.levelUpNotifications.NotifyJob()
+		}
+	}
+	if effectID == effects.NPCStop2Del {
+		m.effects().Remove(effects.NPCStop2, notify.AID)
+		return
+	}
+	spec, _ := effects.Lookup(effectID)
+	if effects.CraftingResultSpecialEffect(notify.EffectID) {
+		m.effects().ReplaceCraftingResultEffect(ctx, notify, effectID, spec)
+		return
+	}
+	// Each Kaupe dodge is a separate hit, even while an earlier dodge fades.
+	if effectID != effects.StormKick4 && m.effects().HasActive(effectID, notify.AID, time.Now()) {
+		return
+	}
+	if m.effects().Add(ctx, effectID, notify.AID) {
+		glog.Debugf("special effect actor=%d special=%d effect=%d sfx=%v", notify.AID, notify.EffectID, effectID, spec.Sfx)
+	}
+}
+
+func (m *WorldMode) applyMVPNotify(ctx client.Context, notify network.MVPNotify) {
+	if m.effects().Add(ctx, effects.Mvp, notify.AID) {
+		glog.Debugf("mvp effect actor=%d effect=%d", notify.AID, effects.Mvp)
+	}
 }

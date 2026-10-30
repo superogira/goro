@@ -75,10 +75,10 @@ func (w *StorageWindow) OpenWindow(ctx Context) {
 	w.setSelectedRow(-1)
 	w.snapshot = w.storageSnapshot(ctx.Session)
 	x, y := storageDefaultPosition(ctx)
+	w.SetAutoPosition(x, y)
 	if !w.IsOpen() {
-		w.OpenAt(x, y, w.widgetTree(ctx, nil))
+		w.Open(ctx, w.widgetTree(ctx, nil))
 	} else {
-		w.SetAutoPosition(x, y)
 		w.SetContent(w.widgetTree(ctx, w.itemInfo))
 	}
 	w.Publish(ctx)

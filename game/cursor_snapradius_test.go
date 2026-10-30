@@ -1,6 +1,7 @@
 package game
 
 import (
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/scene"
 	"math"
 	"testing"
@@ -49,10 +50,10 @@ func TestPickBoundsGrowWithMultiplier(t *testing.T) {
 	if !pointInGroundItemPickBounds(itemX, 100, 100, 100, 1*2) {
 		t.Fatal("25px offset should hit the doubled item pick box")
 	}
-	if pointInActorPickBounds(actorX, 100, 100, 100, 1) {
+	if actors.PointInActorPickBounds(actorX, 100, 100, 100, 1) {
 		t.Fatal("60px offset should miss the base actor pick box")
 	}
-	if !pointInActorPickBounds(actorX, 100, 100, 100, 1*2) {
+	if !actors.PointInActorPickBounds(actorX, 100, 100, 100, 1*2) {
 		t.Fatal("60px offset should hit the doubled actor pick box")
 	}
 }

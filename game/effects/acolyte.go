@@ -12,7 +12,7 @@ import (
 )
 
 func HealEffectID(amount uint32) int {
-	// HighPriest 2008 uses EXIT for small heals, not HEAL4 as in dhxj.
+	// Small heals use EXIT.
 	switch {
 	case amount < 200:
 		return Exit

@@ -5,8 +5,83 @@ import (
 	"testing"
 
 	"github.com/gogpu/gpucontext"
+	uiapp "github.com/gogpu/ui/app"
+	"github.com/gogpu/ui/core/textfield"
+	"github.com/gogpu/ui/primitives"
+	"github.com/gogpu/ui/uitest"
 	"github.com/kivutar/goro/input"
+	"github.com/kivutar/goro/ui/rotheme"
 )
+
+func TestLoadingBlocksUIInputWithoutLosingPhysicalState(t *testing.T) {
+	source := &fanoutEventSource{}
+	events := newFanoutEventSource(source)
+	uiEvents := newFanoutEventSource(events)
+	app := uiapp.New(uiapp.WithEventSource(uiEvents))
+	state := input.NewState()
+	wireInput(events, state)
+	clicks := 0
+	button := rotheme.Button("Status", func() { clicks++ })
+	field := rotheme.TextField("", textfield.TypeText, nil, nil)
+	app.SetRoot(primitives.Box(button, field).Width(200))
+	app.Frame()
+	app.Window().DrawTo(&uitest.MockCanvas{})
+	point := button.ScreenBounds().Center()
+	x, y := float64(point.X), float64(point.Y)
+	click := func(controller bool) {
+		events.setMouseButton(controller, gpucontext.MouseButtonLeft, true, x, y)
+		events.setMouseButton(controller, gpucontext.MouseButtonLeft, false, x, y)
+	}
+	click(false)
+	if clicks != 1 {
+		t.Fatal("fixture did not deliver a real UI click")
+	}
+
+	// A press preceding loading must not activate on release after loading.
+	events.setMouseButton(false, gpucontext.MouseButtonLeft, true, x, y)
+	unblock := (uiAppBridge{App: app, events: uiEvents}).BlockInput()
+	app.Window().Context().RequestFocus(field)
+	clicks = 0
+	events.setMouseButton(false, gpucontext.MouseButtonLeft, false, x, y)
+	click(false)
+	click(true)
+	events.dispatchKeyPress(gpucontext.KeyA, 0)
+	for _, fn := range source.textInput {
+		fn("a")
+	}
+	if clicks != 0 || field.Text() != "" {
+		t.Fatal("loading allowed a hidden button or text field to react")
+	}
+	if !state.KeyCodeDown(gpucontext.KeyA) || state.TextInput() != "a" || state.MouseX != int(x+0.5) || state.MousePressed(input.MouseButtonLeft) {
+		t.Fatal("blocking UI lost the physical input state")
+	}
+	resized := false
+	uiEvents.OnResize(func(int, int) { resized = true })
+	for _, fn := range source.resize {
+		fn(640, 480)
+	}
+	if !resized {
+		t.Fatal("loading suppressed window resize events")
+	}
+
+	// Hold a click across the end of loading; its release must not click.
+	events.setMouseButton(false, gpucontext.MouseButtonLeft, true, x, y)
+	unblock()
+	events.setMouseButton(false, gpucontext.MouseButtonLeft, false, x, y)
+	events.dispatchKeyRelease(gpucontext.KeyA, 0)
+	if clicks != 0 || state.KeyCodeDown(gpucontext.KeyA) || state.MousePressed(input.MouseButtonLeft) {
+		t.Fatalf("input was stuck or activated when loading ended: clicks=%d key=%v mouse=%v", clicks, state.KeyCodeDown(gpucontext.KeyA), state.MousePressed(input.MouseButtonLeft))
+	}
+	click(false)
+	click(true)
+	app.Window().Context().RequestFocus(field)
+	for _, fn := range source.textInput {
+		fn("b")
+	}
+	if clicks != 2 || field.Text() != "b" {
+		t.Fatalf("UI did not resume: clicks=%d text=%q", clicks, field.Text())
+	}
+}
 
 func TestFanoutPreparesEditingKeysBeforeDispatch(t *testing.T) {
 	source := &fanoutEventSource{}

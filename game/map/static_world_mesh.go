@@ -362,9 +362,9 @@ func addGNDRetainedSurface(m *System, manager *res.Manager, gnd *res.GND, surfac
 
 // Use the draw-time loaders, preserving resource lookup and transparency rules.
 // Only the current map retains these images; no cross-map texture cache grows.
-func (m *System) PreloadTextures(ctx client.Context) {
+func (m *System) TextureLoadTasks(ctx client.Context) []func() {
 	if ctx.Config.Headless || ctx.Resources == nil || ctx.World == nil {
-		return
+		return nil
 	}
 	m.UpscaleTextures = ctx.Config.Render.TextureUpscaling
 	if ctx.Runtime != nil {
@@ -377,14 +377,17 @@ func (m *System) PreloadTextures(ctx client.Context) {
 			m.Images.Uploads = append(m.Images.Uploads, img)
 		}
 	}
+	var tasks []func()
 	gnd, rsw := ctx.World.GND, ctx.World.RSW
 	if gnd != nil {
 		for _, name := range gnd.Textures {
-			add(m.groundTexture(ctx.Resources, name))
+			tasks = append(tasks, func() { add(m.groundTexture(ctx.Resources, name)) })
 		}
-		atlas := buildGNDLightmapAtlas(gnd)
-		add(m.Images.Own(atlas.image))
-		m.gndMeshCache = &gndRetainedMeshCache{gnd: gnd, rsw: rsw, lightmapAtlas: atlas, chunks: make(map[gndRetainedChunkKey][]retainedWorldMesh)}
+		tasks = append(tasks, func() {
+			atlas := buildGNDLightmapAtlas(gnd)
+			add(m.Images.Own(atlas.image))
+			m.gndMeshCache = &gndRetainedMeshCache{gnd: gnd, rsw: rsw, lightmapAtlas: atlas, chunks: make(map[gndRetainedChunkKey][]retainedWorldMesh)}
+		})
 	}
 	if rsw != nil {
 		models := make(map[*res.RSM]bool)
@@ -395,7 +398,7 @@ func (m *System) PreloadTextures(ctx client.Context) {
 			}
 			models[model] = true
 			for _, name := range model.Textures {
-				add(m.groundTexture(ctx.Resources, name))
+				tasks = append(tasks, func() { add(m.groundTexture(ctx.Resources, name)) })
 			}
 		}
 	}
@@ -403,10 +406,11 @@ func (m *System) PreloadTextures(ctx client.Context) {
 		for _, cell := range gnd.Cells {
 			if cell.Top >= 0 && waterVisibleForCell(cell, water) {
 				for frame := 0; frame < 32; frame++ {
-					add(m.waterTexture(ctx.Resources, int(water.Type), frame))
+					tasks = append(tasks, func() { add(m.waterTexture(ctx.Resources, int(water.Type), frame)) })
 				}
 				break
 			}
 		}
 	}
+	return tasks
 }

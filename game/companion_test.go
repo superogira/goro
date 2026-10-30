@@ -3,12 +3,16 @@ package game
 import (
 	"testing"
 
+	"github.com/kivutar/goro/game/pet"
+
 	"github.com/gogpu/gpucontext"
 	"github.com/gogpu/ui/core/textfield"
 	"github.com/gogpu/ui/widget"
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/effects"
+	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/game/sprites"
 	"github.com/kivutar/goro/input"
@@ -53,7 +57,7 @@ func TestHomunculusParamChangeUpdatesSessionAndLife(t *testing.T) {
 	if sess.Homunculus.HP != 18 || sess.Homunculus.MaxSP != 44 || sess.Homunculus.Level != 13 || sess.Homunculus.Exp != 5_000_000_000 || sess.Homunculus.MaxExp != 6_000_000_000 || sess.Homunculus.Skills.Points != 7 {
 		t.Fatalf("homunculus session = %+v", sess.Homunculus)
 	}
-	if life := mode.actorLife[300]; life.hp != 18 || life.maxHP != 20 || life.sp != 5 || life.maxSP != 44 || !life.hasSP {
+	if life := mode.battleSystem.ActorLife[300]; life.HP != 18 || life.MaxHP != 20 || life.SP != 5 || life.MaxSP != 44 || !life.HasSP {
 		t.Fatalf("actor life = %+v", life)
 	}
 	if actor := ctx.World.Actors[300]; actor.Speed != 150 || actor.AttackRange != 2 {
@@ -84,11 +88,11 @@ func TestHomunculusPropertyStoresDisplayLifeAndHunger(t *testing.T) {
 		AttackRange: 4,
 	})
 
-	life, ok := mode.actorLifeForDisplay(ctx, ctx.World.Actors[300])
+	life, ok := mode.battle().ActorLifeForDisplay(ctx, ctx.World.Actors[300])
 	if !ok {
 		t.Fatal("homunculus display life missing")
 	}
-	if life.hp != 123 || life.maxHP != 456 || life.sp != 78 || life.maxSP != 90 || !life.hasSP || life.hunger != 62 || life.maxHunger != 100 || !life.hasHunger || !life.friendly {
+	if life.HP != 123 || life.MaxHP != 456 || life.SP != 78 || life.MaxSP != 90 || !life.HasSP || life.Hunger != 62 || life.MaxHunger != 100 || !life.HasHunger || !life.Friendly {
 		t.Fatalf("homunculus display life = %+v", life)
 	}
 	if actor := ctx.World.Actors[300]; actor.Name != "Pipou" || actor.AttackRange != 4 {
@@ -107,7 +111,7 @@ func TestHomunculusActorEntryUsesKnownSessionName(t *testing.T) {
 		World:   worldstate.New(),
 	}
 
-	upsertNetworkActor(ctx, network.ActorEntry{
+	actors.UpsertNetworkActor(ctx, network.ActorEntry{
 		ID:            300,
 		Job:           6002,
 		X:             10,
@@ -133,7 +137,7 @@ func TestHomunculusActorEntryDoesNotUseSessionNameForDifferentID(t *testing.T) {
 		World:   worldstate.New(),
 	}
 
-	upsertNetworkActor(ctx, network.ActorEntry{
+	actors.UpsertNetworkActor(ctx, network.ActorEntry{
 		ID:            301,
 		Job:           6002,
 		X:             10,
@@ -193,11 +197,11 @@ func TestHomunculusStateChangeUpdatesDisplayHunger(t *testing.T) {
 
 	mode.companions().ApplyHomunculusStateChange(ctx, network.HomunculusStateChange{GID: 300, State: 2, Data: 24})
 
-	life, ok := mode.actorLifeForDisplay(ctx, ctx.World.Actors[300])
+	life, ok := mode.battle().ActorLifeForDisplay(ctx, ctx.World.Actors[300])
 	if !ok {
 		t.Fatal("homunculus display life missing")
 	}
-	if sess.Homunculus.Hunger != 24 || life.hunger != 24 || life.maxHunger != 100 || !life.hasHunger {
+	if sess.Homunculus.Hunger != 24 || life.Hunger != 24 || life.MaxHunger != 100 || !life.HasHunger {
 		t.Fatalf("homunculus hunger session=%+v life=%+v", sess.Homunculus, life)
 	}
 }
@@ -301,7 +305,7 @@ func TestPendingHomunculusDeleteVanishClearsSession(t *testing.T) {
 	mode.ui.companions.HomunculusInfo.OpenInfo(ctx, sess.Homunculus)
 	mode.ui.companions.HomunculusSkill.Open(ctx, nil)
 
-	mode.applyActorVanish(ctx, network.ActorVanish{ID: 300, Reason: actorVanishOutOfSight})
+	mode.applyActorVanish(ctx, network.ActorVanish{ID: 300, Reason: actors.ActorVanishOutOfSight})
 
 	if sess.Homunculus.Active || sess.Homunculus.ID != 0 || sess.Homunculus.Name != "" {
 		t.Fatalf("homunculus session after delete = %+v", sess.Homunculus)
@@ -338,7 +342,7 @@ func TestHomunculusVanishWithoutDeleteKeepsSession(t *testing.T) {
 		},
 	}
 
-	mode.applyActorVanish(ctx, network.ActorVanish{ID: 300, Reason: actorVanishOutOfSight})
+	mode.applyActorVanish(ctx, network.ActorVanish{ID: 300, Reason: actors.ActorVanishOutOfSight})
 
 	if !sess.Homunculus.Active || sess.Homunculus.ID != 300 {
 		t.Fatalf("homunculus session should survive non-delete vanish: %+v", sess.Homunculus)
@@ -388,7 +392,7 @@ func TestApplyMercenaryParamChangeUpdatesRobrowserStatusFields(t *testing.T) {
 	if got := sess.Mercenary.Faith; got != 321 {
 		t.Fatalf("mercenary faith = %d, want 321", got)
 	}
-	if life, ok := mode.actorLife[400]; !ok || life.hp != 77 || life.sp != 12 || !life.hasSP {
+	if life, ok := mode.battleSystem.ActorLife[400]; !ok || life.HP != 77 || life.SP != 12 || !life.HasSP {
 		t.Fatalf("actor life = %+v ok=%t, want updated mercenary life", life, ok)
 	}
 	if actor := ctx.World.Actors[400]; actor.AttackRange != 2 {
@@ -419,11 +423,11 @@ func TestMercenaryPropertyStoresDisplayLife(t *testing.T) {
 		AttackRange: 2,
 	})
 
-	life, ok := mode.actorLifeForDisplay(ctx, ctx.World.Actors[400])
+	life, ok := mode.battle().ActorLifeForDisplay(ctx, ctx.World.Actors[400])
 	if !ok {
 		t.Fatal("mercenary display life missing")
 	}
-	if life.hp != 123 || life.maxHP != 456 || life.sp != 78 || life.maxSP != 90 || !life.hasSP || !life.friendly {
+	if life.HP != 123 || life.MaxHP != 456 || life.SP != 78 || life.MaxSP != 90 || !life.HasSP || !life.Friendly {
 		t.Fatalf("mercenary display life = %+v", life)
 	}
 	if actor := ctx.World.Actors[400]; actor.Name != "David" || actor.AttackRange != 2 {
@@ -455,11 +459,11 @@ func TestMercenaryLifeForDisplayUsesCachedParamChanges(t *testing.T) {
 	mode.companions().ApplyMercenaryParamChange(ctx, network.MercenaryParamChange{Param: network.StatusHP, Value: 77})
 	mode.companions().ApplyMercenaryParamChange(ctx, network.MercenaryParamChange{Param: network.StatusSP, Value: 12})
 
-	life, ok := mode.actorLifeForDisplay(ctx, ctx.World.Actors[400])
+	life, ok := mode.battle().ActorLifeForDisplay(ctx, ctx.World.Actors[400])
 	if !ok {
 		t.Fatal("mercenary display life missing")
 	}
-	if life.hp != 77 || life.maxHP != 200 || life.sp != 12 || life.maxSP != 60 || !life.hasSP || !life.friendly {
+	if life.HP != 77 || life.MaxHP != 200 || life.SP != 12 || life.MaxSP != 60 || !life.HasSP || !life.Friendly {
 		t.Fatalf("mercenary display life = %+v", life)
 	}
 }
@@ -487,7 +491,7 @@ func TestPendingMercenaryDeleteVanishClearsSession(t *testing.T) {
 	mode.ui.companions.MercenaryInfo.OpenInfo(ctx, sess.Mercenary)
 	mode.ui.companions.MercenarySkill.Open(ctx, nil)
 
-	mode.applyActorVanish(ctx, network.ActorVanish{ID: 400, Reason: actorVanishOutOfSight})
+	mode.applyActorVanish(ctx, network.ActorVanish{ID: 400, Reason: actors.ActorVanishOutOfSight})
 
 	if sess.Mercenary.Active || sess.Mercenary.ID != 0 || sess.Mercenary.Name != "" {
 		t.Fatalf("mercenary session after delete = %+v", sess.Mercenary)
@@ -512,31 +516,31 @@ func TestMercenaryActionFamiliesUseGuildWeaponActions(t *testing.T) {
 	sword := worldstate.Actor{Job: 6037, HasObjectType: true, ObjectType: scene.ActorObjectTypeMercenary}
 	mob := worldstate.Actor{Job: 1002, HasObjectType: true, ObjectType: scene.ActorObjectTypeMob}
 
-	if got := attackActionFamilyForActorWithResources(nil, archer); got != sprites.ActionPCAttack2 {
+	if got := sprites.AttackActionFamily(nil, archer); got != sprites.ActionPCAttack2 {
 		t.Fatalf("archer mercenary attack action = %d, want %d", got, sprites.ActionPCAttack2)
 	}
-	if got := attackActionFamilyForActorWithResources(nil, lancer); got != sprites.ActionPCAttack3 {
+	if got := sprites.AttackActionFamily(nil, lancer); got != sprites.ActionPCAttack3 {
 		t.Fatalf("lancer mercenary attack action = %d, want %d", got, sprites.ActionPCAttack3)
 	}
-	if got := attackActionFamilyForActorWithResources(nil, sword); got != sprites.ActionPCAttack2 {
+	if got := sprites.AttackActionFamily(nil, sword); got != sprites.ActionPCAttack2 {
 		t.Fatalf("sword mercenary attack action = %d, want %d", got, sprites.ActionPCAttack2)
 	}
 	if got := hurtActionFamilyForActor(archer); got != sprites.ActionPCHurt {
 		t.Fatalf("archer mercenary hurt action = %d, want %d", got, sprites.ActionPCHurt)
 	}
-	if got := deathActionFamilyForActor(archer); got != sprites.ActionNonPCDeath {
+	if got := actors.DeathActionFamilyForActor(archer); got != sprites.ActionNonPCDeath {
 		t.Fatalf("archer mercenary death action = %d, want %d", got, sprites.ActionNonPCDeath)
 	}
-	if got := deathActionFamilyForActor(sword); got != sprites.ActionPCDeath {
+	if got := actors.DeathActionFamilyForActor(sword); got != sprites.ActionPCDeath {
 		t.Fatalf("sword mercenary death action = %d, want %d", got, sprites.ActionPCDeath)
 	}
 	if got := skillCastActionFamilyForActor(sword, 0); got != sprites.ActionPCSkill {
 		t.Fatalf("sword mercenary cast action = %d, want %d", got, sprites.ActionPCSkill)
 	}
-	if got := readyFightSkillActionSpec.actionFamilyForActorWithResources(nil, sword); got != sprites.ActionPCSkill {
+	if got := effects.ReadyFightSkillActionSpec.ActionFamilyForActorWithResources(nil, sword); got != sprites.ActionPCSkill {
 		t.Fatalf("sword mercenary readyfight skill action = %d, want %d", got, sprites.ActionPCSkill)
 	}
-	if got := attackActionFamilyForActorWithResources(nil, mob); got != sprites.ActionNonPCAttack {
+	if got := sprites.AttackActionFamily(nil, mob); got != sprites.ActionNonPCAttack {
 		t.Fatalf("mob attack action = %d, want %d", got, sprites.ActionNonPCAttack)
 	}
 }
@@ -581,8 +585,8 @@ func TestMercenarySpriteKeyUsesGuildDefaultWeapon(t *testing.T) {
 func openCompanionInputTestWindow(ctx client.Context, m *WorldMode, name string) *gameui.Window {
 	switch name {
 	case "pet":
-		m.ui.petInfoWindow.OpenInfo(ctx, network.PetProperty{Name: "Poring"})
-		return &m.ui.petInfoWindow.Window
+		m.ui.pet.Info.OpenInfo(ctx, network.PetProperty{Name: "Poring"})
+		return &m.ui.pet.Info.Window
 	case "homunculus":
 		m.ui.companions.HomunculusInfo.OpenInfo(ctx, ctx.Session.Homunculus)
 		return &m.ui.companions.HomunculusInfo.Window
@@ -603,7 +607,7 @@ func TestCompanionWindowsAllowGameplayInput(t *testing.T) {
 		for _, control := range []string{"camera", "skill", "wasd"} {
 			t.Run(name+"/"+control, func(t *testing.T) {
 				ctx := wasdControlsTestContext(t)
-				conn, server := newBotTestConnection(t, 20080910)
+				conn, server := testutil.NewConnection(t, 20080910)
 				ctx.Network = conn
 				ctx.UIManager = gameui.NewManager()
 				ctx.Session.Homunculus.Active = true
@@ -650,7 +654,7 @@ func TestCompanionWindowsAllowGameplayInput(t *testing.T) {
 						t.Fatal("camera rotated through the companion window")
 					}
 				case "skill":
-					if mode.pendingSkill.skill.ID != ctx.Session.Skills.List[0].ID {
+					if mode.skillSystem.Pending.Skill.ID != ctx.Session.Skills.List[0].ID {
 						t.Fatal("open companion window blocked the F1 skill shortcut")
 					}
 				case "wasd":
@@ -689,8 +693,8 @@ func TestCompanionRenameKeepsKeyboardInput(t *testing.T) {
 			field.SetFocused(true)
 			if name == "pet" {
 				field.SetText("Fluffy")
-				mode.applyPetProperty(ctx, network.PetProperty{Name: "Poring", Fullness: 80})
-				mode.applyPetStateChange(ctx, network.PetStateChange{Type: petStateHunger, Data: 79})
+				mode.pets().ApplyProperty(ctx, network.PetProperty{Name: "Poring", Fullness: 80})
+				mode.pets().ApplyStateChange(ctx, network.PetStateChange{Type: pet.StateHunger, Data: 79})
 			}
 			if prepareKeyboardTestText(mode, ctx, gpucontext.KeyW, "w") || mode.ui.console.Active() {
 				t.Fatal("gameplay or chat stole text intended for the rename field")
@@ -699,7 +703,7 @@ func TestCompanionRenameKeepsKeyboardInput(t *testing.T) {
 			if _, err := mode.Update(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if mode.pendingSkill.skill.ID != 0 || mode.bot.KeyboardAvailable {
+			if mode.skillSystem.Pending.Skill.ID != 0 || mode.bot.KeyboardAvailable {
 				t.Fatal("gameplay keyboard input remained active during rename")
 			}
 			if mode.ui.nonConsoleKeyboardInputBlockedExcept(ctx, w) {

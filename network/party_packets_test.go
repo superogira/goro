@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestPartyItemPickup(t *testing.T) {
+	data := []byte{0xb8, 0x02, 0x44, 0x33, 0x22, 0x11, 0xf5, 0x01, 1, 0, 7, 1, 0, 2, 0, 3, 0, 4, 0, 0x20, 0, 4}
+	framer := NewFramer(PacketLengths2008())
+	for _, b := range data[:21] {
+		if packets, err := framer.Push([]byte{b}); err != nil || len(packets) != 0 {
+			t.Fatalf("partial pickup framed = %+v, err = %v", packets, err)
+		}
+	}
+	packets, err := framer.Push(append(data[21:], 0x0d, 0x01))
+	if err != nil || len(packets) != 2 || packets[1].ID != PacketZCThrowMVPItem {
+		t.Fatalf("pickup and following packet = %+v, err = %v", packets, err)
+	}
+	pickup, ok, err := ParsePartyItemPickup(packets[0])
+	want := PartyItemPickup{AccountID: 0x11223344, ItemID: 501, Identified: true, Type: 4, Refine: 7, Cards: [4]uint16{1, 2, 3, 4}}
+	if err != nil || !ok || pickup != want {
+		t.Fatalf("pickup = %+v, ok = %t, err = %v", pickup, ok, err)
+	}
+	data[8] = 0
+	if pickup, ok, err := ParsePartyItemPickup(Packet{ID: PacketZCItemPickupParty, Data: data}); err != nil || !ok || pickup.Identified {
+		t.Fatalf("unidentified pickup = %+v, ok = %t, err = %v", pickup, ok, err)
+	}
+	for length := range len(data) {
+		if _, _, err := ParsePartyItemPickup(Packet{ID: PacketZCItemPickupParty, Data: data[:length]}); err == nil {
+			t.Fatalf("accepted truncated pickup length %d", length)
+		}
+	}
+	if _, ok, err := ParsePartyItemPickup(Packet{ID: 0x00A0}); ok || err != nil {
+		t.Fatal("personal pickup interpreted as party pickup")
+	}
+}
+
 func TestBuildPartyPackets(t *testing.T) {
 	makeParty := BuildMakePartyPacket("Goro")
 	if len(makeParty) != 26 || ID(makeParty) != PacketCZMakeGroup || string(makeParty[2:6]) != "Goro" {

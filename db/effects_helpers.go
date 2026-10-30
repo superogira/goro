@@ -76,18 +76,6 @@ func sprEffectSpec(file, wav string, attached, head bool) EffectSpec {
 	return spec
 }
 
-func sprDirectionEffectSpec(file, wav string) EffectSpec {
-	spec := sprEffectSpec(file, wav, true, false)
-	spec.Components[0].SpriteDirection = true
-	return spec
-}
-
-func sprRepeatEffectSpec(file, wav string, attached bool) EffectSpec {
-	spec := sprEffectSpec(file, wav, attached, false)
-	spec.Components[0].Repeat = true
-	return spec
-}
-
 func sprTexturePathEffectSpec(file, texturePath string, attached, repeat, head, renderBefore bool, yOffset float64) EffectSpec {
 	spec := EffectSpec{
 		Components: []EffectComponent{{

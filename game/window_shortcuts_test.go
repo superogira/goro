@@ -3,6 +3,8 @@ package game
 import (
 	"testing"
 
+	"github.com/kivutar/goro/game/pet"
+
 	"github.com/gogpu/gpucontext"
 	"github.com/kivutar/goro/input"
 	gameui "github.com/kivutar/goro/ui"
@@ -19,11 +21,11 @@ func TestWindowShortcutsToggle(t *testing.T) {
 		{"equipment", gpucontext.KeyQ, false, func(m *WorldMode) *gameui.Window { return &m.ui.equipmentWindow.Window }},
 		{"skills", gpucontext.KeyS, false, func(m *WorldMode) *gameui.Window { return &m.ui.skillWindow.Window }},
 		{"stats", gpucontext.KeyA, false, func(m *WorldMode) *gameui.Window { return &m.ui.statsWindow.Window }},
-		{"party", gpucontext.KeyZ, false, func(m *WorldMode) *gameui.Window { return &m.ui.friendsWindow.Window }},
-		{"friends", gpucontext.KeyH, false, func(m *WorldMode) *gameui.Window { return &m.ui.friendsWindow.Window }},
+		{"party", gpucontext.KeyZ, false, func(m *WorldMode) *gameui.Window { return &m.ui.social.FriendsWindow.Window }},
+		{"friends", gpucontext.KeyH, false, func(m *WorldMode) *gameui.Window { return &m.ui.social.FriendsWindow.Window }},
 		{"cart", gpucontext.KeyW, false, func(m *WorldMode) *gameui.Window { return &m.ui.cartWindow.Window }},
-		{"chat room", gpucontext.KeyC, false, func(m *WorldMode) *gameui.Window { return &m.ui.chatRoomCreate.Window }},
-		{"pet", gpucontext.KeyJ, false, func(m *WorldMode) *gameui.Window { return &m.ui.petInfoWindow.Window }},
+		{"chat room", gpucontext.KeyC, false, func(m *WorldMode) *gameui.Window { return &m.ui.social.ChatRoomCreate.Window }},
+		{"pet", gpucontext.KeyJ, false, func(m *WorldMode) *gameui.Window { return &m.ui.pet.Info.Window }},
 		{"homunculus", gpucontext.KeyR, false, func(m *WorldMode) *gameui.Window { return &m.ui.companions.HomunculusInfo.Window }},
 		{"mercenary", gpucontext.KeyR, true, func(m *WorldMode) *gameui.Window { return &m.ui.companions.MercenaryInfo.Window }},
 		{"settings", gpucontext.KeyO, false, func(m *WorldMode) *gameui.Window { return &m.ui.settingsWindow.Window }},
@@ -33,7 +35,7 @@ func TestWindowShortcutsToggle(t *testing.T) {
 			ctx.Session.Cart.MaxAmount = 100
 			ctx.Session.Homunculus.Active = true
 			ctx.Session.Mercenary.Active = true
-			m := &WorldMode{petID: 1, hasPetProperty: true}
+			m := &WorldMode{petSystem: pet.System{ID: 1, HasProperty: true}}
 			modifier := gpucontext.KeyLeftAlt
 			if tc.ctrl {
 				modifier = gpucontext.KeyLeftControl
@@ -78,7 +80,7 @@ func TestWindowShortcutModifiersAndBlocking(t *testing.T) {
 				ctx.Input.SetKeyCode(tc.modifier, true)
 			}
 			if tc.blocked {
-				m.ui.chatRoomCreate.Open(ctx)
+				m.ui.social.ChatRoomCreate.Open(ctx)
 			}
 			if tc.consumed {
 				ctx.Input.ConsumeKeyCodePress(gpucontext.KeyO)
@@ -124,8 +126,8 @@ func TestWindowShortcutsWithoutCartOrCompanion(t *testing.T) {
 	if !m.toggleWindowFromInput(ctx) {
 		t.Fatal("unavailable mercenary shortcut was not consumed")
 	}
-	if m.ui.cartWindow.IsOpen() || ctx.Session.Cart.Open || m.ui.petInfoWindow.IsOpen() ||
-		m.petInfoRequested || m.ui.companions.HomunculusInfo.IsOpen() || m.ui.companions.MercenaryInfo.IsOpen() {
+	if m.ui.cartWindow.IsOpen() || ctx.Session.Cart.Open || m.ui.pet.Info.IsOpen() ||
+		m.petSystem.InfoRequested || m.ui.companions.HomunculusInfo.IsOpen() || m.ui.companions.MercenaryInfo.IsOpen() {
 		t.Fatal("opened an unavailable cart or companion window")
 	}
 }

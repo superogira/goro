@@ -42,7 +42,7 @@ func TestAltGDoesNotOpenGuildWindowWithoutGuild(t *testing.T) {
 	if !mode.toggleGuildWindowFromInput(ctx) {
 		t.Fatal("Alt+G was not consumed")
 	}
-	if mode.ui.guildWindow.IsOpen() {
+	if mode.ui.social.GuildWindow.IsOpen() {
 		t.Fatal("guild window opened for a guildless character")
 	}
 }
@@ -62,7 +62,7 @@ func TestAltGTogglesGuildWindow(t *testing.T) {
 	if !mode.toggleGuildWindowFromInput(ctx) {
 		t.Fatal("Alt+G was not consumed")
 	}
-	if !mode.ui.guildWindow.IsOpen() {
+	if !mode.ui.social.GuildWindow.IsOpen() {
 		t.Fatal("guild window did not open")
 	}
 }
@@ -94,7 +94,7 @@ func TestAltGTogglesGuildWindowDuringChatInput(t *testing.T) {
 	if !mode.toggleGuildWindowFromInput(ctx) {
 		t.Fatal("Alt+G was not consumed during chat input")
 	}
-	if !mode.ui.guildWindow.IsOpen() {
+	if !mode.ui.social.GuildWindow.IsOpen() {
 		t.Fatal("guild window did not open during chat input")
 	}
 }

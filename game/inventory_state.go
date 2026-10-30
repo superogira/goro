@@ -84,17 +84,6 @@ func applyCartItemRemoved(ctx client.Context, item network.CartItemRemoved) {
 	removeSessionCartItem(ctx.Session, item.Index, int(item.Amount))
 }
 
-func applyStorageClosed(ctx client.Context) {
-	if ctx.Session == nil {
-		return
-	}
-	ctx.Session.Storage.Open = false
-	ctx.Session.Storage.PasswordPending = false
-	ctx.Session.Storage.Items = nil
-	ctx.Session.Storage.Amount = 0
-	ctx.Session.Storage.MaxAmount = 0
-}
-
 func applyCartClosed(ctx client.Context) {
 	if ctx.Session == nil {
 		return
@@ -103,7 +92,7 @@ func applyCartClosed(ctx client.Context) {
 }
 
 func applyInventoryItemDelete(ctx client.Context, item network.InventoryItemDelete) {
-	removeSessionInventoryItem(ctx.Session, item.Index, int(item.Amount))
+	session.RemoveInventoryItem(ctx.Session, item.Index, int(item.Amount))
 	rebuildLocalEquipmentAppearance(ctx)
 }
 
@@ -123,11 +112,11 @@ func applyItemCompositionAck(ctx client.Context, ack network.ItemCompositionAck)
 	if ctx.Session == nil || !ack.Success {
 		return
 	}
-	cardItem, ok := findSessionInventoryItem(ctx.Session, ack.CardIndex)
+	cardItem, ok := session.FindInventoryItem(ctx.Session, ack.CardIndex)
 	if !ok {
 		return
 	}
-	removeSessionInventoryItem(ctx.Session, ack.CardIndex, 1)
+	session.RemoveInventoryItem(ctx.Session, ack.CardIndex, 1)
 	for i := range ctx.Session.Inventory.Items {
 		if ctx.Session.Inventory.Items[i].Index != ack.EquipIndex {
 			continue
@@ -333,7 +322,6 @@ func rebuildLocalEquipmentAppearance(ctx client.Context) {
 	if !sawEquipment {
 		return
 	}
-	ctx.Session.AttackRange = normalAttackRangeFromEquippedItems(ctx.Session, ctx.Resources)
 	if !hasWeapon {
 		weapon = 0
 	}
@@ -413,38 +401,6 @@ func addPickedSessionInventoryItem(s *session.Session, item session.InventoryIte
 		return
 	}
 	s.Inventory.Items = append(s.Inventory.Items, item)
-}
-
-func removeSessionInventoryItem(s *session.Session, index uint16, amount int) {
-	if s == nil || index == 0 {
-		return
-	}
-	if amount <= 0 {
-		amount = 1
-	}
-	for i := range s.Inventory.Items {
-		if s.Inventory.Items[i].Index != index {
-			continue
-		}
-		s.Inventory.Items[i].Amount -= amount
-		if s.Inventory.Items[i].Amount > 0 {
-			return
-		}
-		s.Inventory.Items = append(s.Inventory.Items[:i], s.Inventory.Items[i+1:]...)
-		return
-	}
-}
-
-func findSessionInventoryItem(s *session.Session, index uint16) (session.InventoryItem, bool) {
-	if s == nil || index == 0 {
-		return session.InventoryItem{}, false
-	}
-	for _, item := range s.Inventory.Items {
-		if item.Index == index {
-			return item, true
-		}
-	}
-	return session.InventoryItem{}, false
 }
 
 func removeSessionStorageItem(s *session.Session, index uint16, amount int) {

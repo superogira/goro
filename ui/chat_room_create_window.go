@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"github.com/kivutar/goro/input"
 	"strconv"
 	"strings"
 
@@ -9,6 +8,7 @@ import (
 	"github.com/gogpu/ui/core/textfield"
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/input"
 	"github.com/kivutar/goro/ui/rotheme"
 )
 
@@ -18,6 +18,7 @@ const (
 )
 
 type ChatRoomCreateWindowAction struct {
+	Edit     bool
 	Title    string
 	Password string
 	Limit    uint16
@@ -26,6 +27,7 @@ type ChatRoomCreateWindowAction struct {
 
 type ChatRoomCreateWindow struct {
 	Window
+	edit          bool
 	title         string
 	password      string
 	limit         string
@@ -40,6 +42,16 @@ type ChatRoomCreateWindow struct {
 }
 
 func (w *ChatRoomCreateWindow) Open(ctx Context) {
+	w.openForm(ctx, ChatRoomCreateWindowAction{Limit: 20, Public: true})
+}
+
+func (w *ChatRoomCreateWindow) OpenEdit(ctx Context, title string, limit uint16, public bool) {
+	w.openForm(ctx, ChatRoomCreateWindowAction{Edit: true, Title: title, Limit: limit, Public: public})
+}
+
+func (w *ChatRoomCreateWindow) Editing() bool { return w.IsOpen() && w.edit }
+
+func (w *ChatRoomCreateWindow) openForm(ctx Context, room ChatRoomCreateWindowAction) {
 	w.ctx = ctx
 	if chatRoomCreateWebSync(true) {
 		// The DOM twin owns the presentation; the form values live in
@@ -49,17 +61,18 @@ func (w *ChatRoomCreateWindow) Open(ctx Context) {
 		return
 	}
 	w.EnsureWindow(chatRoomCreateW, ROWindowTitleHeight+chatRoomCreateContentH+ROWindowFooterHeight)
-	w.title = ""
+	w.edit = room.Edit
+	w.title = room.Title
 	w.password = ""
-	w.limit = "20"
-	w.public = true
+	w.limit = strconv.Itoa(int(room.Limit))
+	w.public = room.Public
 	w.titleField = nil
 	w.passwordField = nil
 	w.limitField = nil
 	w.action = ChatRoomCreateWindowAction{}
 	w.Window.Open(ctx, w.widgetTree(ctx))
-	w.focusTitle()
 	w.Publish(ctx)
+	w.focusTitle()
 }
 
 // Close hides whichever presentation is active.
@@ -124,7 +137,7 @@ func (w *ChatRoomCreateWindow) Rebind(ctx Context) {
 	w.titleField = nil
 	w.passwordField = nil
 	w.limitField = nil
-	w.SetContent(w.widgetTree(ctx))
+	w.RebindContent(ctx, w.widgetTree(ctx))
 	w.focusTitle()
 	w.Publish(ctx)
 }
@@ -136,8 +149,12 @@ func (w *ChatRoomCreateWindow) PopAction() ChatRoomCreateWindowAction {
 }
 
 func (w *ChatRoomCreateWindow) widgetTree(ctx Context) widget.Widget {
+	title, passwordLabel := "Make a Room", "Password"
+	if w.edit {
+		title, passwordLabel = "Room Settings", "Password (blank clears it)"
+	}
 	return Win(
-		Title("Make a Room"),
+		Title(title),
 		CloseButton(true),
 		OnClose(w.Close),
 		Size(chatRoomCreateW, ROWindowTitleHeight+chatRoomCreateContentH+ROWindowFooterHeight),
@@ -175,7 +192,7 @@ func (w *ChatRoomCreateWindow) widgetTree(ctx Context) widget.Widget {
 						Gap(4),
 				).
 					Gap(12),
-				rotheme.Label("Password"),
+				rotheme.Label(passwordLabel),
 				primitives.Box(w.passwordInput(ctx)).
 					Height(24).
 					CrossAlign(primitives.CrossAxisStretch),
@@ -218,7 +235,7 @@ func (w *ChatRoomCreateWindow) passwordInput(ctx Context) *textfield.Widget {
 	}
 	w.passwordField = rotheme.TextField(
 		w.password,
-		textfield.TypeText,
+		textfield.TypePassword,
 		func(value string) {
 			w.password = value
 		},
@@ -251,12 +268,13 @@ func (w *ChatRoomCreateWindow) limitInput(ctx Context) *textfield.Widget {
 
 func (w *ChatRoomCreateWindow) submit(ctx Context) {
 	title := strings.TrimSpace(w.title)
-	if title == "" {
+	if !w.IsOpen() || title == "" {
 		return
 	}
 	w.action = ChatRoomCreateWindowAction{
+		Edit:     w.edit,
 		Title:    title,
-		Password: strings.TrimSpace(w.password),
+		Password: w.password,
 		Limit:    chatRoomLimit(w.limit),
 		Public:   w.public,
 	}
@@ -280,7 +298,11 @@ func (w *ChatRoomCreateWindow) submitFromFocusedEnter(ctx Context) bool {
 
 func (w *ChatRoomCreateWindow) focusTitle() {
 	if w.titleField != nil {
-		w.titleField.SetFocused(true)
+		if wc := windowWidgetContext(w.ctx); wc != nil {
+			wc.RequestFocus(w.titleField)
+		} else {
+			w.titleField.SetFocused(true)
+		}
 	}
 }
 

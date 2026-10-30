@@ -876,6 +876,9 @@ func BuildGuildNoticePacket(guildID uint32, subject, notice string) []byte {
 }
 
 func BuildRegisterGuildEmblemPacket(bmp []byte) ([]byte, error) {
+	if err := validateGuildEmblem(bmp); err != nil {
+		return nil, err
+	}
 	var compressed bytes.Buffer
 	zw := zlib.NewWriter(&compressed)
 	if _, err := zw.Write(bmp); err != nil {
@@ -894,6 +897,37 @@ func BuildRegisterGuildEmblemPacket(bmp []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint16(packet[2:4], uint16(len(packet)))
 	copy(packet[4:], compressed.Bytes())
 	return packet, nil
+}
+
+func validateGuildEmblem(bmp []byte) error {
+	if len(bmp) < 54 || len(bmp) > 1800 || string(bmp[:2]) != "BM" {
+		return fmt.Errorf("expected a 24×24 BMP emblem")
+	}
+	u32 := binary.LittleEndian.Uint32
+	u16 := binary.LittleEndian.Uint16
+	if u32(bmp[2:]) != uint32(len(bmp)) || u32(bmp[14:]) != 40 || u16(bmp[26:]) != 1 {
+		return fmt.Errorf("invalid BMP header")
+	}
+	if u32(bmp[18:]) != 24 || u32(bmp[22:]) != 24 {
+		return fmt.Errorf("emblem must be a bottom-up 24×24 BMP")
+	}
+	if u32(bmp[30:]) != 0 {
+		return fmt.Errorf("compressed BMP emblems are not supported")
+	}
+	var header, pixels uint32
+	switch u16(bmp[28:]) {
+	case 8:
+		header, pixels = 54+256*4, 24*24
+	case 24:
+		header, pixels = 54, 24*24*3
+	default:
+		return fmt.Errorf("emblem must use 8-bit or 24-bit color")
+	}
+	offset := u32(bmp[10:])
+	if offset < header || uint64(offset)+uint64(pixels) != uint64(len(bmp)) {
+		return fmt.Errorf("invalid BMP pixel data")
+	}
+	return nil
 }
 
 func BuildGuildMessagePacket(message string) []byte {

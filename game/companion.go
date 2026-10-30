@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/battle"
 	"github.com/kivutar/goro/game/companion"
 	"github.com/kivutar/goro/game/effects"
 	maps "github.com/kivutar/goro/game/map"
@@ -27,34 +28,34 @@ func (m *WorldMode) applyCompanionLife(ctx client.Context, id uint32, hp, maxHP,
 	if maxHP <= 0 && maxSP <= 0 {
 		return
 	}
-	if m.actorLife == nil {
-		m.actorLife = make(map[uint32]actorLife)
+	if m.battleSystem.ActorLife == nil {
+		m.battleSystem.ActorLife = make(map[uint32]battle.Life)
 	}
-	life := m.actorLife[id]
+	life := m.battleSystem.ActorLife[id]
 	if maxHP > 0 {
-		life.hp = scene.ClampInt(hp, 0, maxHP)
-		life.maxHP = maxHP
+		life.HP = scene.ClampInt(hp, 0, maxHP)
+		life.MaxHP = maxHP
 	}
 	if maxSP > 0 {
-		life.sp = scene.ClampInt(sp, 0, maxSP)
-		life.maxSP = maxSP
-		life.hasSP = true
+		life.SP = scene.ClampInt(sp, 0, maxSP)
+		life.MaxSP = maxSP
+		life.HasSP = true
 	}
-	m.actorLife[id] = life
+	m.battleSystem.ActorLife[id] = life
 }
 
 func (m *WorldMode) applyCompanionHunger(ctx client.Context, id uint32, hunger, maxHunger int) {
 	if id == 0 || ctx.World == nil || maxHunger <= 0 {
 		return
 	}
-	if m.actorLife == nil {
-		m.actorLife = make(map[uint32]actorLife)
+	if m.battleSystem.ActorLife == nil {
+		m.battleSystem.ActorLife = make(map[uint32]battle.Life)
 	}
-	life := m.actorLife[id]
-	life.hunger = scene.ClampInt(hunger, 0, maxHunger)
-	life.maxHunger = maxHunger
-	life.hasHunger = true
-	m.actorLife[id] = life
+	life := m.battleSystem.ActorLife[id]
+	life.Hunger = scene.ClampInt(hunger, 0, maxHunger)
+	life.MaxHunger = maxHunger
+	life.HasHunger = true
+	m.battleSystem.ActorLife[id] = life
 }
 
 func (m *WorldMode) handleCompanionAICommandClick(ctx client.Context, now time.Time) bool {
@@ -77,7 +78,7 @@ func (m *WorldMode) handleCompanionAICommandClick(ctx client.Context, now time.T
 	}
 	screenW, screenH := ctx.ScreenSize()
 	projection := m.sceneProjection(ctx, screenW, screenH, now)
-	if actor, ok := clickedAttackTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths); ok {
+	if actor, ok := clickedAttackTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorSystem.ActorDeaths); ok {
 		m.companions().SetMessage(id, fmt.Sprintf("3,%d", actor.ID))
 		glog.Debugf("%s AI command attack companion=%d target=%d", kind, id, actor.ID)
 		return true
@@ -94,9 +95,9 @@ func (m *WorldMode) companionLife(ctx client.Context, id uint32) (hp, maxHP, sp,
 	if hp, maxHP, sp, maxSP, ok := companion.Life(ctx, id); ok {
 		return hp, maxHP, sp, maxSP, true
 	}
-	if m.actorLife != nil {
-		if life, found := m.actorLife[id]; found {
-			return life.hp, life.maxHP, life.sp, life.maxSP, true
+	if m.battleSystem.ActorLife != nil {
+		if life, found := m.battleSystem.ActorLife[id]; found {
+			return life.HP, life.MaxHP, life.SP, life.MaxSP, true
 		}
 	}
 	return 0, 0, 0, 0, false
@@ -108,7 +109,7 @@ func (m *WorldMode) openHomunculusContextFromInput(ctx client.Context, now time.
 	}
 	screenW, screenH := ctx.ScreenSize()
 	projection := m.sceneProjection(ctx, screenW, screenH, now)
-	actor, ok := clickedHomunculusTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths)
+	actor, ok := clickedHomunculusTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorSystem.ActorDeaths)
 	if !ok {
 		return false
 	}
@@ -143,7 +144,7 @@ func (m *WorldMode) openMercenaryContextFromInput(ctx client.Context, now time.T
 	}
 	screenW, screenH := ctx.ScreenSize()
 	projection := m.sceneProjection(ctx, screenW, screenH, now)
-	actor, ok := clickedMercenaryTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorDeaths)
+	actor, ok := clickedMercenaryTarget(ctx, projection, ctx.Input.MouseX, ctx.Input.MouseY, now, m.actorSystem.ActorDeaths)
 	if !ok {
 		return false
 	}
@@ -179,9 +180,9 @@ func (m *WorldMode) companions() *companion.System {
 		SetHunger: m.applyCompanionHunger,
 		LevelUp:   func(ctx client.Context, id uint32) { m.effects().AddIfMissing(ctx, effects.HoUp, id) },
 		SnapshotLife: func() map[uint32]companion.Vitals {
-			life := make(map[uint32]companion.Vitals, len(m.actorLife))
-			for id, value := range m.actorLife {
-				life[id] = companion.Vitals{HP: value.hp, MaxHP: value.maxHP, SP: value.sp, MaxSP: value.maxSP}
+			life := make(map[uint32]companion.Vitals, len(m.battleSystem.ActorLife))
+			for id, value := range m.battleSystem.ActorLife {
+				life[id] = companion.Vitals{HP: value.HP, MaxHP: value.MaxHP, SP: value.SP, MaxSP: value.MaxSP}
 			}
 			return life
 		},

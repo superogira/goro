@@ -7,6 +7,7 @@ import (
 
 	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/db"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/network"
 	"github.com/kivutar/goro/session"
 	worldstate "github.com/kivutar/goro/world"
@@ -148,7 +149,7 @@ func TestDeadBranchUseAndMonsterSpawn2008(t *testing.T) {
 		t.Fatalf("dead branch count = %d, want 3", got)
 	}
 	actor, ok := ctx.World.Actors[110000001]
-	if !ok || actor.Job != 1002 || actor.X != 100 || actor.Y != 100 || !actorHasMobObjectType(actor) {
+	if !ok || actor.Job != 1002 || actor.X != 100 || actor.Y != 100 || !actors.ActorHasMobObjectType(actor) {
 		t.Fatalf("spawned monster missing or malformed: %+v", actor)
 	}
 	if messages := mode.ui.console.Messages(); len(messages) != 0 {

@@ -59,8 +59,8 @@ Local checkouts used:
   `src/Network/PacketVersions.js` and `PacketRegister.js` for version and name
   cross-checks, not as a feature-completion denominator.
 - `ro-client-re`'s exported packet dispatcher for `2008-09-10aSakexe.exe`:
-  `ghidra/data/sakexe-pollnetworkstatus-packet-cases.tsv` and
-  `dhxj-packet-switch-aligned.tsv`, for the specific historical checks below.
+  `ghidra/data/sakexe-pollnetworkstatus-packet-cases.tsv`, for the specific
+  historical checks below.
 
 The server headers were preprocessed with `PACKETVER=20080910`,
 `PACKETVER_MAIN_NUM=20080910`, and `PACKETVER_SAK_NUM=20080910`. Resolve the
@@ -127,9 +127,6 @@ packet. eAthena and Hercules both gate `clif_displayexp()` behind
 `0x07F6`. Current upstream rAthena keeps the same behavior by not sending that
 packet to the 2008 Sakray profile; `@showexp` remains the server text-message
 path for green EXP percentage lines.
-
-See [homunculus and mercenary support](companions-20080910.md) for the current
-companion UI, AI, skill, and visual coverage.
 
 | Opcode | Direction | Status | Scope | Goro refs |
 |---:|---|---|---|---|

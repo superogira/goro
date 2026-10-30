@@ -29,6 +29,15 @@ func sortedInventoryItems(s *session.Session) []session.InventoryItem {
 	return items
 }
 
+// ItemDisplayName includes refinement, cards, and slots for identified items.
+func ItemDisplayName(manager *res.Manager, item session.InventoryItem) string {
+	name := inventoryItemDisplayName(manager, item)
+	if item.Identified && item.Refine > 0 {
+		name = "+" + strconv.Itoa(int(item.Refine)) + " " + name
+	}
+	return name
+}
+
 func inventoryItemDisplayName(manager *res.Manager, item session.InventoryItem) string {
 	if manager != nil {
 		if name, ok := manager.ItemDisplayName(int(item.ItemID), item.Identified); ok && strings.TrimSpace(name) != "" {

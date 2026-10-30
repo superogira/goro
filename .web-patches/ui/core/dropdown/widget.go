@@ -191,6 +191,7 @@ func (w *Widget) Open(ctx widget.Context) {
 		w.cfg.items,
 		w.selectedIndex,
 		w.cfg.maxVisibleItems,
+		w.cfg.itemHeight,
 		w.painter,
 		func(index int) {
 			w.selectItem(ctx, index)

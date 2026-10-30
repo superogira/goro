@@ -30,7 +30,7 @@ func (m *WorldMode) applySongTalk(ctx client.Context, actorID uint32, kind res.S
 		return
 	}
 	if ctx.Network != nil {
-		name := strings.TrimSpace(selectedCharacterName(ctx.Session))
+		name := strings.TrimSpace(scene.SelectedCharacterName(ctx.Session))
 		if name != "" {
 			if err := ctx.Network.SendGlobalChat(name, text); err == nil {
 				return
@@ -39,5 +39,5 @@ func (m *WorldMode) applySongTalk(ctx client.Context, actorID uint32, kind res.S
 			}
 		}
 	}
-	m.applySpeechBubble(ctx, network.ChatMessage{GID: actorID, Text: text}, now)
+	m.actors().ApplySpeechBubble(ctx, network.ChatMessage{GID: actorID, Text: text}, now)
 }

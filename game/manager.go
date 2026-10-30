@@ -47,6 +47,9 @@ func NewManager(ctx client.Context, mode Mode) *Manager {
 // Close releases the active mode after the render loop stops, outside any Lua callback.
 func (m *Manager) Close() {
 	m.closeScript()
+	if saving, ok := m.mode.(interface{ FlushUISettings(client.Context) }); ok {
+		saving.FlushUISettings(m.ctx)
+	}
 	if leaving, ok := m.mode.(interface{ Leave() }); ok {
 		leaving.Leave()
 	}
@@ -61,6 +64,9 @@ func (m *Manager) enter(mode Mode) {
 			for button := input.GamepadButton(0); button < input.GamepadButtonCount; button++ {
 				m.scriptBlocked[button] = m.ctx.Input.GamepadDown(button)
 			}
+		}
+		if saving, ok := m.mode.(interface{ FlushUISettings(client.Context) }); ok {
+			saving.FlushUISettings(m.ctx)
 		}
 		if leaving, ok := m.mode.(interface{ Leave() }); ok {
 			leaving.Leave()

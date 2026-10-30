@@ -1,13 +1,13 @@
 package config
 
 import (
-	"runtime"
 	"bufio"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +33,7 @@ type Config struct {
 	Script        ScriptConfig
 	Log           glog.LogConfig
 	ChatShortcuts ChatShortcuts
+	UI            UISettings
 }
 
 type WindowConfig struct {
@@ -126,6 +127,8 @@ type GameplayConfig struct {
 	NoShift     bool
 	NoCtrl      bool
 	LessEffects bool
+	NoEffects   bool
+	SimpleAura  bool
 	SnapTargets bool
 	SnapItems   bool
 	SnapRadius  float64
@@ -187,24 +190,24 @@ func LoadConfig(args []string) (Config, error) {
 }
 
 type UserSettings struct {
-	Fullscreen        bool
-	VSync             bool
-	FPS               bool
-	ResolutionScale   float64
-	Anisotropy        int
-	TextureUpscaling  bool
-	SmoothSprites     bool
-	MSAA              bool
-	Bloom             bool
-	SSAO              bool
-	BGMVolume         float64
-	SFXVolume         float64
-	NoShift           bool
-	NoCtrl            bool
-	LessEffects       bool
-	SnapTargets       bool
-	SnapItems         bool
-	SnapRadius        float64
+	Fullscreen       bool
+	VSync            bool
+	FPS              bool
+	ResolutionScale  float64
+	Anisotropy       int
+	TextureUpscaling bool
+	SmoothSprites    bool
+	MSAA             bool
+	Bloom            bool
+	SSAO             bool
+	BGMVolume        float64
+	SFXVolume        float64
+	NoShift          bool
+	NoCtrl           bool
+	LessEffects      bool
+	SnapTargets      bool
+	SnapItems        bool
+	SnapRadius       float64
 }
 
 func UserConfigPath() (string, error) {
@@ -243,6 +246,18 @@ func NextScreenshotPath(now time.Time) (string, error) {
 		name = fmt.Sprintf("goro-%s-%02d.png", now.Format("20060102-150405"), i)
 		path = filepath.Join(dir, name)
 	}
+}
+
+func (cfg Config) SaveVisualSettings(fogEnabled, simpleAura, noEffects bool) (string, error) {
+	return cfg.saveConfigValues(map[string]map[string]string{
+		"fog": {
+			"enabled": formatINIValueBool(fogEnabled),
+		},
+		"gameplay": {
+			"simple_aura": formatINIValueBool(simpleAura),
+			"no_effects":  formatINIValueBool(noEffects),
+		},
+	})
 }
 
 // userSettingsValues builds the ini sections shared by both save paths.
@@ -499,6 +514,7 @@ func parseCLI(cfg *Config, args []string) error {
 	fs.BoolVar(&cfg.Gameplay.NoShift, "no-shift", cfg.Gameplay.NoShift, "allow support skills to target enemies without holding Shift")
 	fs.BoolVar(&cfg.Gameplay.NoCtrl, "no-ctrl", cfg.Gameplay.NoCtrl, "keep attacking with one click without holding Ctrl")
 	fs.BoolVar(&cfg.Gameplay.LessEffects, "mineffect", cfg.Gameplay.LessEffects, "use simpler visual effects")
+	fs.BoolVar(&cfg.Gameplay.NoEffects, "no-effects", cfg.Gameplay.NoEffects, "hide optional visual effects")
 	fs.BoolVar(&cfg.Gameplay.SnapTargets, "snap", cfg.Gameplay.SnapTargets, "magnetize attack and enemy skill cursors to targets")
 	fs.BoolVar(&cfg.Gameplay.SnapItems, "itemsnap", cfg.Gameplay.SnapItems, "magnetize pickup cursor to floor items")
 	fs.BoolVar(&cfg.Gameplay.SnapItems, "item-snap", cfg.Gameplay.SnapItems, "magnetize pickup cursor to floor items")
@@ -576,6 +592,9 @@ func applyINI(cfg *Config, r io.Reader) error {
 }
 
 func applyConfigValue(cfg *Config, section, key, value string) error {
+	if section == "ui" {
+		return cfg.UI.apply(key, value)
+	}
 	if section == "chatshortcuts" {
 		digit, err := strconv.Atoi(key)
 		if err != nil || digit < 0 || digit > 9 {
@@ -679,6 +698,10 @@ func applyConfigValue(cfg *Config, section, key, value string) error {
 		return setBool(value, &cfg.Gameplay.NoCtrl)
 	case "gameplay.lesseffects", "gameplay.lesseffect", "gameplay.mineffect", "gameplay.less_effects", "gameplay.less_effect":
 		return setBool(value, &cfg.Gameplay.LessEffects)
+	case "gameplay.simpleaura":
+		return setBool(value, &cfg.Gameplay.SimpleAura)
+	case "gameplay.noeffects":
+		return setBool(value, &cfg.Gameplay.NoEffects)
 	case "gameplay.snap", "gameplay.snaptargets", "gameplay.targetsnap":
 		return setBool(value, &cfg.Gameplay.SnapTargets)
 	case "gameplay.itemsnap", "gameplay.snapitems", "gameplay.itemsnapping":
@@ -748,7 +771,7 @@ func validateAnisotropy(level int) error {
 }
 
 func upsertINIValues(src string, values map[string]map[string]string) string {
-	sectionOrder := []string{"window", "render", "audio", "gameplay", "login", "chatshortcuts", "script"}
+	sectionOrder := []string{"window", "render", "audio", "fog", "gameplay", "login", "chatshortcuts", "script", "ui"}
 	seenSections := make(map[string]bool)
 	written := make(map[string]map[string]bool)
 	for section := range values {

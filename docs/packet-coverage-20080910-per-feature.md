@@ -146,7 +146,7 @@ are already merged and excluded from the remaining work above.
   Mail / Auction
 
   - [x] Legacy mail refresh/read/delete/get attachment/reset/set attachment/send/return: 0x023F, 0x0241, 0x0243, 0x0244, 0x0246, 0x0247, 0x0248, 0x0273
-  - [x] Legacy mailbox/list/read/new-mail and result packets: 0x0240, 0x0242, 0x0245, 0x0249, 0x024A, 0x0255, 0x0257, 0x0260, 0x0274; [behavior and test status](legacy-mail-20080910.md)
+  - [x] Legacy mailbox/list/read/new-mail and result packets: 0x0240, 0x0242, 0x0245, 0x0249, 0x024A, 0x0255, 0x0257, 0x0260, 0x0274; [server compatibility and live checks](rathena-setup.md#legacy-mail-compatibility)
   - [ ] Auction cancel registration/set item/register/cancel/bid/search/buy-sell/close: 0x024B, 0x024C, 0x024D, 0x024E, 0x024F, 0x0251, 0x025C, 0x025D
 
   Adoption / Family
@@ -167,7 +167,7 @@ are already merged and excluded from the remaining work above.
   - [x] Novice dori-dori command, head motion, and recovery bonus: 0x01E7
   - [x] Original Super Novice public-chat prayer trigger and request: 0x01ED (server checks eligibility and grants Fury)
   - [x] Monk sphere notifications and visible sphere counts: 0x01D0, 0x01E1
-  - [ ] Combo timing notification: 0x01D2
+  - [x] Server combo-pose timing for Triple Attack, Chain Combo, Combo Finish and Tiger Fist: 0x01D2
   - [ ] Devotion links: 0x01CF
   - [ ] Server cast-cancellation notification: 0x01B9 (ZC_DISPEL means casting was canceled, not the Sage skill)
   - [x] Star Gladiator feel save confirmation: 0x0253, 0x0254
@@ -175,12 +175,15 @@ are already merged and excluded from the remaining work above.
 
   GM / Admin
 
-  - [ ] Broadcast/local broadcast, reset and GM hide requests: 0x0099, 0x019C, 0x0197, 0x019D (atcommands already provide alternatives)
-  - [ ] GM kick/kick all: 0x00CC, 0x00CE
-  - [ ] GM item/monster: 0x013F
-  - [ ] GM move map: 0x0140
-  - [ ] GM no-chat: 0x0149
-  - [ ] GM change map type: 0x0198
-  - [ ] GM shift/recall variants: 0x01BA, 0x01BB, 0x01BC, 0x01BD
-  - [ ] GM request account name: 0x01DF
-  - [ ] GM remote command/check: 0x0212, 0x0213
+  Updated 2026-10-22: 14 native request opcodes implemented, with kick/manner/status replies and player-menu actions. Packet layouts were checked against roBrowser, classic-ro-client, rAthena, eAthena, and Hercules; commands were tested over an isolated test connection, not against a live game server.
+
+  - [x] Broadcast/local broadcast, reset and GM hide requests: 0x0099, 0x019C, 0x0197, 0x019D
+  - [x] GM kick/kick all: 0x00CC, 0x00CE
+  - [x] GM item/monster: 0x013F
+  - [x] GM move map: 0x0140
+  - [x] GM no-chat: 0x0149 (`/mute <account ID> <minutes>`, `/unmute <account ID>`, and player-menu actions)
+  - [x] GM change map type: 0x0198
+  - [x] GM shift/summon by character name: 0x01BB, 0x01BD
+  - [x] GM manner penalty (`/rc`) and stat inspection (`/check`): 0x0212, 0x0213
+  - [ ] Deferred: account-name `/remove` and `/recall` variants (0x01BA, 0x01BC); rAthena treats their arguments as character names instead of account names.
+  - [ ] Deferred: GM account-name lookup (0x01DF); rAthena returns an empty account name. Server changes are outside this pass.

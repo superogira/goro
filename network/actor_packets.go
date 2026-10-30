@@ -8,6 +8,7 @@ import (
 const legacyGuildFlagJob int16 = 722
 
 const PacketZCNPCSpriteChange uint16 = 0x01B0
+const PacketZCComboDelay uint16 = 0x01D2
 
 type ActorEntry struct {
 	ID               uint32
@@ -111,6 +112,11 @@ type ActorBladeStop struct {
 	SourceID uint32
 	TargetID uint32
 	Active   bool
+}
+
+type ActorComboDelay struct {
+	ID        uint32
+	DelayTime uint32
 }
 
 type ActorActionNotify struct {
@@ -819,6 +825,19 @@ func ParseActorBladeStop(packet Packet) (ActorBladeStop, bool, error) {
 		SourceID: binary.LittleEndian.Uint32(packet.Data[2:6]),
 		TargetID: binary.LittleEndian.Uint32(packet.Data[6:10]),
 		Active:   binary.LittleEndian.Uint32(packet.Data[10:14]) != 0,
+	}, true, nil
+}
+
+func ParseActorComboDelay(packet Packet) (ActorComboDelay, bool, error) {
+	if packet.ID != PacketZCComboDelay {
+		return ActorComboDelay{}, false, nil
+	}
+	if len(packet.Data) < 10 {
+		return ActorComboDelay{}, false, fmt.Errorf("ZC_COMBODELAY too short: %d", len(packet.Data))
+	}
+	return ActorComboDelay{
+		ID:        binary.LittleEndian.Uint32(packet.Data[2:6]),
+		DelayTime: binary.LittleEndian.Uint32(packet.Data[6:10]),
 	}, true, nil
 }
 

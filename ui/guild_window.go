@@ -53,6 +53,7 @@ type GuildWindow struct {
 	snapshot        string
 	action          GuildWindowAction
 	EmblemImage     func(Context) image.Image
+	MemberPortrait  func(Context, session.GuildMember) image.Image
 	emblemOptions   []GuildEmblemOption
 	memberScrollY   state.Signal[float32]
 	memberDraft     map[guildMemberKey]uint32
@@ -75,6 +76,8 @@ type GuildWindow struct {
 	dragFrom        time.Time
 	historyScrollY  state.Signal[float32]
 	tooltip         tooltipState
+	tooltipRow      int
+	tooltipScroll   float32
 	actions         GameActions
 	memberContext   GuildMemberContextMenu
 }
@@ -221,7 +224,7 @@ func (w *GuildWindow) Update(ctx Context, shortcuts *ShortcutBar, actions GameAc
 	if actions != nil {
 		w.actions = actions
 	}
-	w.updateSkillTooltipHover(ctx)
+	w.updateTooltipHover(ctx)
 	if w.UpdateDrag(ctx, shortcuts) {
 		return true
 	}
@@ -533,10 +536,19 @@ func (w *GuildWindow) membersTab(ctx Context) widget.Widget {
 
 func (w *GuildWindow) handleGuildMemberRowEvent(ctx Context, guild session.Guild, members []session.GuildMember, row int, e event.Event) bool {
 	mouse, ok := e.(*event.MouseEvent)
-	if !ok || row < 0 || row >= len(members) || mouse.MouseType != event.MousePress || mouse.Button != event.ButtonRight {
+	if !ok || row < 0 || row >= len(members) {
 		return false
 	}
 	member := members[row]
+	if mouse.MouseType != event.MousePress || mouse.Button != event.ButtonRight {
+		text := fmt.Sprintf("%s\n%s — %s (Lv %d)\nContribution: %d EXP (%s)", guildText(member.CharName), guildPositionName(guild.Positions, member.PositionID), db.JobDisplayName(int(member.Job)), member.Level, member.MemberExp, guildMemberDevotion(member.MemberExp, guildMembersTotalExp(members)))
+		if member.Memo != "" {
+			text += "\n" + member.Memo
+		}
+		w.handleRowTooltip(ctx, text, row, e)
+		return false
+	}
+	w.hideTooltip()
 	isSelf := ctx.Session != nil && member.AccountID == ctx.Session.AccountID && member.CharID == ctx.Session.CharID
 	canExpel := guild.IsMaster || guild.Right&guildMemberPermissionExpel != 0
 	if guildMemberContextMenuRows(canExpel, isSelf, guild.IsMaster) == 0 {
@@ -560,6 +572,7 @@ func (w *GuildWindow) drainMemberContextAction() bool {
 }
 
 var guildMemberTableColumns = []rotheme.TableViewColumn{
+	{Key: "portrait", Width: 28},
 	{Key: "name", Title: "Name", Width: 78},
 	{Key: "position", Title: "Position", Width: 62},
 	{Key: "job", Title: "Job", Width: 52},
@@ -570,10 +583,16 @@ var guildMemberTableColumns = []rotheme.TableViewColumn{
 	{Key: "fill", Flex: 1},
 }
 
-func (w *GuildWindow) guildMemberTableCell(ctx Context, member session.GuildMember, positions []session.GuildPosition, isMaster bool, totalExp uint32, cell rotheme.TableViewCellContext) widget.Widget {
+func (w *GuildWindow) guildMemberTableCell(ctx Context, member session.GuildMember, positions []session.GuildPosition, isMaster bool, totalExp uint64, cell rotheme.TableViewCellContext) widget.Widget {
 	switch cell.Column.Key {
+	case "portrait":
+		var img image.Image
+		if w.MemberPortrait != nil {
+			img = w.MemberPortrait(ctx, member)
+		}
+		return primitives.HBox(newStaticImageWidget(img, 24, 24)).Width(cell.Width).Height(guildTableRowH).PaddingLeft(2).CrossAlign(primitives.CrossAxisCenter)
 	case "name":
-		return guildTableViewTextCell(guildText(member.CharName), cell.Width, guildTableRowH)
+		return w.guildMemberNameCell(member, cell.Width)
 	case "position":
 		return w.guildMemberPositionCell(ctx, member, positions, isMaster, cell.Width)
 	case "job":
@@ -589,6 +608,20 @@ func (w *GuildWindow) guildMemberTableCell(ctx Context, member session.GuildMemb
 	default:
 		return primitives.Box()
 	}
+}
+
+func (w *GuildWindow) guildMemberNameCell(member session.GuildMember, width float32) widget.Widget {
+	nameColor := rotheme.Default.Colors.MutedText
+	if member.Online() {
+		nameColor = rotheme.Default.Colors.Text
+	}
+	return primitives.HBox(
+		rotheme.Text(trimRunes(guildText(member.CharName), int(width/7))).Color(nameColor),
+	).
+		Width(width).
+		Height(guildTableRowH).
+		PaddingLeft(6).
+		CrossAlign(primitives.CrossAxisCenter)
 }
 
 func (w *GuildWindow) guildMemberPositionCell(ctx Context, member session.GuildMember, positions []session.GuildPosition, isMaster bool, width float32) widget.Widget {
@@ -620,7 +653,8 @@ func (w *GuildWindow) guildMemberPositionCell(ctx Context, member session.GuildM
 		dropdown.New(
 			dropdown.ItemDefs(items),
 			dropdown.Selected(selected),
-			dropdown.MaxVisibleItems(5),
+			dropdown.MaxVisibleItems(8),
+			dropdown.ItemHeight(22),
 			dropdown.PainterOpt(rotheme.DropdownPainter{}),
 			dropdown.OnChange(func(_ int, value string) {
 				positionID, err := strconv.ParseUint(value, 10, 32)
@@ -635,15 +669,15 @@ func (w *GuildWindow) guildMemberPositionCell(ctx Context, member session.GuildM
 	)
 }
 
-func guildMembersTotalExp(members []session.GuildMember) uint32 {
-	var total uint32
+func guildMembersTotalExp(members []session.GuildMember) uint64 {
+	var total uint64
 	for _, member := range members {
-		total += member.MemberExp
+		total += uint64(member.MemberExp)
 	}
 	return total
 }
 
-func guildMemberDevotion(memberExp, totalExp uint32) string {
+func guildMemberDevotion(memberExp uint32, totalExp uint64) string {
 	if memberExp == 0 || totalExp == 0 {
 		return "0 %"
 	}
@@ -745,6 +779,12 @@ func (w *GuildWindow) positionsTab(ctx Context) widget.Widget {
 					return primitives.Box()
 				}
 				return w.guildPositionCell(ctx, positions[cell.Row], guild.IsMaster, cell)
+			}),
+			rotheme.TableViewOnRowEvent(func(row int, e event.Event) bool {
+				if row >= 0 && row < len(positions) {
+					w.handleRowTooltip(w.ctx, guildPositionTitle(positions[row]), row, e)
+				}
+				return false
 			}),
 		),
 	).
@@ -1218,24 +1258,67 @@ func (w *GuildWindow) DrawTooltip(ctx Context, screen *render.Frame) {
 	w.tooltip.Draw(ctx, screen)
 }
 
-func (w *GuildWindow) updateSkillTooltipHover(ctx Context) {
-	if !w.tooltip.Open() {
+func (w *GuildWindow) handleRowTooltip(ctx Context, text string, row int, e event.Event) {
+	mouse, ok := e.(*event.MouseEvent)
+	if !ok {
 		return
 	}
-	if w.tab != guildWindowTabSkills || ctx.Input == nil {
-		w.hideTooltip()
-		return
-	}
-	x, y, width, height := w.guildSkillTableBounds()
-	if !pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, x, y, width, height) {
+	switch mouse.MouseType {
+	case event.MouseEnter, event.MouseMove:
+		mx, my := int(mouse.GlobalPosition.X), int(mouse.GlobalPosition.Y)
+		if ctx.Input != nil {
+			mx, my = ctx.Input.MouseX, ctx.Input.MouseY
+		}
+		w.tooltipRow = row
+		if scroll := w.tableScrollSignal(); scroll != nil {
+			w.tooltipScroll = scroll.Get()
+		}
+		w.tooltip.ShowBox(ctx, text, mx+150, my+18, my-6, 300, 0)
+	case event.MouseLeave, event.MousePress:
 		w.hideTooltip()
 	}
 }
 
-func (w *GuildWindow) guildSkillTableBounds() (int, int, int, int) {
+func (w *GuildWindow) tableScrollSignal() state.Signal[float32] {
+	switch w.tab {
+	case guildWindowTabMembers:
+		return w.memberScrollY
+	case guildWindowTabPositions:
+		return w.positionScrollY
+	case guildWindowTabHistory:
+		return w.historyScrollY
+	case guildWindowTabSkills:
+		return w.skillScrollY
+	}
+	return nil
+}
+
+func (w *GuildWindow) updateTooltipHover(ctx Context) {
+	if !w.tooltip.Open() {
+		return
+	}
+	x, y, width, height := w.guildTableBounds(ctx)
+	y += guildTableHeaderH
+	height -= guildTableHeaderH
+	if ctx.Input == nil || !pointInRect(ctx.Input.MouseX, ctx.Input.MouseY, x, y, scrollbarSafeIntWidth(width), height) {
+		w.hideTooltip()
+		return
+	}
+	if w.tab != guildWindowTabSkills {
+		scroll := w.tableScrollSignal()
+		if scroll == nil || scroll.Get() != w.tooltipScroll || int((float32(ctx.Input.MouseY-y)+scroll.Get())/guildTableRowH) != w.tooltipRow {
+			w.hideTooltip()
+		}
+	}
+}
+
+func (w *GuildWindow) guildTableBounds(ctx Context) (int, int, int, int) {
 	x := w.x
-	y := w.y + ROWindowTitleHeight + guildWindowTabHeight
-	height := w.height - ROWindowTitleHeight - guildWindowTabHeight - ROWindowFooterHeight
+	y := w.y + ROWindowTitleHeight + guildWindowTabHeight + 2
+	height := w.height - (y - w.y)
+	if w.tab == guildWindowTabSkills || guildSessionInfo(ctx.Session).IsMaster && (w.tab == guildWindowTabMembers || w.tab == guildWindowTabPositions) {
+		height -= ROWindowFooterHeight
+	}
 	if height < 0 {
 		height = 0
 	}
@@ -1264,6 +1347,13 @@ func (w *GuildWindow) historyTab(ctx Context) widget.Widget {
 					return rotheme.TableViewSimpleCell{Hidden: true}
 				}
 				return guildHistoryCell(history[cell.Row], cell)
+			}),
+			rotheme.TableViewOnRowEvent(func(row int, e event.Event) bool {
+				if row >= 0 && row < len(history) {
+					entry := history[row]
+					w.handleRowTooltip(w.ctx, guildText(entry.CharName)+"\n"+guildText(entry.Reason), row, e)
+				}
+				return false
 			}),
 		),
 	).
@@ -1697,7 +1787,7 @@ func guildWindowSnapshot(s *session.Session) string {
 	}
 	memberSnapshot := strings.Builder{}
 	for _, member := range s.Guild.Members {
-		fmt.Fprintf(&memberSnapshot, "|%d:%d:%d:%d:%d:%d:%d:%s:%s",
+		fmt.Fprintf(&memberSnapshot, "|%d:%d:%d:%d:%d:%d:%d:%s:%s:%d:%d:%d",
 			member.AccountID,
 			member.CharID,
 			member.Job,
@@ -1707,6 +1797,9 @@ func guildWindowSnapshot(s *session.Session) string {
 			member.PositionID,
 			member.CharName,
 			member.Memo,
+			member.HeadType,
+			member.HeadPalette,
+			member.Sex,
 		)
 	}
 	positionSnapshot := strings.Builder{}
@@ -1747,7 +1840,7 @@ func guildWindowSnapshot(s *session.Session) string {
 		s.EmblemVersion,
 		s.GuildName,
 		boolSnapshot(s.Guild.IsMaster),
-		s.Guild.Right,
+		s.GuildRights(),
 		s.Guild.MenuAccess,
 		s.Guild.Level,
 		s.Guild.UserNum,
@@ -1785,6 +1878,7 @@ func guildSessionInfo(s *session.Session) session.Guild {
 		return session.Guild{Name: "-"}
 	}
 	guild := s.Guild
+	guild.Right = s.GuildRights()
 	if guild.ID == 0 {
 		guild.ID = s.GuildID
 	}

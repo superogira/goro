@@ -381,7 +381,7 @@ func DrawSpriteLayerWithOptions(target *render.Image, img *render.Image, layer r
 	opts.GeoM.Translate(-width/2, -height/2)
 	opts.GeoM.Scale(scaleX, scaleY)
 	if layer.Angle != 0 && !ignoreLayerAngle {
-		// HighPriest's RenderSprite rotates clockwise in screen coordinates.
+		// Positive ACT angles rotate clockwise in screen coordinates.
 		opts.GeoM.Rotate(float64(layer.Angle) * math.Pi / 180)
 	}
 	layerCenterX, layerCenterY := SpriteLayerCenter(centerX, centerY, layer)

@@ -3,7 +3,6 @@ package ui
 import (
 	"image"
 	"image/color"
-	"strconv"
 	"strings"
 
 	"github.com/gogpu/ui/core/scrollview"
@@ -66,7 +65,7 @@ func (w *ItemInfoWindow) openItem(ctx Context, item session.InventoryItem, mouse
 	}
 	w.EnsureWindow(itemInfoWindowWidth, itemInfoWindowMaxHeight)
 	w.item = item
-	w.title = itemInfoTitle(ctx, item)
+	w.title = ItemDisplayName(ctx.Resources, item)
 	w.lines = itemInfoDescriptionLines(ctx, item)
 	w.illustration = nil
 	w.bookAvailable = itemInfoShowsReadBook(ctx, item)
@@ -163,14 +162,6 @@ func (w *ItemInfoWindow) infoPanel(ctx Context) widget.Widget {
 	return primitives.Box(children...).
 		Width(itemInfoDescriptionW).
 		Gap(8)
-}
-
-func itemInfoTitle(ctx Context, item session.InventoryItem) string {
-	name := inventoryItemDisplayName(ctx.Resources, item)
-	if item.Refine > 0 {
-		name = "+" + strconv.Itoa(int(item.Refine)) + " " + name
-	}
-	return name
 }
 
 func (w *ItemInfoWindow) descriptionPanel(ctx Context) widget.Widget {

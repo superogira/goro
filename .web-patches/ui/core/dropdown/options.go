@@ -14,6 +14,7 @@ type config struct {
 	disabled        bool
 	disabledFn      func() bool
 	maxVisibleItems int
+	itemHeight      float32
 	painter         Painter
 	signal          state.Signal[int]
 	a11yHint        string
@@ -93,6 +94,15 @@ func MaxVisibleItems(n int) Option {
 	return func(c *config) {
 		if n > 0 {
 			c.maxVisibleItems = n
+		}
+	}
+}
+
+// ItemHeight sets the menu row height in logical pixels. Defaults to 40.
+func ItemHeight(height float32) Option {
+	return func(c *config) {
+		if height > 0 {
+			c.itemHeight = height
 		}
 	}
 }

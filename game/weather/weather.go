@@ -93,6 +93,10 @@ func normalizeMapNameForWeather(name string) string {
 
 // Draw renders map weather using the shared effects renderer and sound queue.
 func (m *System) Draw(screen *render.Frame, ctx client.Context, projection scene.Projection, now time.Time, fx *effects.System, scheduleSound func(time.Time, ...string)) {
+	if !effects.Enabled(ctx) {
+		*m = System{}
+		return
+	}
 	if screen == nil || ctx.World == nil || ctx.World.GND == nil {
 		return
 	}

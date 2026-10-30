@@ -16,18 +16,26 @@ func TestMapTexturePreparationRealData(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			start := time.Now()
 			w := worldstate.New()
-			var err error
-			w.GND, _, err = LoadGND(resources, name)
-			if err != nil {
-				t.Skipf("map unavailable: %v", err)
-			}
-			w.RSW, _, err = LoadRSW(resources, name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			w.RSM, w.RSMFail = LoadRSMModels(resources, w.RSW)
+			w.MapName = name
+			ctx := client.Context{Resources: resources, World: w}
 			m := &System{Textures: make(map[string]*render.Image), TextureMiss: make(map[string]struct{})}
-			m.PreloadTextures(client.Context{Resources: resources, World: w})
+			loading := NewLoading(ctx)
+			defer loading.Release()
+			last, batches := 0, 0
+			for !loading.Prepared() {
+				loading.Presented = true
+				loading.Advance(ctx, m)
+				progress := loading.Percent(len(m.Images.Uploads), 0)
+				if progress < last || progress >= 100 {
+					t.Fatalf("loading progress %d -> %d", last, progress)
+				}
+				last = progress
+				batches++
+			}
+			if w.GND == nil || w.RSW == nil {
+				t.Skip("map unavailable")
+			}
+			t.Logf("loading batches=%d artwork=%t", batches, loading.background != nil)
 			checkTexture := func(name string) {
 				t.Helper()
 				_, missing := m.TextureMiss[name]

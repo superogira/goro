@@ -132,7 +132,6 @@ func basicMenuEdgeTabHit(mouseX, mouseY int) bool {
 
 // buttonRect returns the on-screen rect of the button at index i.
 
-
 func (m *BasicMenu) Update(ctx client.Context, callbacks BasicMenuCallbacks) bool {
 	m.callbacks = callbacks
 	if hudWebEnabled() {

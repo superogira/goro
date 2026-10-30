@@ -19,7 +19,7 @@ func ProgressBar(opts ...progressbar.Option) *progressbar.Widget {
 }
 
 // VitalBar uses the classic HP/SP warning color below 25%.
-// HighPriest's UIBarGraphPlayerHp/Sp and roBrowser use the same threshold.
+// roBrowser uses the same threshold.
 func VitalBar(opts ...progressbar.Option) *progressbar.Widget {
 	opts = append(opts, progressbar.PainterOpt(ProgressBarPainter{LowThreshold: 0.25}))
 	return ProgressBar(opts...)

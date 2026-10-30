@@ -13,6 +13,7 @@ import (
 	"github.com/gogpu/ui/event"
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
+	"github.com/kivutar/goro/config"
 	"github.com/kivutar/goro/res"
 	"github.com/kivutar/goro/ui/rotheme"
 	worldstate "github.com/kivutar/goro/world"
@@ -170,7 +171,8 @@ func (m *Minimap) Update(ctx Context) bool {
 	drawPendingMarker := m.pendingMarker && !markerChanged
 	needsRedraw := fullRedraw || drawPendingMarker
 	if !m.window.IsOpen() {
-		m.window.OpenAt(x, y, m.widgetTree())
+		m.window.SetAutoPosition(x, y)
+		m.window.Open(ctx, m.widgetTree())
 		needsPublish = true
 	} else {
 		if m.window.SetAutoPosition(x, y) {
@@ -206,6 +208,16 @@ func (m *Minimap) Update(ctx Context) bool {
 	return wasDragging || m.window.dragging
 }
 
+func (m *Minimap) Hidden() bool { return m.hidden }
+
+func (m *Minimap) SavedPosition() config.WindowPosition { return m.window.SavedPosition() }
+
+func (m *Minimap) Dragging() bool { return m.window.Dragging() }
+
+func (m *Minimap) RestorePosition(ctx Context, position config.WindowPosition) {
+	m.window.RestorePosition(ctx, position)
+}
+
 func (m *Minimap) Toggle(ctx Context) {
 	m.hidden = !m.hidden
 	if m.hidden {
@@ -217,10 +229,9 @@ func (m *Minimap) Toggle(ctx Context) {
 }
 
 func (m *Minimap) ensureWindow(width, height int) {
-	if m.window.width != 0 {
+	if !m.window.EnsureWindow(width, height) {
 		return
 	}
-	m.window = NewWindow(width, height)
 	m.window.SetBackground(widget.Color{})
 	m.window.CloseOnEsc = false
 }

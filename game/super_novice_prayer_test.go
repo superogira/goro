@@ -40,7 +40,7 @@ func TestSuperNovicePrayerChatRouting(t *testing.T) {
 		{"no translations", db.JobSuperNovice, false, nil, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			netClient, server := newBotTestConnection(t, 20080910)
+			netClient, server := testutil.NewConnection(t, 20080910)
 			s := session.New()
 			s.Selected = session.Character{Name: "Novice", Job: tt.job}
 			s.Dead = tt.dead
@@ -69,7 +69,7 @@ func TestSuperNovicePrayerChatRouting(t *testing.T) {
 				t.Fatal("non-public chat changed prayer history")
 			}
 			if tt.chatRoom {
-				NewWorldMode().handleChatRoomAction(ctx, gameui.ChatRoomWindowAction{Message: "thanks"})
+				NewWorldMode().social().HandleChatRoomAction(ctx, gameui.ChatRoomWindowAction{Message: "thanks"})
 			} else if err := client.SendChat(ctx, "thanks"); err != nil {
 				t.Fatal(err)
 			}

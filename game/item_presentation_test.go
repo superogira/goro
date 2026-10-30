@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kivutar/goro/client"
+	"github.com/kivutar/goro/game/actors"
 	"github.com/kivutar/goro/game/internal/testutil"
 	"github.com/kivutar/goro/game/scene"
 	"github.com/kivutar/goro/render"
@@ -144,7 +145,7 @@ func TestDrawGroundItemShadowUsesSharedOriginalShadowSprite(t *testing.T) {
 		Images:     make(map[scene.SpriteFrameKey]*render.Image),
 		Billboards: make(map[scene.SpriteBillboardKey]*scene.Billboard),
 	}
-	mode := &WorldMode{shadowView: shadowView}
+	mode := &WorldMode{actorSystem: actors.System{ShadowView: shadowView}}
 	entry := sceneItemDrawEntry{
 		worldX:      scene.CellCenter(10),
 		worldY:      scene.CellCenter(20),

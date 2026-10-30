@@ -17,6 +17,7 @@ const (
 	GuildMemberActionNone GuildMemberActionKind = iota
 	GuildMemberActionLeave
 	GuildMemberActionExpel
+	GuildMemberActionWhisper
 )
 
 type GuildMemberAction struct {
@@ -89,6 +90,9 @@ func (m *GuildMemberContextMenu) PopAction() GuildMemberAction {
 
 func (m *GuildMemberContextMenu) widgetTree() widget.Widget {
 	rows := make([]widget.Widget, 0, guildMemberContextMenuRows(m.canExpel, m.isSelf, m.isMaster))
+	if !m.isSelf {
+		rows = append(rows, m.button("Whisper", GuildMemberActionWhisper))
+	}
 	if m.isSelf && !m.isMaster {
 		rows = append(rows, m.button("Leave Guild", GuildMemberActionLeave))
 	}
@@ -111,6 +115,9 @@ func (m *GuildMemberContextMenu) height() int {
 
 func guildMemberContextMenuRows(canExpel, isSelf, isMaster bool) int {
 	rows := 0
+	if !isSelf {
+		rows++
+	}
 	if isSelf && !isMaster {
 		rows++
 	}

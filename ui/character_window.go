@@ -162,6 +162,15 @@ func clampHUDInt(value, lo, hi int) int {
 // ToggleCompact is the Alt+V classic shortcut hook. The HUD has no widget
 // tree to collapse, so it toggles the compact flag the draw path and the
 // DOM mirror both read.
+// SetCompact sets the compact state without firing the toggle side effects
+// (settings restore path).
+func (w *CharacterWindow) SetCompact(compact bool) {
+	if w.compact == compact {
+		return
+	}
+	w.ToggleCompact()
+}
+
 func (w *CharacterWindow) ToggleCompact() {
 	if w == nil || !w.IsOpen() {
 		return

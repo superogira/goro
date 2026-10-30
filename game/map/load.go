@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kivutar/goro/client"
 	"github.com/kivutar/goro/glog"
 	"github.com/kivutar/goro/res"
 )
@@ -64,27 +65,31 @@ func LoadRSW(manager *res.Manager, mapName string) (*res.RSW, string, error) {
 	return rsw, source, err
 }
 
-func LoadRSMModels(manager *res.Manager, rsw *res.RSW) (map[string]*res.RSM, int) {
-	if rsw == nil {
-		return nil, 0
+func ModelLoadTasks(ctx client.Context) []func() {
+	if ctx.World.RSW == nil {
+		return nil
 	}
-	models := make(map[string]*res.RSM)
-	failures := 0
-	for _, placement := range rsw.Models {
-		if placement.Filename == "" {
+	ctx.World.RSM = make(map[string]*res.RSM)
+	ctx.World.RSMFail = 0
+	var tasks []func()
+	for _, placement := range ctx.World.RSW.Models {
+		name := placement.Filename
+		if name == "" {
 			continue
 		}
-		if _, ok := models[placement.Filename]; ok {
+		if _, ok := ctx.World.RSM[name]; ok {
 			continue
 		}
-		rsm, err := LoadRSMModel(manager, placement.Filename)
-		models[placement.Filename] = rsm
-		if err != nil {
-			failures++
-			continue
-		}
+		ctx.World.RSM[name] = nil
+		tasks = append(tasks, func() {
+			rsm, err := LoadRSMModel(ctx.Resources, name)
+			ctx.World.RSM[name] = rsm
+			if err != nil {
+				ctx.World.RSMFail++
+			}
+		})
 	}
-	return models, failures
+	return tasks
 }
 
 func LoadRSMModel(manager *res.Manager, filename string) (*res.RSM, error) {
